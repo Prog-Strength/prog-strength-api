@@ -1,0 +1,29 @@
+# Ignore data directory (database files)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore documentation
+*.md
+CLAUDE.md
+
+# Ignore build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Ignore test files
+*_test.go
+
+# Ignore temp files
+tmp/
+*.tmp
+*.swp
+*.swo
+*~

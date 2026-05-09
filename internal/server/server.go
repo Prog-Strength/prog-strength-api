@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
@@ -26,6 +28,20 @@ func New(cfg config.Config) (*Server, error) {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// CORS: only matters for cross-origin browser fetches. curl/Postman/
+	// server-to-server calls are unaffected (no browser, no CORS check).
+	// Empty CORSAllowedOrigin disables cross-origin browser access entirely.
+	if cfg.CORSAllowedOrigin != "" {
+		r.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   []string{cfg.CORSAllowedOrigin},
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Authorization", "Content-Type"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		}))
+		log.Printf("cors: allowing origin %s", cfg.CORSAllowedOrigin)
+	}
 
 	// Health check.
 	r.Get("/health", HealthCheck)
@@ -67,16 +83,31 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewMemoryRepository()
 	}
 
-	// Exercise routes.
+	// Auth: mounts /auth/google/* when Google OAuth is configured and
+	// /auth/dev/token when DEV_AUTH=true. Always mounted so that login
+	// failures surface as 404 (route absent) rather than mysterious 500s.
+	jwtSecret := []byte(cfg.JWTSigningKey)
+	authHandler := auth.NewHandler(auth.Config{
+		JWTSecret:          jwtSecret,
+		GoogleClientID:     cfg.GoogleClientID,
+		GoogleClientSecret: cfg.GoogleClientSecret,
+		GoogleRedirectURL:  cfg.GoogleRedirectURL,
+		DevAuth:            cfg.DevAuth,
+	}, userRepo)
+	authHandler.Mount(r)
+	log.Printf("auth: google=%v dev_token=%v", authHandler.HasGoogle(), cfg.DevAuth)
+
+	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)
 	exerciseHandler.Mount(r)
 
-	// Workout routes.
-	workoutHandler := workout.NewHandler(workoutRepo)
-	workoutHandler.Mount(r)
-
-	// User repo is available but no handler yet (OAuth login will use it).
-	_ = userRepo
+	// Workout routes — require a valid JWT. Group ensures the middleware
+	// only applies to routes mounted inside it, leaving /health and
+	// /exercises public.
+	r.Group(func(r chi.Router) {
+		r.Use(auth.RequireUser(jwtSecret))
+		workout.NewHandler(workoutRepo).Mount(r)
+	})
 
 	return &Server{
 		httpServer: &http.Server{

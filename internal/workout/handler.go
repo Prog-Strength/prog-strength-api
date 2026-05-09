@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
@@ -21,7 +22,9 @@ func NewHandler(repo Repository) *Handler {
 	return &Handler{repo: repo}
 }
 
-// Mount registers workout routes on the given router.
+// Mount registers workout routes on the given router. Callers are expected
+// to have already wrapped the router in auth.RequireUser middleware — these
+// handlers read the user ID from request context and assume it is present.
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/workouts", func(r chi.Router) {
 		r.Post("/", h.create)
@@ -29,12 +32,12 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 // create handles POST /workouts.
-// DEV-ONLY: Reads user ID from X-User-ID header until OAuth is implemented.
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	// DEV-ONLY: Extract user ID from header until OAuth middleware is in place.
-	userID := r.Header.Get("X-User-ID")
-	if userID == "" {
-		httpresp.Error(w, http.StatusUnauthorized, "X-User-ID header required (dev-only)")
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		// Reaching this branch means the route was mounted without
+		// RequireUser middleware — a wiring bug, not a user-facing error.
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
 
@@ -44,17 +47,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default name if not provided.
 	name := req.Name
 	if name == "" {
 		name = fmt.Sprintf("Workout - %s", time.Now().Format("Jan 02, 2006"))
 	}
 
-	// Parse performed_at time.
 	var performedAt time.Time
 	var err error
 	if req.PerformedAt == "" {
-		// Default to now if not provided.
 		performedAt = time.Now()
 	} else {
 		performedAt, err = time.Parse(time.RFC3339, req.PerformedAt)
@@ -64,7 +64,6 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build Workout from request.
 	workout := &Workout{
 		UserID:      userID,
 		Name:        name,
@@ -72,19 +71,16 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Notes:       req.Notes,
 		Exercises:   make([]WorkoutExercise, len(req.Exercises)),
 	}
-
 	for i, exReq := range req.Exercises {
 		workout.Exercises[i] = WorkoutExercise{
 			ExerciseID: exReq.ExerciseID,
-			Order:      i, // Auto-assign order based on position in array.
+			Order:      i,
 			Sets:       exReq.Sets,
 			Notes:      exReq.Notes,
 		}
 	}
 
-	// Create the workout.
 	if err := h.repo.Create(r.Context(), workout); err != nil {
-		// Validation errors from Validate() should be returned as 400.
 		var invalidEnumErr *InvalidEnumError
 		if errors.As(err, &invalidEnumErr) || errors.Is(err, ErrUserIDRequired) ||
 			errors.Is(err, ErrPerformedAtRequired) || errors.Is(err, ErrExercisesRequired) ||

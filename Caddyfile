@@ -1,0 +1,15 @@
+# HTTPS reverse proxy for the API.
+#
+# Caddy obtains a Let's Encrypt cert for api.progstrength.fitness on first
+# request, auto-renews it, and redirects HTTP -> HTTPS. The api service
+# is only reachable on the docker-compose internal network — Caddy is the
+# only container with public ports.
+#
+# Adding the apex (progstrength.fitness) here later, once the frontend
+# lands on EC2, is a one-block addition. If the frontend goes on Vercel
+# or similar, point the apex DNS record there instead and leave this file
+# alone.
+
+api.progstrength.fitness {
+	reverse_proxy api:8080
+}

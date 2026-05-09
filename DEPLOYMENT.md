@@ -322,3 +322,27 @@ Once this is working:
 4. **Add monitoring** (uptime checks, error alerts)
 
 For now, you have a production API running for $0-8/month! 🚀
+
+---
+
+## TODO: harden the public-IP exposure
+
+The EC2 security group currently allows port 8080 from `0.0.0.0/0` (see
+"Launch EC2 Instance" above). With JWT auth in place, the realistic threat
+is no longer arbitrary DB writes, but the API still:
+
+- Serves traffic over plain HTTP — JWTs can be sniffed on the wire.
+- Mounts `POST /auth/dev/token` whenever `DEV_AUTH=true`, which lets anyone
+  who reaches the host mint a JWT for any email.
+
+Both go away the same day you do steps 1+2 above (domain + Caddy/HTTPS),
+because at that point you can:
+
+- Set `DEV_AUTH=false` in production — Google OAuth becomes the only path.
+- Update the Google redirect URI to `https://your-domain/auth/google/callback`.
+- Optionally narrow the security group to 80/443 only.
+
+Until then, if you want zero exposure, restrict the inbound 8080 rule to
+your home IP in the AWS console — it's a one-click change and doesn't
+require any code or config.
+

@@ -12,13 +12,33 @@ jobs:
     steps:
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          JWT_SIGNING_KEY: ${{ secrets.JWT_SIGNING_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URL: ${{ secrets.GOOGLE_REDIRECT_URL }}
+          DEV_AUTH: ${{ secrets.DEV_AUTH }}
+          CORS_ALLOWED_ORIGIN: ${{ secrets.CORS_ALLOWED_ORIGIN }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN
           script: |
             cd /home/ubuntu/prog-strength
             git pull origin main
+            # Write .env from secrets forwarded over SSH. docker-compose.yml
+            # references these via ${VAR} interpolation. The file is owned
+            # by the deploy user and never enters git.
+            umask 077
+            cat > .env <<EOF
+            JWT_SIGNING_KEY=${JWT_SIGNING_KEY}
+            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+            GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+            DEV_AUTH=${DEV_AUTH}
+            CORS_ALLOWED_ORIGIN=${CORS_ALLOWED_ORIGIN}
+            EOF
             docker compose down
             docker compose up --build -d
             echo "Deployment complete. Checking service status..."

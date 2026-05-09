@@ -3,11 +3,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
+    # No `ports:` — the api is only reachable on the docker-compose
+    # internal network. Caddy is the only public-facing container.
+    expose:
+      - "8080"
     environment:
       - DATABASE_URL=/data/app.db
       - SERVER_ADDR=:8080
+      - JWT_SIGNING_KEY=${JWT_SIGNING_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+      - DEV_AUTH=${DEV_AUTH}
+      - CORS_ALLOWED_ORIGIN=${CORS_ALLOWED_ORIGIN}
     volumes:
       # Persist SQLite database on host
       - ./data:/data
@@ -18,3 +26,23 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data MUST persist — it stores issued Let's Encrypt certs
+      # and the ACME account key. Wiping it forces re-issuance and will
+      # quickly trip Let's Encrypt's rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:

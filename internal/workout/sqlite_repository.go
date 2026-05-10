@@ -44,9 +44,9 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 
 	// Insert workout.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO workouts (id, user_id, name, performed_at, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, w.ID, w.UserID, w.Name, w.PerformedAt, w.Notes, w.CreatedAt, w.UpdatedAt)
+		INSERT INTO workouts (id, user_id, name, performed_at, ended_at, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, w.ID, w.UserID, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.CreatedAt, w.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -57,9 +57,9 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 
 		// Insert workout exercise.
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, notes)
-			VALUES (?, ?, ?, ?)
-		`, w.ID, we.ExerciseID, we.Order, we.Notes)
+			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, superset_group, notes)
+			VALUES (?, ?, ?, ?, ?)
+		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
 		if err != nil {
 			return err
 		}
@@ -88,10 +88,10 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, error) {
 	var w Workout
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, name, performed_at, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, performed_at, ended_at, notes, created_at, updated_at, deleted_at
 		FROM workouts
 		WHERE id = ? AND deleted_at IS NULL
-	`, id).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
+	`, id).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -113,7 +113,7 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, er
 func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts ListOptions) ([]Workout, error) {
 	// Build query with filters.
 	query := `
-		SELECT id, user_id, name, performed_at, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, performed_at, ended_at, notes, created_at, updated_at, deleted_at
 		FROM workouts
 		WHERE user_id = ? AND deleted_at IS NULL
 	`
@@ -148,7 +148,7 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	var workouts []Workout
 	for rows.Next() {
 		var w Workout
-		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
+		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
 			return nil, err
 		}
 
@@ -196,9 +196,9 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	// Update workout.
 	result, err := tx.ExecContext(ctx, `
 		UPDATE workouts
-		SET name = ?, performed_at = ?, notes = ?, updated_at = ?
+		SET name = ?, performed_at = ?, ended_at = ?, notes = ?, updated_at = ?
 		WHERE id = ? AND deleted_at IS NULL
-	`, w.Name, w.PerformedAt, w.Notes, w.UpdatedAt, w.ID)
+	`, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.UpdatedAt, w.ID)
 	if err != nil {
 		return err
 	}
@@ -224,9 +224,9 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 		we := &w.Exercises[i]
 
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, notes)
-			VALUES (?, ?, ?, ?)
-		`, w.ID, we.ExerciseID, we.Order, we.Notes)
+			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, superset_group, notes)
+			VALUES (?, ?, ?, ?, ?)
+		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
 		if err != nil {
 			return err
 		}
@@ -278,7 +278,7 @@ func (r *SQLiteRepository) Delete(ctx context.Context, id string) error {
 // getWorkoutExercises loads all exercises and their sets for a workout.
 func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID string) ([]WorkoutExercise, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, exercise_id, exercise_order, notes
+		SELECT id, exercise_id, exercise_order, superset_group, notes
 		FROM workout_exercises
 		WHERE workout_id = ?
 		ORDER BY exercise_order
@@ -292,7 +292,7 @@ func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID st
 	for rows.Next() {
 		var we WorkoutExercise
 		var weID int64
-		if err := rows.Scan(&weID, &we.ExerciseID, &we.Order, &we.Notes); err != nil {
+		if err := rows.Scan(&weID, &we.ExerciseID, &we.Order, &we.SupersetGroup, &we.Notes); err != nil {
 			return nil, err
 		}
 

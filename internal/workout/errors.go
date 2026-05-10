@@ -14,6 +14,7 @@ var (
 	ErrSetsRequired        = errors.New("workout: at least one set is required")
 	ErrInvalidReps         = errors.New("workout: reps must be positive")
 	ErrInvalidWeight       = errors.New("workout: weight must be non-negative")
+	ErrEndedAtBeforeStart  = errors.New("workout: ended_at must not be before performed_at")
 	ErrNotFound            = errors.New("workout: not found")
 )
 

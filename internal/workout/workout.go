@@ -4,11 +4,17 @@ import "time"
 
 // Workout is a single training session performed by a user on a given date,
 // composed of one or more exercises with their sets.
+//
+// PerformedAt is the start time. EndedAt is optional; when present, session
+// duration is EndedAt.Sub(PerformedAt). Stored as two timestamps rather than
+// (start + duration) so the model is symmetric and either value is queryable
+// directly.
 type Workout struct {
 	ID          string            `json:"id"`
 	UserID      string            `json:"user_id"`
 	Name        string            `json:"name,omitempty"`
 	PerformedAt time.Time         `json:"performed_at"`
+	EndedAt     *time.Time        `json:"ended_at,omitempty"`
 	Notes       string            `json:"notes,omitempty"`
 	Exercises   []WorkoutExercise `json:"exercises"`
 	CreatedAt   time.Time         `json:"created_at"`
@@ -22,6 +28,9 @@ func (w *Workout) Validate() error {
 	}
 	if w.PerformedAt.IsZero() {
 		return ErrPerformedAtRequired
+	}
+	if w.EndedAt != nil && w.EndedAt.Before(w.PerformedAt) {
+		return ErrEndedAtBeforeStart
 	}
 	if len(w.Exercises) == 0 {
 		return ErrExercisesRequired

@@ -52,3 +52,13 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+
+# Shared with prog-strength-mcp (and any future sibling services) so Caddy
+# can reverse-proxy to them by service name (e.g. `mcp:8000`). Lifecycle
+# is owned by the host — bootstrap.sh creates it once, and `external: true`
+# prevents `docker compose down` from removing it while mcp is still
+# attached.
+networks:
+  default:
+    name: prog-strength
+    external: true

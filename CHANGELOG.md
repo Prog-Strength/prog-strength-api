@@ -1,3 +1,10 @@
+## [0.4.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.1...v0.4.2) (2026-05-15)
+
+
+### Bug Fixes
+
+* **cicd:** Update release workflow to abort and fail on the first failing command ([810b7c3](https://github.com/Prog-Strength/prog-strength-api/commit/810b7c3da84bd995c5bab16cb8222d208a550928))
+
 ## [0.4.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.0...v0.4.1) (2026-05-14)
 
 

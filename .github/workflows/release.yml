@@ -63,6 +63,13 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,RELEASE_VERSION
           script: |
+            # Abort on the first failing command. Without this, a failed
+            # `docker compose up --build` is followed by trailing `ps`/
+            # `logs` calls that succeed, and the script's exit code is
+            # the last command's — appleboy/ssh-action would then report
+            # green on a real failure.
+            set -e
+
             # The Caddyfile lives in prog-strength-infra and is mounted
             # into the caddy container by docker-compose. Pull the infra
             # repo first so the mount target reflects whatever's on its

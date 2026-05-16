@@ -70,8 +70,9 @@ func New(cfg config.Config) (*Server, error) {
 		workoutRepo = workout.NewSQLiteRepository(database)
 		userRepo = user.NewSQLiteRepository(database)
 
-		// Seed exercise catalog if empty.
-		if err := exerciseRepo.(*exercise.SQLiteRepository).SeedCatalog(context.Background(), exercise.Catalog); err != nil {
+		// Sync exercise catalog: catalog.go is the source of truth; this
+		// upserts new entries and updates non-key fields on existing ones.
+		if err := exerciseRepo.(*exercise.SQLiteRepository).SyncCatalog(context.Background(), exercise.Catalog); err != nil {
 			return nil, err
 		}
 	} else {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Compile-time check that *SQLiteRepository satisfies Repository.
@@ -177,54 +178,73 @@ func (r *SQLiteRepository) getEquipment(ctx context.Context, exerciseID string) 
 	return equipment, rows.Err()
 }
 
-// SeedCatalog inserts the given exercises if the exercises table is empty.
-// This is called on startup to populate the catalog from exercise.Catalog.
-func (r *SQLiteRepository) SeedCatalog(ctx context.Context, exercises []Exercise) error {
-	// Check if exercises table is empty.
-	var count int
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM exercises").Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		// Already seeded.
-		return nil
-	}
-
-	// Insert all exercises in a transaction.
+// SyncCatalog reconciles the exercises table with the given slice on every
+// startup. catalog.go is the source of truth: rows present in the slice are
+// upserted (new entries inserted, existing entries' non-key fields updated
+// to match), and the muscle-group / equipment join tables are fully rebuilt
+// per exercise so list changes propagate.
+//
+// Rows in the DB whose IDs are not in the slice are intentionally left
+// alone — soft-delete via DeletedAt is the documented removal path, and we
+// don't want a typo or accidental slice mutation to wipe production rows.
+// Changing an existing slug is "rare case" territory that should be handled
+// out of band, not by this sync.
+//
+// `updated_at` only bumps when the upsert actually changes something
+// (name or description differs), so cosmetic restarts don't churn
+// timestamps.
+func (r *SQLiteRepository) SyncCatalog(ctx context.Context, exercises []Exercise) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	now := time.Now()
 	for _, ex := range exercises {
-		// Insert exercise.
-		_, err := tx.ExecContext(ctx, `
+		// Upsert the exercise row. excluded.* refers to the values we
+		// tried to insert; the WHERE clause on the conflict path makes
+		// the UPDATE a no-op when the row already matches catalog.go.
+		// COALESCE handles the nullable description column — comparing
+		// NULL to '' would otherwise be NULL (i.e. "unknown"), causing
+		// updated_at to bump on every boot for description-less rows.
+		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO exercises (id, name, description, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?)
-		`, ex.ID, ex.Name, ex.Description, ex.CreatedAt, ex.UpdatedAt)
-		if err != nil {
+			ON CONFLICT(id) DO UPDATE SET
+				name = excluded.name,
+				description = excluded.description,
+				updated_at = excluded.updated_at
+			WHERE exercises.name != excluded.name
+			   OR COALESCE(exercises.description, '') != COALESCE(excluded.description, '')
+		`, ex.ID, ex.Name, ex.Description, now, now); err != nil {
 			return err
 		}
 
-		// Insert muscle groups.
+		// Rebuild the muscle-group join table for this exercise. Cheaper
+		// and simpler than diffing — at catalog scale it's irrelevant,
+		// and it lets adds/removes from the slice flow through cleanly.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM exercise_muscle_groups WHERE exercise_id = ?`, ex.ID); err != nil {
+			return err
+		}
 		for _, mg := range ex.MuscleGroups {
-			_, err := tx.ExecContext(ctx, `
-				INSERT INTO exercise_muscle_groups (exercise_id, muscle_group)
-				VALUES (?, ?)
-			`, ex.ID, mg)
-			if err != nil {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO exercise_muscle_groups (exercise_id, muscle_group) VALUES (?, ?)`,
+				ex.ID, mg); err != nil {
 				return err
 			}
 		}
 
-		// Insert equipment.
+		// Same rebuild pattern for equipment.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM exercise_equipment WHERE exercise_id = ?`, ex.ID); err != nil {
+			return err
+		}
 		for _, eq := range ex.Equipment {
-			_, err := tx.ExecContext(ctx, `
-				INSERT INTO exercise_equipment (exercise_id, equipment)
-				VALUES (?, ?)
-			`, ex.ID, eq)
-			if err != nil {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO exercise_equipment (exercise_id, equipment) VALUES (?, ?)`,
+				ex.ID, eq); err != nil {
 				return err
 			}
 		}

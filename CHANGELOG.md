@@ -1,3 +1,10 @@
+# [0.8.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.7.1...v0.8.0) (2026-05-16)
+
+
+### Features
+
+* **db_backups:** Add Litestream sidecar service to take database snapshots ([3077641](https://github.com/Prog-Strength/prog-strength-api/commit/30776412d9094880b0956f8d163cfb18489e5518))
+
 ## [0.7.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.7.0...v0.7.1) (2026-05-16)
 
 

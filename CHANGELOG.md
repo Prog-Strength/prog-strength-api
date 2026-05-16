@@ -1,3 +1,10 @@
+# [0.6.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.5.0...v0.6.0) (2026-05-16)
+
+
+### Features
+
+* **exercises:** Add additional chest and back exercises to catalog ([a2e4397](https://github.com/Prog-Strength/prog-strength-api/commit/a2e4397b90d87ba10ca037eef7c14a57fdc23807))
+
 # [0.5.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.2...v0.5.0) (2026-05-15)
 
 

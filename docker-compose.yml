@@ -1,4 +1,26 @@
 services:
+  # One-shot restore from S3 before the API opens the DB. Skips when a
+  # local /data/app.db already exists (so a redeploy on the same host
+  # doesn't clobber live data) and when no replica is in S3 (first-ever
+  # boot, before any backups have been written). The api service waits
+  # for this to exit 0 via the depends_on condition below.
+  restore:
+    image: litestream/litestream:0.3.13
+    environment:
+      - LITESTREAM_REPLICA_BUCKET=${LITESTREAM_REPLICA_BUCKET}
+      - LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION:-us-east-2}
+    volumes:
+      - ./data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    command:
+      - restore
+      - -if-db-not-exists
+      - -if-replica-exists
+      - -config
+      - /etc/litestream.yml
+      - /data/app.db
+    restart: "no"
+
   api:
     build:
       context: .
@@ -22,12 +44,33 @@ services:
       # Persist SQLite database on host
       - ./data:/data
     restart: unless-stopped
+    depends_on:
+      restore:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 5s
+
+  # Long-running sidecar: streams WAL frames to S3 continuously. Shares
+  # /data with the api container so it sees app.db and app.db-wal as the
+  # api writes to them. Waits for the api to come up healthy so we don't
+  # log spurious "db not found" errors during cold start.
+  litestream:
+    image: litestream/litestream:0.3.13
+    environment:
+      - LITESTREAM_REPLICA_BUCKET=${LITESTREAM_REPLICA_BUCKET}
+      - LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION:-us-east-2}
+    volumes:
+      - ./data:/data
+      - ./litestream.yml:/etc/litestream.yml:ro
+    command: ["replicate", "-config", "/etc/litestream.yml"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
 
   caddy:
     image: caddy:2

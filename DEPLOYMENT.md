@@ -82,6 +82,8 @@ preserves it), so DNS doesn't need to change on a host rebuild.
 | `GOOGLE_REDIRECT_URL`   | OAuth callback URL (must match Google console).        |
 | `DEV_AUTH`              | `true`/`false` — gates `POST /auth/dev/token`. Keep `false` in prod. |
 | `CORS_ALLOWED_ORIGIN`   | Frontend origin allowed by CORS.                       |
+| `LITESTREAM_REPLICA_BUCKET` | S3 bucket for SQLite replicas. Output by infra repo's Terraform as `litestream_bucket_name`. |
+| `LITESTREAM_REPLICA_REGION` | AWS region of the bucket. Matches `aws.region` in infra. |
 
 ### `prog-strength-infra`
 
@@ -187,10 +189,41 @@ docker stats                                 # CPU / memory
 
 ## Database backups
 
-The SQLite DB lives at `/home/ubuntu/prog-strength-api/data/app.db`. No
-automated backups today — see "Next steps" below.
+The SQLite DB lives at `/home/ubuntu/prog-strength-api/data/app.db` and is
+continuously replicated to S3 by [Litestream](https://litestream.io/),
+running as a docker-compose sidecar. The bucket
+(`prog-strength-database-backups`) and the IAM role that grants the EC2
+instance access are managed in `prog-strength-infra/modules/backup`.
 
-Manual snapshot:
+How it works in compose:
+
+- `restore` (one-shot): runs on every `docker compose up`. Pulls the
+  latest snapshot from S3 *only if* `/data/app.db` doesn't exist locally
+  (`-if-db-not-exists`) *and* a replica exists in S3 (`-if-replica-exists`).
+  On a redeploy of an existing host this no-ops; on a fresh host (or
+  manually-cleared data dir) it restores from S3.
+- `api`: starts only after `restore` exits 0 (via `depends_on:
+  service_completed_successfully`), so it never opens a half-restored DB.
+- `litestream` (long-running): streams WAL frames + periodic snapshots
+  to S3 continuously. Default 24-hour PITR window.
+
+Authentication uses the EC2 instance profile — Litestream's AWS SDK picks
+up credentials from instance metadata. No access keys live in `.env`.
+
+### Restoring on a rebuilt host
+
+The expected flow when the EC2 instance is replaced:
+
+1. `terraform apply` in `prog-strength-infra` provisions the new host.
+   `bootstrap.sh` clones the repos and creates an empty `./data/`.
+2. The first deploy SSHes in and runs `docker compose up -d`.
+3. `restore` sees no local DB + a replica in S3 → downloads the latest
+   snapshot into `/data/app.db`.
+4. `api` starts against the restored DB.
+5. `litestream` resumes replication; from this point on, S3 has a current
+   replica again.
+
+### Manual snapshot (still works)
 
 ```sh
 # on EC2
@@ -200,6 +233,12 @@ cp data/app.db data/app.db.backup-$(date +%Y%m%d)
 scp -i prog-strength-backend-prod-keys.pem \
   ubuntu@api.progstrength.fitness:~/prog-strength-api/data/app.db ./backup.db
 ```
+
+### Required env vars
+
+`LITESTREAM_REPLICA_BUCKET` and `LITESTREAM_REPLICA_REGION` must be present
+in the host's `.env`. The release workflow writes `.env` from repository
+secrets — add both there if they're missing.
 
 ## Troubleshooting
 
@@ -270,9 +309,6 @@ Total: roughly **$13/mo** under typical load.
 
 ## Next steps
 
-- **Litestream → S3** for continuous SQLite backup. Add as a sidecar in
-  `docker-compose.yml`; needs an IAM role on the instance or an access
-  key in `.env`.
 - **Uptime monitoring** for `https://api.progstrength.fitness/health`.
 - **Add the MCP server vhost** to `prog-strength-infra/caddy/Caddyfile`
   once that service ships — `deploy-caddy.yml` will roll it out without

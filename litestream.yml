@@ -1,0 +1,27 @@
+# Litestream configuration for the API's SQLite database.
+#
+# Mounted into the restore and litestream containers at /etc/litestream.yml
+# (see docker-compose.yml). The bucket and region are env-templated so
+# this file is environment-agnostic — set LITESTREAM_REPLICA_BUCKET and
+# LITESTREAM_REPLICA_REGION in the host's .env.
+#
+# Authentication: the EC2 instance has an IAM instance profile attached
+# (see prog-strength-infra/modules/backup) that grants read/write/delete
+# on this bucket only. Litestream's AWS SDK picks the role up from
+# instance metadata automatically — no access keys live anywhere.
+#
+# Retention: Litestream defaults to a 24-hour point-in-time-recovery
+# window, pruning older generations. The bucket itself is versioned with a
+# 30-day noncurrent-version lifecycle as a separate safety net (so an
+# accidental aws s3 rm doesn't permanently destroy the data).
+
+dbs:
+  - path: /data/app.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_REPLICA_BUCKET}
+        region: ${LITESTREAM_REPLICA_REGION}
+        # Key prefix inside the bucket. Scopes everything Litestream writes
+        # to a subtree so this bucket could host other DBs in the future
+        # (e.g. a staging environment) without colliding.
+        path: prog-strength-api/prod

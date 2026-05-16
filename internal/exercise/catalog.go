@@ -66,7 +66,7 @@ var Catalog = []Exercise{
 	{
 		ID:           "dumbbell-bench-press",
 		Name:         "Dumbbell Bench Press",
-		Description:  "Lying on a flat bench, press a pair of dumbbells from chest level to lockout to target the chest.",
+		Description:  "Lying on a flat bench, press a pair of dumbbells from chest level to lockout to target the chest. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleChest},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentFlatBench},
 	},
@@ -80,14 +80,14 @@ var Catalog = []Exercise{
 	{
 		ID:           "incline-dumbbell-bench-press",
 		Name:         "Incline Dumbbell Bench Press",
-		Description:  "On an incline bench, press a pair of dumbbells from upper-chest level to lockout; the angle shifts load to the upper chest and front delts.",
+		Description:  "On an incline bench, press a pair of dumbbells from upper-chest level to lockout; the angle shifts load to the upper chest and front delts. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleChest, MuscleShoulders},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentInclineBench},
 	},
 	{
 		ID:           "incline-dumbbell-fly",
 		Name:         "Incline Dumbbell Fly",
-		Description:  "On an incline bench with a slight elbow bend, lower dumbbells out in an arc and squeeze them back together to isolate the upper chest.",
+		Description:  "On an incline bench with a slight elbow bend, lower dumbbells out in an arc and squeeze them back together to isolate the upper chest. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleChest},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentInclineBench},
 	},
@@ -115,14 +115,14 @@ var Catalog = []Exercise{
 	{
 		ID:           "dumbbell-lateral-raise",
 		Name:         "Dumbbell Lateral Raise",
-		Description:  "Standing with a dumbbell in each hand, raise the arms out to the sides to shoulder height to isolate the side deltoids.",
+		Description:  "Standing with a dumbbell in each hand, raise the arms out to the sides to shoulder height to isolate the side deltoids. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleShoulders},
 		Equipment:    []Equipment{EquipmentDumbbell},
 	},
 	{
 		ID:           "seated-dumbbell-press",
 		Name:         "Seated Dumbbell Press",
-		Description:  "Seated against an upright bench, press a pair of dumbbells from shoulder level to overhead lockout to target the front and side deltoids.",
+		Description:  "Seated against an upright bench, press a pair of dumbbells from shoulder level to overhead lockout to target the front and side deltoids. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleShoulders},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentUprightBench},
 	},
@@ -136,14 +136,14 @@ var Catalog = []Exercise{
 	{
 		ID:           "seated-dumbbell-bicep-curl",
 		Name:         "Seated Dumbbell Bicep Curl",
-		Description:  "Seated against an upright bench with a dumbbell in each hand, curl the weight from full extension to full flexion to isolate the biceps; the seated position prevents using the hips to cheat the rep.",
+		Description:  "Seated against an upright bench with a dumbbell in each hand, curl the weight from full extension to full flexion to isolate the biceps; the seated position prevents using the hips to cheat the rep. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleBiceps},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentUprightBench},
 	},
 	{
 		ID:           "seated-hammer-curl",
 		Name:         "Seated Hammer Curl",
-		Description:  "Seated against an upright bench with a neutral (palms-facing) grip on the dumbbells, curl through full range; the neutral grip shifts load onto the brachioradialis alongside the biceps.",
+		Description:  "Seated against an upright bench with a neutral (palms-facing) grip on the dumbbells, curl through full range; the neutral grip shifts load onto the brachioradialis alongside the biceps. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleBiceps, MuscleForearms},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentUprightBench},
 	},
@@ -157,7 +157,7 @@ var Catalog = []Exercise{
 	{
 		ID:           "lying-dumbbell-tricep-extension",
 		Name:         "Lying Dumbbell Tricep Extension",
-		Description:  "Lying on a flat bench, lower a pair of dumbbells from arms-extended over the chest toward the forehead and press back to lockout; isolates the triceps under stretch.",
+		Description:  "Lying on a flat bench, lower a pair of dumbbells from arms-extended over the chest toward the forehead and press back to lockout; isolates the triceps under stretch. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleTriceps},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentFlatBench},
 	},
@@ -178,7 +178,7 @@ var Catalog = []Exercise{
 	{
 		ID:           "dumbbell-bulgarian-split-squat",
 		Name:         "Dumbbell Bulgarian Split Squat",
-		Description:  "Standing in a split stance with the rear foot elevated on a bench and a dumbbell in each hand, descend into a lunge and drive back up through the front foot to target the quads and glutes of the working leg.",
+		Description:  "Standing in a split stance with the rear foot elevated on a bench and a dumbbell in each hand, descend into a lunge and drive back up through the front foot to target the quads and glutes of the working leg. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleQuads, MuscleGlutes},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentFlatBench},
 	},
@@ -220,7 +220,7 @@ var Catalog = []Exercise{
 	{
 		ID:           "standing-dumbbell-hammer-curl",
 		Name:         "Standing Dumbbell Hammer Curl",
-		Description:  "Standing with a neutral (palms-facing) grip on the dumbbells, curl through full range; the neutral grip shifts load onto the brachioradialis alongside the biceps.",
+		Description:  "Standing with a neutral (palms-facing) grip on the dumbbells, curl through full range; the neutral grip shifts load onto the brachioradialis alongside the biceps. Record weight per dumbbell, not the combined pair.",
 		MuscleGroups: []MuscleGroup{MuscleBiceps, MuscleForearms},
 		Equipment:    []Equipment{EquipmentDumbbell},
 	},

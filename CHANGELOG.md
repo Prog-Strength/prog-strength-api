@@ -1,3 +1,10 @@
+## [0.8.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.0...v0.8.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **cicd:** Update release and deploy workflow to use Litestream env vars ([b594837](https://github.com/Prog-Strength/prog-strength-api/commit/b59483745077ac43739bcfaa33318bebcc774ec8))
+
 # [0.8.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.7.1...v0.8.0) (2026-05-16)
 
 

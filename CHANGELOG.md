@@ -1,3 +1,10 @@
+# [0.9.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.2...v0.9.0) (2026-05-17)
+
+
+### Features
+
+* **auth:** support return_to redirect with hash-fragment token ([f0654fd](https://github.com/Prog-Strength/prog-strength-api/commit/f0654fd58cfc90ee7a49d3a9aa59627f477a2f03))
+
 ## [0.8.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.1...v0.8.2) (2026-05-17)
 
 

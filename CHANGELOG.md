@@ -1,3 +1,10 @@
+## [0.9.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.9.0...v0.9.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **api:** pass RETURN_TO_ALLOWED_ORIGINS to api container ([682be35](https://github.com/Prog-Strength/prog-strength-api/commit/682be3549dc609c6d24f7dade3a08f26d57bcc7c))
+
 # [0.9.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.2...v0.9.0) (2026-05-17)
 
 

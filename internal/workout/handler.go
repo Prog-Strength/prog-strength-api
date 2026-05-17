@@ -28,6 +28,11 @@ func NewHandler(repo Repository) *Handler {
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/workouts", func(r chi.Router) {
 		r.Get("/", h.list)
+		// Registered before any /{id} routes so chi matches the literal
+		// "progression" segment instead of trying to interpret it as a
+		// workout ID. (Today there's no GET /{id} handler so the order
+		// doesn't strictly matter, but future-proof.)
+		r.Get("/progression", h.progression)
 		r.Post("/", h.create)
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
@@ -58,6 +63,76 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresp.OK(w, "listed workouts", workouts)
+}
+
+// progression handles GET /workouts/progression.
+//
+// Query params:
+//   - exercise_id (required): the catalog slug to analyze
+//   - since (optional, RFC3339): start of the date range; defaults to
+//     `until - 90 days` when omitted
+//   - until (optional, RFC3339): end of the date range; defaults to
+//     now when omitted
+//
+// Pulls workouts in [since, until] for the authed user, then hands
+// off to ComputeProgression to do the per-set Epley 1RM math, the
+// unit reconciliation, and the trendline regression. The repo's
+// 50-row default would cap an active lifter's 90-day window so we
+// raise the limit to 1000 here — well above any realistic exercise
+// volume.
+func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	q := r.URL.Query()
+	exerciseID := q.Get("exercise_id")
+	if exerciseID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "exercise_id is required")
+		return
+	}
+
+	// `until` defaults to now; `since` defaults to until - 90 days.
+	// Compute `until` first so the `since` fallback can use it.
+	until := time.Now()
+	if s := q.Get("until"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			httpresp.Error(w, http.StatusBadRequest, "invalid until: must be RFC3339 format")
+			return
+		}
+		until = t
+	}
+
+	since := until.AddDate(0, 0, -90)
+	if s := q.Get("since"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			httpresp.Error(w, http.StatusBadRequest, "invalid since: must be RFC3339 format")
+			return
+		}
+		since = t
+	}
+
+	if !since.Before(until) {
+		httpresp.Error(w, http.StatusBadRequest, "since must be before until")
+		return
+	}
+
+	workouts, err := h.repo.ListByUser(r.Context(), userID, ListOptions{
+		Since: &since,
+		Until: &until,
+		Limit: 1000,
+	})
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "list workouts", err)
+		return
+	}
+
+	result := ComputeProgression(workouts, exerciseID, since, until)
+	httpresp.OK(w, "computed progression", result)
 }
 
 // create handles POST /workouts.

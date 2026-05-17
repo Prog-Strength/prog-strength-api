@@ -1,3 +1,10 @@
+## [0.8.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.1...v0.8.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **caddy:** mount config directory instead of single file ([78f132e](https://github.com/Prog-Strength/prog-strength-api/commit/78f132ebf05f20284269efca3da4e652a0680d24))
+
 ## [0.8.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.8.0...v0.8.1) (2026-05-16)
 
 

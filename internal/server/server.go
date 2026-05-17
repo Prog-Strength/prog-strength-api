@@ -95,6 +95,7 @@ func New(cfg config.Config) (*Server, error) {
 		GoogleRedirectURL:      cfg.GoogleRedirectURL,
 		DevAuth:                cfg.DevAuth,
 		ReturnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
+		BetaAllowedEmails:      cfg.BetaAllowedEmails,
 	}, userRepo)
 	authHandler.Mount(r)
 	log.Printf("auth: google=%v dev_token=%v", authHandler.HasGoogle(), cfg.DevAuth)

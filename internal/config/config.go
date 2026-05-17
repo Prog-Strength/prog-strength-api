@@ -51,6 +51,16 @@ type Config struct {
 	// JSON, the legacy behavior).
 	// Example env: "http://localhost:3000,https://app.progstrength.fitness"
 	ReturnToAllowedOrigins []string
+
+	// BetaAllowedEmails is the closed-beta allowlist: only these email
+	// addresses receive a JWT after Google OAuth. Anyone else completes
+	// the OAuth flow (and gets a user row created — useful for
+	// visibility into sign-up attempts) but is redirected back to the
+	// frontend with #error=beta_required instead of an access token,
+	// so they can't reach the agent and burn Anthropic credits.
+	// Comparison is case-insensitive. Empty disables the gate entirely
+	// — every authenticated user gets a token (pre-beta / local dev).
+	BetaAllowedEmails []string
 }
 
 // Load reads configuration from environment variables.
@@ -66,6 +76,7 @@ func Load() (Config, error) {
 		DevAuth:            os.Getenv("DEV_AUTH") == "true",
 		CORSAllowedOrigin:  os.Getenv("CORS_ALLOWED_ORIGIN"),
 		ReturnToAllowedOrigins: splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
+		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
 	}
 
 	if cfg.ServerAddr == "" {

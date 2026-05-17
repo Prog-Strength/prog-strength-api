@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
@@ -39,6 +40,9 @@ type Config struct {
 	// the URL fragment. Empty disables the return_to feature and the
 	// callback responds with JSON (legacy curl/test behavior).
 	ReturnToAllowedOrigins []string
+	// BetaAllowedEmails: only these emails receive a JWT after OAuth.
+	// Empty means open access (no beta gate). Case-insensitive.
+	BetaAllowedEmails []string
 }
 
 // Handler exposes authentication endpoints. It mounts Google OAuth routes
@@ -50,6 +54,9 @@ type Handler struct {
 	users                  user.Repository
 	devAuth                bool
 	returnToAllowedOrigins []string
+	// Lowercased + trimmed beta allowlist, looked up via map for O(1)
+	// containment. nil means "no gate, everyone allowed."
+	betaAllowedEmails map[string]struct{}
 }
 
 // NewHandler constructs a Handler. users is required (find-or-create on login).
@@ -58,12 +65,20 @@ func NewHandler(cfg Config, users user.Repository) *Handler {
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRedirectURL != "" {
 		googleCfg = newGoogleConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
 	}
+	var beta map[string]struct{}
+	if len(cfg.BetaAllowedEmails) > 0 {
+		beta = make(map[string]struct{}, len(cfg.BetaAllowedEmails))
+		for _, e := range cfg.BetaAllowedEmails {
+			beta[strings.ToLower(strings.TrimSpace(e))] = struct{}{}
+		}
+	}
 	return &Handler{
 		googleConfig:           googleCfg,
 		jwtSecret:              cfg.JWTSecret,
 		users:                  users,
 		devAuth:                cfg.DevAuth,
 		returnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
+		betaAllowedEmails:      beta,
 	}
 }
 
@@ -163,12 +178,36 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always read+clear the return_to cookie so it doesn't linger if we
+	// short-circuit below — even on the beta-denied path we want to use
+	// the same redirect target the frontend asked for, so it can show
+	// the contact-the-admins screen.
+	returnTo := h.readAndClearReturnTo(w, r)
+
+	// Beta gate: when BETA_ALLOWED_EMAILS is configured, only those
+	// emails get a JWT. Anyone else completes OAuth (their user row
+	// already exists from findOrCreateUser above — visibility into
+	// sign-up attempts) but bounces back to the frontend with
+	// error=beta_required so the UI can show a "request access"
+	// screen. Empty allowlist = open access.
+	if !h.isBetaAllowed(u.Email) {
+		if returnTo != "" {
+			h.redirectBetaRequired(w, r, returnTo, u.Email)
+			return
+		}
+		// No return_to (curl-style flow). Surface the rejection as a
+		// 403 with the standard error envelope so non-browser clients
+		// still get a clear signal.
+		httpresp.Error(w, http.StatusForbidden, "beta access required for this email")
+		return
+	}
+
 	// If the login set a return_to cookie, redirect there with the JWT
 	// in the URL fragment. Fragments aren't sent to servers, so the
 	// token doesn't leak through Referer headers or proxy logs on the
 	// way to the frontend. Otherwise fall back to the JSON response
 	// shape (curl, integration tests, etc.).
-	if returnTo := h.readAndClearReturnTo(w, r); returnTo != "" {
+	if returnTo != "" {
 		h.issueTokenRedirect(w, r, u, returnTo)
 		return
 	}
@@ -320,6 +359,32 @@ func (h *Handler) readAndClearReturnTo(w http.ResponseWriter, r *http.Request) s
 		return ""
 	}
 	return cookie.Value
+}
+
+// isBetaAllowed reports whether the given email is allowed past the
+// beta gate. An empty allowlist (nil map) means the gate is disabled
+// entirely — every authenticated user is allowed through. The
+// comparison is case-insensitive; emails are normalized to lowercase
+// on both sides.
+func (h *Handler) isBetaAllowed(email string) bool {
+	if h.betaAllowedEmails == nil {
+		return true
+	}
+	_, ok := h.betaAllowedEmails[strings.ToLower(strings.TrimSpace(email))]
+	return ok
+}
+
+// redirectBetaRequired bounces the user back to the frontend's
+// callback URL with `#error=beta_required&email=<encoded>`. The hash
+// fragment isn't sent to servers, so this is symmetric with how the
+// success path (issueTokenRedirect) ferries the JWT — same plumbing,
+// different payload. The frontend reads the error and shows a
+// request-access screen.
+func (h *Handler) redirectBetaRequired(w http.ResponseWriter, r *http.Request, returnTo, email string) {
+	params := url.Values{}
+	params.Set("error", "beta_required")
+	params.Set("email", email)
+	http.Redirect(w, r, returnTo+"#"+params.Encode(), http.StatusTemporaryRedirect)
 }
 
 // issueTokenRedirect signs a JWT and redirects to returnTo with the token

@@ -41,6 +41,7 @@ services:
       - DEV_AUTH=${DEV_AUTH}
       - CORS_ALLOWED_ORIGIN=${CORS_ALLOWED_ORIGIN}
       - RETURN_TO_ALLOWED_ORIGINS=${RETURN_TO_ALLOWED_ORIGINS}
+      - BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
     volumes:
       # Persist SQLite database on host
       - ./data:/data

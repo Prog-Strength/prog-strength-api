@@ -259,4 +259,11 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleBack},
 		Equipment:    []Equipment{EquipmentDumbbell, EquipmentInclineBench},
 	},
+	{
+		ID:           "standing-cable-fly",
+		Name:         "Standing Cable Fly",
+		Description:  "Standing between dual cable pulleys with a handle in each hand and a slight bend in the elbows, arc the arms together in front of the chest in a wide hugging motion to isolate the chest. Cables hold tension through the full range — including the peak contraction — where a free-weight fly loses tension as the dumbbells come together.",
+		MuscleGroups: []MuscleGroup{MuscleChest},
+		Equipment:    []Equipment{EquipmentCable},
+	},
 }

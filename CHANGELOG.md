@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.12.0...v0.13.0) (2026-05-18)
+
+
+### Features
+
+* **workouts:** persist estimated 1RM history per workout exercise ([40b3218](https://github.com/Prog-Strength/prog-strength-api/commit/40b3218a470c2c0a2b212152d2592d933133ee1d))
+
 # [0.12.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.11.0...v0.12.0) (2026-05-17)
 
 

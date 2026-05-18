@@ -13,6 +13,15 @@ type Config struct {
 	// Example: "/data/app.db" or "./data/app.db"
 	DatabaseURL string
 
+	// TelemetryDatabaseURL is the path to the SQLite database file
+	// holding agent telemetry. Separate from DatabaseURL so observability
+	// data (high-volume, disposable) doesn't share locks or backups with
+	// application data (low-volume, durable). When empty AND DatabaseURL
+	// is also empty, telemetry is disabled entirely (in-memory mode).
+	// When empty but DatabaseURL is set, defaults to a sibling file:
+	// /data/app.db → /data/telemetry.db.
+	TelemetryDatabaseURL string
+
 	// ServerAddr is the address the HTTP server listens on.
 	// Defaults to ":8080" if not specified.
 	ServerAddr string
@@ -67,16 +76,24 @@ type Config struct {
 // Returns an error when a required value is missing.
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:        os.Getenv("DATABASE_URL"),
-		ServerAddr:         os.Getenv("SERVER_ADDR"),
-		JWTSigningKey:      os.Getenv("JWT_SIGNING_KEY"),
-		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
-		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
-		GoogleRedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
-		DevAuth:            os.Getenv("DEV_AUTH") == "true",
-		CORSAllowedOrigin:  os.Getenv("CORS_ALLOWED_ORIGIN"),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		TelemetryDatabaseURL:   os.Getenv("TELEMETRY_DATABASE_URL"),
+		ServerAddr:             os.Getenv("SERVER_ADDR"),
+		JWTSigningKey:          os.Getenv("JWT_SIGNING_KEY"),
+		GoogleClientID:         os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:     os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GoogleRedirectURL:      os.Getenv("GOOGLE_REDIRECT_URL"),
+		DevAuth:                os.Getenv("DEV_AUTH") == "true",
+		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
 		ReturnToAllowedOrigins: splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
 		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
+	}
+
+	// Default telemetry path next to app.db when the user set the app
+	// path but not the telemetry one. Keeps the common case zero-config
+	// while still allowing explicit override.
+	if cfg.TelemetryDatabaseURL == "" && cfg.DatabaseURL != "" {
+		cfg.TelemetryDatabaseURL = deriveTelemetryPath(cfg.DatabaseURL)
 	}
 
 	if cfg.ServerAddr == "" {
@@ -88,6 +105,20 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// deriveTelemetryPath returns the conventional telemetry.db path
+// sitting alongside the given app.db path. Used when TELEMETRY_DATABASE_URL
+// is unset but DATABASE_URL is — saves operators from setting two env
+// vars when they want the obvious default.
+func deriveTelemetryPath(appDB string) string {
+	// "/data/app.db" → "/data/telemetry.db"
+	// "./app.db"    → "./telemetry.db"
+	// "foo/bar.db"  → "foo/telemetry.db"
+	if i := strings.LastIndex(appDB, "/"); i >= 0 {
+		return appDB[:i+1] + "telemetry.db"
+	}
+	return "telemetry.db"
 }
 
 // splitCSV trims and drops empty entries from a comma-separated env var.

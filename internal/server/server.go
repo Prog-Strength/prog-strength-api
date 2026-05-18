@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
@@ -28,6 +29,16 @@ func New(cfg config.Config) (*Server, error) {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	// Prometheus instrumentation runs after Recoverer so panics still
+	// get counted (Recoverer turns them into a 500 response we observe)
+	// and runs over the rest of the stack so it sees the real route
+	// pattern from chi's RouteContext.
+	r.Use(MetricsMiddleware)
+
+	// Prometheus scrape target. Reachable only from inside the Docker
+	// network — the Caddy layer refuses to proxy /metrics to the
+	// public internet.
+	r.Handle("/metrics", MetricsHandler())
 
 	// CORS: only matters for cross-origin browser fetches. curl/Postman/
 	// server-to-server calls are unaffected (no browser, no CORS check).
@@ -88,6 +99,26 @@ func New(cfg config.Config) (*Server, error) {
 		// derived from `workouts`; both gated on count > 0.
 		if err := sqliteWorkoutRepo.BackfillPersonalRecords(context.Background()); err != nil {
 			return nil, err
+		}
+
+		// Telemetry uses its own SQLite file so high-volume agent
+		// writes don't share locks or Litestream backups with the
+		// application data. Same migration pattern as app.db, just
+		// pointed at a different embed.FS.
+		if cfg.TelemetryDatabaseURL != "" {
+			log.Printf("using telemetry SQLite database at %s", cfg.TelemetryDatabaseURL)
+			telemetryDB, err := db.Open(cfg.TelemetryDatabaseURL)
+			if err != nil {
+				return nil, err
+			}
+			if err := db.MigrateTelemetry(telemetryDB); err != nil {
+				return nil, err
+			}
+			telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
+			telemetry.NewHandler(telemetryRepo).Mount(r)
+			log.Println("telemetry: agent event recording enabled")
+		} else {
+			log.Println("telemetry: disabled (TELEMETRY_DATABASE_URL unset)")
 		}
 	} else {
 		// In-memory mode (default for local dev without DATABASE_URL).

@@ -266,4 +266,25 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleChest},
 		Equipment:    []Equipment{EquipmentCable},
 	},
+	{
+		ID:           "dumbbell-reverse-lunge",
+		Name:         "Dumbbell Reverse Lunge",
+		Description:  "Standing upright with a dumbbell in each hand, step one foot back into a long stride, descend until the rear knee is just above the floor, then drive through the front heel to return to standing and alternate legs. Targets the quads and glutes of the front (working) leg. Record weight per dumbbell, not the combined pair.",
+		MuscleGroups: []MuscleGroup{MuscleQuads, MuscleGlutes},
+		Equipment:    []Equipment{EquipmentDumbbell},
+	},
+	{
+		ID:           "leg-press",
+		Name:         "Leg Press",
+		Description:  "Seated on the machine with the feet placed shoulder-width on the platform, push the sled away by extending the hips and knees, then lower under control with the knees tracking over the feet. The fixed path lets the lifter overload the quads and glutes without taxing stabilizers.",
+		MuscleGroups: []MuscleGroup{MuscleQuads, MuscleGlutes},
+		Equipment:    []Equipment{EquipmentMachine},
+	},
+	{
+		ID:           "calf-press",
+		Name:         "Calf Press",
+		Description:  "On the leg press, set the balls of the feet on the bottom edge of the platform with the heels free, then drive the platform away by extending through the ankles to isolate the calves; the seated position lets the lifter load far beyond standing calf-raise capacity.",
+		MuscleGroups: []MuscleGroup{MuscleCalves},
+		Equipment:    []Equipment{EquipmentMachine},
+	},
 }

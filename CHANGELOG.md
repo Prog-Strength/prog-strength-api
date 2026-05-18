@@ -1,3 +1,10 @@
+# [0.19.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.18.0...v0.19.0) (2026-05-18)
+
+
+### Features
+
+* **workouts:** personal records + PR break event log ([d6002cf](https://github.com/Prog-Strength/prog-strength-api/commit/d6002cfb3c892c7e1f74eea4be4af778f5a1c8cf))
+
 # [0.18.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.17.0...v0.18.0) (2026-05-18)
 
 

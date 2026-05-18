@@ -1,3 +1,10 @@
+# [0.17.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.16.0...v0.17.0) (2026-05-18)
+
+
+### Features
+
+* **exercises:** add Standing Cable Fly to catalog ([6561eac](https://github.com/Prog-Strength/prog-strength-api/commit/6561eac3f6dc7464bae3e8cc11e8a25622caca98))
+
 # [0.16.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.15.0...v0.16.0) (2026-05-18)
 
 

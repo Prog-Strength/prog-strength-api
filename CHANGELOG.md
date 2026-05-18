@@ -1,3 +1,10 @@
+## [0.19.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.19.0...v0.19.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **workouts:** skip bodyweight sets when recomputing personal records ([45b5df0](https://github.com/Prog-Strength/prog-strength-api/commit/45b5df0c2ee6bdb8ffb9ec81e3f869d796d3426a))
+
 # [0.19.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.18.0...v0.19.0) (2026-05-18)
 
 

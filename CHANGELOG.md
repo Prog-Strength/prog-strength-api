@@ -1,3 +1,10 @@
+# [0.14.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.13.0...v0.14.0) (2026-05-18)
+
+
+### Features
+
+* **workouts:** muscle-group progression at /workouts/progression ([490038c](https://github.com/Prog-Strength/prog-strength-api/commit/490038c929f250b01899c2c1debac8108ada3d8a))
+
 # [0.13.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.12.0...v0.13.0) (2026-05-18)
 
 

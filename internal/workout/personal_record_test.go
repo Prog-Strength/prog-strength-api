@@ -182,6 +182,45 @@ func TestRecomputePR_MixedUnits_ConvertOnCompare(t *testing.T) {
 	}
 }
 
+func TestRecomputePR_BodyweightSetsProduceNoPR(t *testing.T) {
+	// A workout containing only bodyweight sets (weight = 0) must not
+	// produce a PR. The personal_records schema's CHECK(weight > 0)
+	// rejected these in production and crashed the backfill; this
+	// test pins the recompute-side filter so the constraint can't be
+	// violated again.
+	day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	snaps := []WorkoutSnapshot{
+		snap("w1", day, "pull-up",
+			Set{Reps: 10, Weight: 0, Unit: user.WeightUnitPounds},
+			Set{Reps: 8, Weight: 0, Unit: user.WeightUnitPounds},
+		),
+	}
+	pr, events := RecomputePersonalRecord(snaps, "pull-up")
+	if pr != nil {
+		t.Errorf("bodyweight-only workout should not produce a PR, got %+v", pr)
+	}
+	if len(events) != 0 {
+		t.Errorf("bodyweight-only workout should not produce events, got %d", len(events))
+	}
+}
+
+func TestRecomputePR_MixedBodyweightAndWeightedKeepsLoaded(t *testing.T) {
+	// Weighted pull-up scenario: the workout has a bodyweight warmup
+	// at 0 plus a working set at +25 lb. The PR should be the +25 set,
+	// the bodyweight set ignored — not dragged in as a candidate.
+	day := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	snaps := []WorkoutSnapshot{
+		snap("w1", day, "weighted-pull-up",
+			Set{Reps: 5, Weight: 0, Unit: user.WeightUnitPounds},
+			Set{Reps: 5, Weight: 25, Unit: user.WeightUnitPounds},
+		),
+	}
+	pr, _ := RecomputePersonalRecord(snaps, "weighted-pull-up")
+	if pr == nil || pr.Weight != 25 {
+		t.Errorf("expected PR at the loaded set (25 lb), got %+v", pr)
+	}
+}
+
 func TestRecomputePR_NoIntraWorkoutImprovementYieldsOneEvent(t *testing.T) {
 	// Edge case: within a workout, the heaviest set ties the existing
 	// PR. No event should fire.

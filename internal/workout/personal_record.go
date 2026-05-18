@@ -142,7 +142,20 @@ func RecomputePersonalRecord(
 				sets = append(sets, e.Sets...)
 			}
 		}
-		heaviest, ok := heaviestSet(sets)
+		// Drop bodyweight sets (weight == 0). The personal_records
+		// schema enforces CHECK(weight > 0) — the table tracks
+		// heaviest *external* load. Pull-up / push-up progression is
+		// measured in reps and belongs in a future per-rep-range PR
+		// feature, not here. Weighted variants (e.g. weighted pull-ups
+		// at +25 lb) still produce PR rows on their qualifying sets;
+		// only the bodyweight portion of mixed-set workouts is dropped.
+		filtered := sets[:0]
+		for _, s := range sets {
+			if s.Weight > 0 {
+				filtered = append(filtered, s)
+			}
+		}
+		heaviest, ok := heaviestSet(filtered)
 		if !ok {
 			continue
 		}

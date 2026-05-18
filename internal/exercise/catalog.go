@@ -252,4 +252,11 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleTriceps},
 		Equipment:    []Equipment{EquipmentCable},
 	},
+	{
+		ID:           "neutral-grip-dumbbell-incline-row",
+		Name:         "Neutral Grip Dumbbell Incline Row",
+		Description:  "Chest-down on an incline bench with a dumbbell in each hand and a neutral grip (palms facing), row the dumbbells up by driving the elbows back and squeezing the shoulder blades together. The chest-supported position eliminates lower-back involvement so the upper back does the work. Record weight per dumbbell, not the combined pair.",
+		MuscleGroups: []MuscleGroup{MuscleBack},
+		Equipment:    []Equipment{EquipmentDumbbell, EquipmentInclineBench},
+	},
 }

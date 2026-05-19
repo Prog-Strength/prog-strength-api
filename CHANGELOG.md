@@ -1,3 +1,10 @@
+# [0.22.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.21.1...v0.22.0) (2026-05-19)
+
+
+### Features
+
+* **telemetry:** daily TTL purge of aged message and tool-call content ([ac657f7](https://github.com/Prog-Strength/prog-strength-api/commit/ac657f727d908eeea42bb87fc7ca8d10f0b3d827))
+
 ## [0.21.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.21.0...v0.21.1) (2026-05-18)
 
 

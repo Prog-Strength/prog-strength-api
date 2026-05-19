@@ -68,12 +68,16 @@ jobs:
           LITESTREAM_REPLICA_REGION: ${{ secrets.LITESTREAM_REPLICA_REGION }}
           RETURN_TO_ALLOWED_ORIGINS: ${{ secrets.RETURN_TO_ALLOWED_ORIGINS }}
           BETA_ALLOWED_EMAILS: ${{ secrets.BETA_ALLOWED_EMAILS }}
+          # See release.yml for rationale — same secrets here so manual
+          # redeploys don't drop back to "admin"/"admin" Grafana creds.
+          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,RELEASE_VERSION
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,RELEASE_VERSION
           script: |
             # Abort on the first failing command — see release.yml for the
             # full rationale on why this matters with appleboy/ssh-action.
@@ -102,6 +106,8 @@ jobs:
             LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION}
             RETURN_TO_ALLOWED_ORIGINS=${RETURN_TO_ALLOWED_ORIGINS}
             BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
+            GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
+            GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
             APP_VERSION=v${RELEASE_VERSION}
             EOF
 

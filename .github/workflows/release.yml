@@ -60,12 +60,19 @@ jobs:
           LITESTREAM_REPLICA_REGION: ${{ secrets.LITESTREAM_REPLICA_REGION }}
           RETURN_TO_ALLOWED_ORIGINS: ${{ secrets.RETURN_TO_ALLOWED_ORIGINS }}
           BETA_ALLOWED_EMAILS: ${{ secrets.BETA_ALLOWED_EMAILS }}
+          # Grafana admin credentials. Both seed the initial values on
+          # first boot; subsequent UI password changes persist in
+          # grafana_data. Unset secrets fall through to the compose
+          # file's "admin"/"admin" defaults — fine for dev, do not
+          # leave that way in prod.
+          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,RELEASE_VERSION
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,RELEASE_VERSION
           script: |
             # Abort on the first failing command. Without this, a failed
             # `docker compose up --build` is followed by trailing `ps`/
@@ -106,6 +113,8 @@ jobs:
             LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION}
             RETURN_TO_ALLOWED_ORIGINS=${RETURN_TO_ALLOWED_ORIGINS}
             BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
+            GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
+            GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
             APP_VERSION=v${RELEASE_VERSION}
             EOF
 

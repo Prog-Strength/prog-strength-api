@@ -58,6 +58,23 @@ type Repository interface {
 	// empty slice. Used by the workout list endpoint to embed
 	// `personal_records_set` per workout in a single bulk query.
 	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]PersonalRecordEvent, error)
+
+	// ListUserHeadlineExercises returns the user's custom headline-
+	// exercise selection in display order (position ASC). Empty slice
+	// means the user has never customized — callers fall back to
+	// workout.HeadlineExercises to drive the Personal Records page.
+	// See prog-strength-docs/sows/custom-headline-lifts.md.
+	ListUserHeadlineExercises(ctx context.Context, userID string) ([]UserHeadlineExercise, error)
+
+	// ReplaceUserHeadlineExercises atomically replaces the user's
+	// headline-exercise selection with the given ordered slice of
+	// exercise slugs. `position` is assigned from the slice index;
+	// the implementation deletes the user's existing rows and inserts
+	// the new set inside a single transaction. Caller is responsible
+	// for validating that every slug exists in the exercise catalog
+	// and that the slice respects MaxHeadlineExercises — the repo
+	// trusts the input it's given.
+	ReplaceUserHeadlineExercises(ctx context.Context, userID string, exerciseIDs []string, now time.Time) error
 }
 
 // ListOptions controls pagination and filtering for list operations.

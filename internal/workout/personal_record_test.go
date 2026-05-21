@@ -8,17 +8,17 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// Headline lift slugs must exist in the catalog — a typo here would
-// otherwise ship silently and a user's PR page would have a phantom
-// placeholder card for an exercise that doesn't exist.
-func TestHeadlineLifts_AllInCatalog(t *testing.T) {
+// Default headline exercise slugs must exist in the catalog — a typo
+// here would otherwise ship silently and a new user's PR page would
+// have a phantom placeholder card for an exercise that doesn't exist.
+func TestHeadlineExercises_AllInCatalog(t *testing.T) {
 	catalog := map[string]bool{}
 	for _, e := range exercise.Catalog {
 		catalog[e.ID] = true
 	}
-	for _, slug := range HeadlineLifts {
+	for _, slug := range HeadlineExercises {
 		if !catalog[slug] {
-			t.Errorf("headline lift %q is not in the exercise catalog", slug)
+			t.Errorf("default headline exercise %q is not in the exercise catalog", slug)
 		}
 	}
 }

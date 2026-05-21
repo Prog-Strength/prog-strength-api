@@ -28,15 +28,22 @@ type MemoryRepository struct {
 	// PR events stored flat; filtered on each operation. Dev/test only,
 	// so the cost is acceptable.
 	personalRecordEvents []PersonalRecordEvent
-	now                  func() time.Time // injectable for tests
+	// User-curated headline-exercise selection, keyed by userID. The
+	// stored slice is already in display order — ReplaceUserHeadlineExercises
+	// writes positions starting at zero so reads can just hand the slice
+	// back. Absent key = "user hasn't customized," callers fall back to
+	// HeadlineExercises.
+	userHeadlineExercises map[string][]UserHeadlineExercise
+	now                   func() time.Time // injectable for tests
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		workouts:        make(map[string]*Workout),
-		history:         make(map[string][]OneRepMaxEntry),
-		personalRecords: make(map[string]*PersonalRecord),
-		now:             time.Now,
+		workouts:              make(map[string]*Workout),
+		history:               make(map[string][]OneRepMaxEntry),
+		personalRecords:       make(map[string]*PersonalRecord),
+		userHeadlineExercises: make(map[string][]UserHeadlineExercise),
+		now:                   time.Now,
 	}
 }
 
@@ -379,4 +386,48 @@ func (r *MemoryRepository) recomputePersonalRecordLocked(
 		events[i].CreatedAt = now
 		r.personalRecordEvents = append(r.personalRecordEvents, events[i])
 	}
+}
+
+func (r *MemoryRepository) ListUserHeadlineExercises(
+	ctx context.Context,
+	userID string,
+) ([]UserHeadlineExercise, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	stored := r.userHeadlineExercises[userID]
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	// Defensive copy — same convention as the rest of this repo,
+	// callers should not be able to mutate our state.
+	out := make([]UserHeadlineExercise, len(stored))
+	copy(out, stored)
+	return out, nil
+}
+
+func (r *MemoryRepository) ReplaceUserHeadlineExercises(
+	ctx context.Context,
+	userID string,
+	exerciseIDs []string,
+	now time.Time,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(exerciseIDs) == 0 {
+		delete(r.userHeadlineExercises, userID)
+		return nil
+	}
+	rows := make([]UserHeadlineExercise, len(exerciseIDs))
+	for i, exerciseID := range exerciseIDs {
+		rows[i] = UserHeadlineExercise{
+			UserID:     userID,
+			ExerciseID: exerciseID,
+			Position:   i,
+			CreatedAt:  now,
+		}
+	}
+	r.userHeadlineExercises[userID] = rows
+	return nil
 }

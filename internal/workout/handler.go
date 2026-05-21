@@ -51,6 +51,14 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Delete("/{id}", h.delete)
 	})
 	r.Get("/personal-records", h.personalRecords)
+
+	// Per-user headline-exercise customization for the Personal
+	// Records page. See prog-strength-docs/sows/custom-headline-lifts.md.
+	r.Route("/me/headline-exercises", func(r chi.Router) {
+		r.Get("/", h.getMyHeadlineExercises)
+		r.Put("/", h.putMyHeadlineExercises)
+	})
+	r.Get("/headline-exercises/defaults", h.getHeadlineExercisesDefaults)
 }
 
 // workoutListResponse is the data envelope for GET /workouts. Wraps
@@ -671,15 +679,25 @@ type personalRecordDTO struct {
 
 // personalRecords handles GET /personal-records.
 //
-// Returns one row per headline lift in HeadlineLifts order. Headline
-// lifts the user has never trained still appear, with PR fields set
-// to null — the frontend renders empty-state cards from these rows.
-// The current_estimated_1rm field is computed per request from the
-// 1RM history table; it is not stored.
+// Returns one row per headline exercise in the user's selection
+// order. Headline exercises the user has never trained still appear,
+// with PR fields set to null — the frontend renders empty-state
+// cards from these rows. The current_estimated_1rm field is computed
+// per request from the 1RM history table; it is not stored.
+//
+// The slug list comes from effectiveHeadlineExerciseSlugs, which
+// consults user_headline_exercises first and falls back to the
+// curated HeadlineExercises default when the user hasn't customized.
 func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	slugs, err := h.effectiveHeadlineExerciseSlugs(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "list user headline exercises", err)
 		return
 	}
 
@@ -695,15 +713,16 @@ func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resolve exercise display names from the catalog.
-	exerciseNames := make(map[string]string, len(HeadlineLifts))
-	for _, slug := range HeadlineLifts {
+	exerciseNames := make(map[string]string, len(slugs))
+	for _, slug := range slugs {
 		ex, err := h.exerciseRepo.GetByID(r.Context(), slug)
 		if err == nil {
 			exerciseNames[slug] = ex.Name
 		} else {
-			// Catalog mismatch — the unit test guards against this, but
-			// fall back to the slug so the row still renders something
-			// rather than crashing the request.
+			// Catalog mismatch — the unit test guards the defaults, but
+			// a user could pin an exercise that gets removed from the
+			// catalog later; fall back to the slug so the row still
+			// renders something rather than crashing the request.
 			exerciseNames[slug] = slug
 		}
 	}
@@ -712,8 +731,8 @@ func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
 	until := now
 	since := until.Add(-DefaultBaselineWindow)
 
-	out := make([]personalRecordDTO, 0, len(HeadlineLifts))
-	for _, slug := range HeadlineLifts {
+	out := make([]personalRecordDTO, 0, len(slugs))
+	for _, slug := range slugs {
 		dto := personalRecordDTO{
 			ExerciseID:   slug,
 			ExerciseName: exerciseNames[slug],

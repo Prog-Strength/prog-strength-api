@@ -1,3 +1,10 @@
+# [0.24.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.23.1...v0.24.0) (2026-05-21)
+
+
+### Features
+
+* **headline-exercises:** per-user customization of Personal Records lineup ([b6ac1f9](https://github.com/Prog-Strength/prog-strength-api/commit/b6ac1f9723015db12cb57978a27b34bbd45aa125))
+
 ## [0.23.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.23.0...v0.23.1) (2026-05-19)
 
 

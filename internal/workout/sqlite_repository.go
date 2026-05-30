@@ -157,30 +157,41 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	query += " LIMIT ? OFFSET ?"
 	args = append(args, limit, opts.Offset)
 
+	// Materialize the parent rows first, then close them, then fetch
+	// nested data. Calling getWorkoutExercises inside rows.Next() would
+	// hold this connection from the pool while issuing another query —
+	// with enough concurrent requests every connection ends up waiting
+	// on a nested call that can never acquire a free conn, and the pool
+	// deadlocks. Draining to a slice releases the connection before the
+	// nested fan-out begins.
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var workouts []Workout
 	for rows.Next() {
 		var w Workout
 		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
+		workouts = append(workouts, w)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
 
-		// Load exercises and sets for this workout.
-		exercises, err := r.getWorkoutExercises(ctx, w.ID)
+	for i := range workouts {
+		exercises, err := r.getWorkoutExercises(ctx, workouts[i].ID)
 		if err != nil {
 			return nil, err
 		}
-		w.Exercises = exercises
-
-		workouts = append(workouts, w)
+		workouts[i].Exercises = exercises
 	}
 
-	return workouts, rows.Err()
+	return workouts, nil
 }
 
 func (r *SQLiteRepository) CountByUser(
@@ -392,6 +403,9 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 
 // getWorkoutExercises loads all exercises and their sets for a workout.
 func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID string) ([]WorkoutExercise, error) {
+	// Same pattern as ListByUser: drain the parent rows + close the
+	// connection before calling getSets, so we don't hold one pool
+	// connection while waiting on another.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, exercise_id, exercise_order, superset_group, notes
 		FROM workout_exercises
@@ -401,27 +415,35 @@ func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID st
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var exercises []WorkoutExercise
+	type weRow struct {
+		we   WorkoutExercise
+		weID int64
+	}
+	var staged []weRow
 	for rows.Next() {
-		var we WorkoutExercise
-		var weID int64
-		if err := rows.Scan(&weID, &we.ExerciseID, &we.Order, &we.SupersetGroup, &we.Notes); err != nil {
+		var row weRow
+		if err := rows.Scan(&row.weID, &row.we.ExerciseID, &row.we.Order, &row.we.SupersetGroup, &row.we.Notes); err != nil {
+			rows.Close()
 			return nil, err
 		}
+		staged = append(staged, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
 
-		// Load sets for this workout exercise.
-		sets, err := r.getSets(ctx, weID)
+	exercises := make([]WorkoutExercise, 0, len(staged))
+	for _, row := range staged {
+		sets, err := r.getSets(ctx, row.weID)
 		if err != nil {
 			return nil, err
 		}
-		we.Sets = sets
-
-		exercises = append(exercises, we)
+		row.we.Sets = sets
+		exercises = append(exercises, row.we)
 	}
-
-	return exercises, rows.Err()
+	return exercises, nil
 }
 
 // getSets loads all sets for a workout exercise.

@@ -1,3 +1,10 @@
+# [0.27.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.26.0...v0.27.0) (2026-05-30)
+
+
+### Features
+
+* **bodyweight:** scale-reading log + trend endpoints (Phase 3) ([691390f](https://github.com/Prog-Strength/prog-strength-api/commit/691390f6eadb569ada63555706bb694e20ffa164))
+
 # [0.26.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.25.0...v0.26.0) (2026-05-30)
 
 

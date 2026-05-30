@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
@@ -72,6 +73,7 @@ func New(cfg config.Config) (*Server, error) {
 	var workoutRepo workout.Repository
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
+	var bodyweightRepo bodyweight.Repository
 
 	if cfg.DatabaseURL != "" {
 		// SQLite mode.
@@ -93,6 +95,7 @@ func New(cfg config.Config) (*Server, error) {
 		workoutRepo = sqliteWorkoutRepo
 		userRepo = user.NewSQLiteRepository(database)
 		nutritionRepo = nutrition.NewSQLiteRepository(database)
+		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -145,6 +148,7 @@ func New(cfg config.Config) (*Server, error) {
 		workoutRepo = workout.NewMemoryRepository()
 		userRepo = user.NewMemoryRepository()
 		nutritionRepo = nutrition.NewMemoryRepository()
+		bodyweightRepo = bodyweight.NewMemoryRepository()
 	}
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
@@ -179,6 +183,11 @@ func New(cfg config.Config) (*Server, error) {
 		// log + daily-macros aggregate; recipes and bodyweight ship
 		// in later phases under the same auth middleware.
 		nutrition.NewHandler(nutritionRepo).Mount(r)
+		// Bodyweight lives in its own package — independent concept,
+		// independent read paths — and shares the same JWT-gated
+		// router group. Needs the user repository to default unit
+		// from the user's preferred WeightUnit when omitted.
+		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
 	})
 
 	return &Server{

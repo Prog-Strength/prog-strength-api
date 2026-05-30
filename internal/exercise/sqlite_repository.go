@@ -86,38 +86,44 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
+	// Drain the parent rows into a slice before fanning out to
+	// getMuscleGroups / getEquipment. Calling those inside rows.Next()
+	// holds a connection from the pool while issuing another query —
+	// with a handful of concurrent /exercises requests every connection
+	// ends up waiting on a nested call that can never acquire a free
+	// conn, and the pool deadlocks. Same fix shape used in the workout
+	// repo's ListByUser.
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var exercises []Exercise
 	for rows.Next() {
 		var ex Exercise
 		if err := rows.Scan(&ex.ID, &ex.Name, &ex.Description, &ex.CreatedAt, &ex.UpdatedAt, &ex.DeletedAt); err != nil {
+			rows.Close()
 			return nil, err
 		}
-
-		// Load muscle groups for this exercise.
-		muscleGroups, err := r.getMuscleGroups(ctx, ex.ID)
-		if err != nil {
-			return nil, err
-		}
-		ex.MuscleGroups = muscleGroups
-
-		// Load equipment for this exercise.
-		equipment, err := r.getEquipment(ctx, ex.ID)
-		if err != nil {
-			return nil, err
-		}
-		ex.Equipment = equipment
-
 		exercises = append(exercises, ex)
 	}
-
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
+	}
+	rows.Close()
+
+	for i := range exercises {
+		muscleGroups, err := r.getMuscleGroups(ctx, exercises[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		exercises[i].MuscleGroups = muscleGroups
+
+		equipment, err := r.getEquipment(ctx, exercises[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		exercises[i].Equipment = equipment
 	}
 
 	// Sort alphabetically by name (case-insensitive).

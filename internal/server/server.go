@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
@@ -70,6 +71,7 @@ func New(cfg config.Config) (*Server, error) {
 	var exerciseRepo exercise.Repository
 	var workoutRepo workout.Repository
 	var userRepo user.Repository
+	var nutritionRepo nutrition.Repository
 
 	if cfg.DatabaseURL != "" {
 		// SQLite mode.
@@ -90,6 +92,7 @@ func New(cfg config.Config) (*Server, error) {
 		sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
 		workoutRepo = sqliteWorkoutRepo
 		userRepo = user.NewSQLiteRepository(database)
+		nutritionRepo = nutrition.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -141,6 +144,7 @@ func New(cfg config.Config) (*Server, error) {
 		exerciseRepo = exercise.NewMemoryRepository(exercise.Catalog)
 		workoutRepo = workout.NewMemoryRepository()
 		userRepo = user.NewMemoryRepository()
+		nutritionRepo = nutrition.NewMemoryRepository()
 	}
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
@@ -170,6 +174,11 @@ func New(cfg config.Config) (*Server, error) {
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser(jwtSecret))
 		workout.NewHandler(workoutRepo, exerciseRepo).Mount(r)
+		// Nutrition + pantry routes share the JWT-gated group with
+		// workouts. Phase 1 mounts pantry items and the nutrition
+		// log + daily-macros aggregate; recipes and bodyweight ship
+		// in later phases under the same auth middleware.
+		nutrition.NewHandler(nutritionRepo).Mount(r)
 	})
 
 	return &Server{

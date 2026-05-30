@@ -1,0 +1,399 @@
+package nutrition
+
+import (
+	"context"
+	"database/sql"
+	"strings"
+	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+)
+
+// Compile-time check that *SQLiteRepository satisfies Repository.
+var _ Repository = (*SQLiteRepository)(nil)
+
+type SQLiteRepository struct {
+	db  *sql.DB
+	now func() time.Time
+}
+
+func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
+	return &SQLiteRepository{db: db, now: time.Now}
+}
+
+// --- Pantry --------------------------------------------------------
+
+func (r *SQLiteRepository) CreatePantryItem(ctx context.Context, p *PantryItem) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	now := r.now().UTC()
+	p.ID = id.New()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	p.DeletedAt = nil
+
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO pantry_items (
+			id, user_id, name,
+			calories, protein_g, fat_g, carbs_g,
+			serving_size, serving_unit,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, p.ID, p.UserID, p.Name,
+		p.Calories, p.ProteinG, p.FatG, p.CarbsG,
+		p.ServingSize, p.ServingUnit,
+		p.CreatedAt, p.UpdatedAt)
+	return err
+}
+
+func (r *SQLiteRepository) GetPantryItem(ctx context.Context, userID, itemID string) (*PantryItem, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, name,
+		       calories, protein_g, fat_g, carbs_g,
+		       serving_size, serving_unit,
+		       created_at, updated_at, deleted_at
+		FROM pantry_items
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, itemID, userID)
+
+	p, err := scanPantry(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return p, err
+}
+
+func (r *SQLiteRepository) ListPantryItems(ctx context.Context, userID, query string) ([]PantryItem, error) {
+	q := strings.TrimSpace(query)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if q == "" {
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT id, user_id, name,
+			       calories, protein_g, fat_g, carbs_g,
+			       serving_size, serving_unit,
+			       created_at, updated_at, deleted_at
+			FROM pantry_items
+			WHERE user_id = ? AND deleted_at IS NULL
+			ORDER BY LOWER(name) ASC
+		`, userID)
+	} else {
+		// LIKE with a leading + trailing % == "contains, case-insensitive
+		// thanks to LOWER() on both sides." Small index won't help; pantry
+		// per user stays small.
+		needle := "%" + strings.ToLower(q) + "%"
+		rows, err = r.db.QueryContext(ctx, `
+			SELECT id, user_id, name,
+			       calories, protein_g, fat_g, carbs_g,
+			       serving_size, serving_unit,
+			       created_at, updated_at, deleted_at
+			FROM pantry_items
+			WHERE user_id = ? AND deleted_at IS NULL
+			  AND LOWER(name) LIKE ?
+			ORDER BY LOWER(name) ASC
+		`, userID, needle)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PantryItem
+	for rows.Next() {
+		p, err := scanPantry(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+func (r *SQLiteRepository) UpdatePantryItem(ctx context.Context, p *PantryItem) error {
+	if err := p.Validate(); err != nil {
+		return err
+	}
+	now := r.now().UTC()
+	p.UpdatedAt = now
+
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE pantry_items
+		SET name = ?,
+		    calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?,
+		    serving_size = ?, serving_unit = ?,
+		    updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, p.Name,
+		p.Calories, p.ProteinG, p.FatG, p.CarbsG,
+		p.ServingSize, p.ServingUnit,
+		p.UpdatedAt,
+		p.ID, p.UserID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) DeletePantryItem(ctx context.Context, userID, itemID string) error {
+	now := r.now().UTC()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE pantry_items
+		SET deleted_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, now, itemID, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// scanPantry reads one pantry_items row out of a Scanner (Row or Rows).
+// Using an interface here lets the same code service both single-row
+// QueryRow and multi-row Query loops.
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanPantry(s scanner) (*PantryItem, error) {
+	var (
+		p           PantryItem
+		deletedAt   sql.NullTime
+	)
+	if err := s.Scan(
+		&p.ID, &p.UserID, &p.Name,
+		&p.Calories, &p.ProteinG, &p.FatG, &p.CarbsG,
+		&p.ServingSize, &p.ServingUnit,
+		&p.CreatedAt, &p.UpdatedAt, &deletedAt,
+	); err != nil {
+		return nil, err
+	}
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		p.DeletedAt = &t
+	}
+	return &p, nil
+}
+
+// --- Nutrition log -------------------------------------------------
+
+func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *NutritionLogEntry) error {
+	if e.Quantity <= 0 {
+		return ErrQuantityNonPositive
+	}
+	if !exactlyOneRef(e) {
+		return ErrLogEntryReferenceRequired
+	}
+	now := r.now().UTC()
+	e.ID = id.New()
+	e.CreatedAt = now
+	e.DeletedAt = nil
+
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO nutrition_log_entries (
+			id, user_id, consumed_at,
+			pantry_item_id, recipe_id, quantity,
+			calories, protein_g, fat_g, carbs_g,
+			created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, e.ID, e.UserID, e.ConsumedAt,
+		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
+		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
+		e.CreatedAt)
+	return err
+}
+
+func (r *SQLiteRepository) GetNutritionLogEntry(ctx context.Context, userID, entryID string) (*NutritionLogEntry, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, consumed_at,
+		       pantry_item_id, recipe_id, quantity,
+		       calories, protein_g, fat_g, carbs_g,
+		       created_at, deleted_at
+		FROM nutrition_log_entries
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, entryID, userID)
+
+	e, err := scanLogEntry(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	return e, err
+}
+
+func (r *SQLiteRepository) ListNutritionLogEntries(ctx context.Context, userID string, since, until *time.Time) ([]NutritionLogEntry, error) {
+	// Branch on whichever range bounds the caller supplied. Same
+	// pattern the workout repo uses; keeps each query simple and
+	// readable rather than building dynamic SQL with placeholders.
+	args := []any{userID}
+	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
+	if since != nil {
+		clauses = append(clauses, "consumed_at >= ?")
+		args = append(args, *since)
+	}
+	if until != nil {
+		clauses = append(clauses, "consumed_at < ?")
+		args = append(args, *until)
+	}
+	q := `
+		SELECT id, user_id, consumed_at,
+		       pantry_item_id, recipe_id, quantity,
+		       calories, protein_g, fat_g, carbs_g,
+		       created_at, deleted_at
+		FROM nutrition_log_entries
+		WHERE ` + strings.Join(clauses, " AND ") + `
+		ORDER BY consumed_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []NutritionLogEntry
+	for rows.Next() {
+		e, err := scanLogEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *e)
+	}
+	return out, rows.Err()
+}
+
+func (r *SQLiteRepository) UpdateNutritionLogEntry(ctx context.Context, e *NutritionLogEntry) error {
+	if e.Quantity <= 0 {
+		return ErrQuantityNonPositive
+	}
+	if !exactlyOneRef(e) {
+		return ErrLogEntryReferenceRequired
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nutrition_log_entries
+		SET consumed_at = ?,
+		    pantry_item_id = ?, recipe_id = ?, quantity = ?,
+		    calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, e.ConsumedAt,
+		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
+		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
+		e.ID, e.UserID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) DeleteNutritionLogEntry(ctx context.Context, userID, entryID string) error {
+	now := r.now().UTC()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nutrition_log_entries
+		SET deleted_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, now, entryID, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) DailyMacros(ctx context.Context, userID string, since, until time.Time) ([]DailyMacros, error) {
+	// SQLite's strftime gives us the UTC-date bucket. SUM() over the
+	// denormalized macro columns is the whole aggregation; empty days
+	// are omitted by the GROUP BY.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT
+			strftime('%Y-%m-%d', consumed_at) AS day,
+			SUM(calories), SUM(protein_g), SUM(fat_g), SUM(carbs_g),
+			COUNT(*)
+		FROM nutrition_log_entries
+		WHERE user_id = ?
+		  AND deleted_at IS NULL
+		  AND consumed_at >= ?
+		  AND consumed_at < ?
+		GROUP BY day
+		ORDER BY day ASC
+	`, userID, since, until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []DailyMacros
+	for rows.Next() {
+		var d DailyMacros
+		if err := rows.Scan(&d.Date, &d.Calories, &d.ProteinG, &d.FatG, &d.CarbsG, &d.EntryCount); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+func scanLogEntry(s scanner) (*NutritionLogEntry, error) {
+	var (
+		e            NutritionLogEntry
+		pantryItemID sql.NullString
+		recipeID     sql.NullString
+		deletedAt    sql.NullTime
+	)
+	if err := s.Scan(
+		&e.ID, &e.UserID, &e.ConsumedAt,
+		&pantryItemID, &recipeID, &e.Quantity,
+		&e.Calories, &e.ProteinG, &e.FatG, &e.CarbsG,
+		&e.CreatedAt, &deletedAt,
+	); err != nil {
+		return nil, err
+	}
+	if pantryItemID.Valid {
+		s := pantryItemID.String
+		e.PantryItemID = &s
+	}
+	if recipeID.Valid {
+		s := recipeID.String
+		e.RecipeID = &s
+	}
+	if deletedAt.Valid {
+		t := deletedAt.Time
+		e.DeletedAt = &t
+	}
+	return &e, nil
+}
+
+// nullableString converts *string to a value the SQLite driver
+// stores as NULL when nil or empty.
+func nullableString(p *string) any {
+	if p == nil || *p == "" {
+		return nil
+	}
+	return *p
+}

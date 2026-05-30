@@ -21,8 +21,12 @@ type NutritionLogEntry struct {
 	ProteinG      float64
 	FatG          float64
 	CarbsG        float64
-	CreatedAt     time.Time
-	DeletedAt     *time.Time
+	// Meal bucket the entry rolls into on the /nutrition UI. Set by
+	// the client at log time — see migration 007 for the schema-side
+	// default + CHECK constraint.
+	Meal      MealType
+	CreatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // DailyMacros is the aggregate over a single calendar day (UTC) of

@@ -123,6 +123,7 @@ func TestLogEntry_ExactlyOneReferenceEnforced(t *testing.T) {
 	// Neither reference set.
 	err := repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
 		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
+		Meal: MealBreakfast,
 	})
 	if !errors.Is(err, ErrLogEntryReferenceRequired) {
 		t.Errorf("neither set: want ErrLogEntryReferenceRequired, got %v", err)
@@ -134,9 +135,61 @@ func TestLogEntry_ExactlyOneReferenceEnforced(t *testing.T) {
 	err = repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
 		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
 		PantryItemID: &pantryID, RecipeID: &recipeID,
+		Meal: MealBreakfast,
 	})
 	if !errors.Is(err, ErrLogEntryReferenceRequired) {
 		t.Errorf("both set: want ErrLogEntryReferenceRequired, got %v", err)
+	}
+}
+
+func TestMealType_ValidAcceptsFourValues(t *testing.T) {
+	for _, m := range []MealType{MealBreakfast, MealLunch, MealDinner, MealSnack} {
+		if !m.Valid() {
+			t.Errorf("%q should be valid", m)
+		}
+	}
+}
+
+func TestMealType_ValidRejectsOthers(t *testing.T) {
+	for _, m := range []MealType{"", "brunch", "Lunch", "supper", "elevenses"} {
+		if MealType(m).Valid() {
+			t.Errorf("%q should NOT be valid", m)
+		}
+	}
+}
+
+func TestLogEntry_RejectsInvalidMeal(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	pantryID := "p1"
+	err := repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
+		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
+		PantryItemID: &pantryID,
+		Meal:         "brunch",
+	})
+	if !errors.Is(err, ErrInvalidMeal) {
+		t.Errorf("want ErrInvalidMeal, got %v", err)
+	}
+}
+
+func TestLogEntry_MealRoundtrip(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	pantryID := "p1"
+	entry := &NutritionLogEntry{
+		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
+		PantryItemID: &pantryID,
+		Meal:         MealDinner,
+	}
+	if err := repo.CreateNutritionLogEntry(ctx, entry); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := repo.GetNutritionLogEntry(ctx, "u1", entry.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Meal != MealDinner {
+		t.Errorf("meal roundtrip: got %q, want %q", got.Meal, MealDinner)
 	}
 }
 
@@ -151,6 +204,7 @@ func TestDailyMacros_AggregatesPerUTCDate(t *testing.T) {
 			UserID: "u1", ConsumedAt: consumedAt,
 			PantryItemID: &pantryID, Quantity: 1,
 			Calories: cal, ProteinG: p, FatG: f, CarbsG: c,
+			Meal: MealBreakfast,
 		}); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
@@ -192,6 +246,7 @@ func TestDailyMacros_RangeExcludesSoftDeleted(t *testing.T) {
 		UserID: "u1", ConsumedAt: consumedAt,
 		PantryItemID: &pantryID, Quantity: 1,
 		Calories: 500,
+		Meal:     MealLunch,
 	}
 	if err := repo.CreateNutritionLogEntry(ctx, entry); err != nil {
 		t.Fatalf("seed: %v", err)

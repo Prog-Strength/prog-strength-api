@@ -200,6 +200,9 @@ func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 	if !exactlyOneRef(e) {
 		return ErrLogEntryReferenceRequired
 	}
+	if !e.Meal.Valid() {
+		return ErrInvalidMeal
+	}
 	now := r.now().UTC()
 	e.ID = id.New()
 	e.CreatedAt = now
@@ -210,12 +213,12 @@ func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 			id, user_id, consumed_at,
 			pantry_item_id, recipe_id, quantity,
 			calories, protein_g, fat_g, carbs_g,
-			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			meal, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, e.ID, e.UserID, e.ConsumedAt,
 		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
 		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
-		e.CreatedAt)
+		string(e.Meal), e.CreatedAt)
 	return err
 }
 
@@ -224,7 +227,7 @@ func (r *SQLiteRepository) GetNutritionLogEntry(ctx context.Context, userID, ent
 		SELECT id, user_id, consumed_at,
 		       pantry_item_id, recipe_id, quantity,
 		       calories, protein_g, fat_g, carbs_g,
-		       created_at, deleted_at
+		       meal, created_at, deleted_at
 		FROM nutrition_log_entries
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, entryID, userID)
@@ -254,7 +257,7 @@ func (r *SQLiteRepository) ListNutritionLogEntries(ctx context.Context, userID s
 		SELECT id, user_id, consumed_at,
 		       pantry_item_id, recipe_id, quantity,
 		       calories, protein_g, fat_g, carbs_g,
-		       created_at, deleted_at
+		       meal, created_at, deleted_at
 		FROM nutrition_log_entries
 		WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY consumed_at DESC
@@ -283,15 +286,20 @@ func (r *SQLiteRepository) UpdateNutritionLogEntry(ctx context.Context, e *Nutri
 	if !exactlyOneRef(e) {
 		return ErrLogEntryReferenceRequired
 	}
+	if !e.Meal.Valid() {
+		return ErrInvalidMeal
+	}
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE nutrition_log_entries
 		SET consumed_at = ?,
 		    pantry_item_id = ?, recipe_id = ?, quantity = ?,
-		    calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?
+		    calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?,
+		    meal = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, e.ConsumedAt,
 		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
 		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
+		string(e.Meal),
 		e.ID, e.UserID)
 	if err != nil {
 		return err
@@ -364,13 +372,14 @@ func scanLogEntry(s scanner) (*NutritionLogEntry, error) {
 		e            NutritionLogEntry
 		pantryItemID sql.NullString
 		recipeID     sql.NullString
+		meal         string
 		deletedAt    sql.NullTime
 	)
 	if err := s.Scan(
 		&e.ID, &e.UserID, &e.ConsumedAt,
 		&pantryItemID, &recipeID, &e.Quantity,
 		&e.Calories, &e.ProteinG, &e.FatG, &e.CarbsG,
-		&e.CreatedAt, &deletedAt,
+		&meal, &e.CreatedAt, &deletedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -382,6 +391,7 @@ func scanLogEntry(s scanner) (*NutritionLogEntry, error) {
 		s := recipeID.String
 		e.RecipeID = &s
 	}
+	e.Meal = MealType(meal)
 	if deletedAt.Valid {
 		t := deletedAt.Time
 		e.DeletedAt = &t

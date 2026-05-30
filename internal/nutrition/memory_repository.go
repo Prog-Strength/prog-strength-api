@@ -130,6 +130,9 @@ func (r *MemoryRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 	if !exactlyOneRef(e) {
 		return ErrLogEntryReferenceRequired
 	}
+	if !e.Meal.Valid() {
+		return ErrInvalidMeal
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -185,6 +188,9 @@ func (r *MemoryRepository) UpdateNutritionLogEntry(ctx context.Context, e *Nutri
 	}
 	if !exactlyOneRef(e) {
 		return ErrLogEntryReferenceRequired
+	}
+	if !e.Meal.Valid() {
+		return ErrInvalidMeal
 	}
 
 	r.mu.Lock()

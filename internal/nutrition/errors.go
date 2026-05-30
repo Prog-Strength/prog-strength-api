@@ -52,4 +52,10 @@ var (
 	// item appears twice in one recipe. If the user really wants two
 	// servings, that's quantity > 1 on a single component.
 	ErrRecipeComponentDuplicate = errors.New("nutrition: duplicate component pantry item in recipe")
+
+	// ErrInvalidMeal is returned when meal isn't one of the four
+	// allowed MealType values. Schema CHECK enforces it as a last
+	// resort; the handler validates up front so the user sees a 400
+	// rather than a 500.
+	ErrInvalidMeal = errors.New("nutrition: meal must be one of 'breakfast', 'lunch', 'dinner', 'snack'")
 )

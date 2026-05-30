@@ -102,6 +102,7 @@ type logEntryDTO struct {
 	ProteinG     float64   `json:"protein_g"`
 	FatG         float64   `json:"fat_g"`
 	CarbsG       float64   `json:"carbs_g"`
+	Meal         string    `json:"meal"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 
@@ -116,6 +117,7 @@ func toLogDTO(e NutritionLogEntry) logEntryDTO {
 		ProteinG:     e.ProteinG,
 		FatG:         e.FatG,
 		CarbsG:       e.CarbsG,
+		Meal:         string(e.Meal),
 		CreatedAt:    e.CreatedAt,
 	}
 }
@@ -125,6 +127,9 @@ type logEntryRequest struct {
 	PantryItemID *string    `json:"pantry_item_id"`
 	RecipeID     *string    `json:"recipe_id"`
 	Quantity     float64    `json:"quantity"`
+	// Meal is required on create. Update accepts an empty string to
+	// signal "leave the existing meal in place."
+	Meal string `json:"meal"`
 }
 
 type dailyMacrosDTO struct {
@@ -298,6 +303,11 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, ErrQuantityNonPositive.Error())
 		return
 	}
+	meal := MealType(req.Meal)
+	if !meal.Valid() {
+		httpresp.Error(w, http.StatusBadRequest, ErrInvalidMeal.Error())
+		return
+	}
 
 	// Derive the denormalized macros at log time from whichever
 	// source the request points at. Whatever lands on the entry's
@@ -311,6 +321,7 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		UserID:     userID,
 		ConsumedAt: consumedAt,
 		Quantity:   req.Quantity,
+		Meal:       meal,
 	}
 	if hasPantry {
 		pantry, err := h.repo.GetPantryItem(r.Context(), userID, *req.PantryItemID)
@@ -434,17 +445,30 @@ func (h *Handler) updateLogEntry(w http.ResponseWriter, r *http.Request) {
 	if req.ConsumedAt != nil {
 		consumedAt = req.ConsumedAt.UTC()
 	}
+	// Meal change is optional on update — empty string means "keep
+	// the existing meal." Non-empty must validate, since the schema
+	// CHECK would reject anything else.
+	meal := existing.Meal
+	if req.Meal != "" {
+		next := MealType(req.Meal)
+		if !next.Valid() {
+			httpresp.Error(w, http.StatusBadRequest, ErrInvalidMeal.Error())
+			return
+		}
+		meal = next
+	}
 
 	// Re-derive macros from whichever source the original entry
 	// pointed at: pantry item or recipe. We preserve the reference
-	// type — clients can update quantity / time but not switch a
-	// pantry-backed entry into a recipe-backed one (which would be
-	// closer to creating a new entry anyway).
+	// type — clients can update quantity / time / meal but not
+	// switch a pantry-backed entry into a recipe-backed one (which
+	// would be closer to creating a new entry anyway).
 	entry := &NutritionLogEntry{
 		ID:         id,
 		UserID:     userID,
 		ConsumedAt: consumedAt,
 		Quantity:   quantity,
+		Meal:       meal,
 	}
 	switch {
 	case existing.PantryItemID != nil:
@@ -599,7 +623,8 @@ func isValidationError(err error) bool {
 		errors.Is(err, ErrMacrosNegative),
 		errors.Is(err, ErrServingSizeNonPositive),
 		errors.Is(err, ErrQuantityNonPositive),
-		errors.Is(err, ErrLogEntryReferenceRequired):
+		errors.Is(err, ErrLogEntryReferenceRequired),
+		errors.Is(err, ErrInvalidMeal):
 		return true
 	}
 	return false

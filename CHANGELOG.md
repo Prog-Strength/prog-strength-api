@@ -1,3 +1,10 @@
+## [0.29.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.29.0...v0.29.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* **cors:** allow PATCH so chat title updates land from the web ([625dc91](https://github.com/Prog-Strength/prog-strength-api/commit/625dc91eaeba202d5ef459ee787adad2e0f6be50))
+
 # [0.29.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.4...v0.29.0) (2026-05-30)
 
 

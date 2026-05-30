@@ -38,20 +38,19 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Exercise, e
 		return nil, err
 	}
 
-	// Load muscle groups.
-	muscleGroups, err := r.getMuscleGroups(ctx, id)
+	// Hydrate via the same batched helpers List uses. Three statements
+	// total: the QueryRow above, one batched muscle_groups lookup, one
+	// batched equipment lookup.
+	mgByExercise, err := r.loadMuscleGroupsForExerciseIDs(ctx, []string{ex.ID})
 	if err != nil {
 		return nil, err
 	}
-	ex.MuscleGroups = muscleGroups
-
-	// Load equipment.
-	equipment, err := r.getEquipment(ctx, id)
+	eqByExercise, err := r.loadEquipmentForExerciseIDs(ctx, []string{ex.ID})
 	if err != nil {
 		return nil, err
 	}
-	ex.Equipment = equipment
-
+	ex.MuscleGroups = mgByExercise[ex.ID]
+	ex.Equipment = eqByExercise[ex.ID]
 	return &ex, nil
 }
 
@@ -86,13 +85,13 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 
-	// Drain the parent rows into a slice before fanning out to
-	// getMuscleGroups / getEquipment. Calling those inside rows.Next()
-	// holds a connection from the pool while issuing another query —
-	// with a handful of concurrent /exercises requests every connection
-	// ends up waiting on a nested call that can never acquire a free
-	// conn, and the pool deadlocks. Same fix shape used in the workout
-	// repo's ListByUser.
+	// Three SQL statements total per call, regardless of catalog size:
+	//   1. SELECT exercises (this query)
+	//   2. SELECT exercise_muscle_groups WHERE exercise_id IN (...)
+	//   3. SELECT exercise_equipment WHERE exercise_id IN (...)
+	// The previous implementation issued 1 + 2N statements (one
+	// muscle_groups + one equipment query per exercise). See
+	// prog-strength-docs/sows/workout-list-batched-hydration.md.
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -112,18 +111,23 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 	}
 	rows.Close()
 
-	for i := range exercises {
-		muscleGroups, err := r.getMuscleGroups(ctx, exercises[i].ID)
+	if len(exercises) > 0 {
+		ids := make([]string, len(exercises))
+		for i, ex := range exercises {
+			ids[i] = ex.ID
+		}
+		mgByExercise, err := r.loadMuscleGroupsForExerciseIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
-		exercises[i].MuscleGroups = muscleGroups
-
-		equipment, err := r.getEquipment(ctx, exercises[i].ID)
+		eqByExercise, err := r.loadEquipmentForExerciseIDs(ctx, ids)
 		if err != nil {
 			return nil, err
 		}
-		exercises[i].Equipment = equipment
+		for i := range exercises {
+			exercises[i].MuscleGroups = mgByExercise[exercises[i].ID]
+			exercises[i].Equipment = eqByExercise[exercises[i].ID]
+		}
 	}
 
 	// Sort alphabetically by name (case-insensitive).
@@ -134,54 +138,88 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 	return exercises, nil
 }
 
-// getMuscleGroups fetches all muscle groups for an exercise.
-func (r *SQLiteRepository) getMuscleGroups(ctx context.Context, exerciseID string) ([]MuscleGroup, error) {
+// loadMuscleGroupsForExerciseIDs returns the muscle-group rows for the
+// given exercise IDs, grouped by exercise_id, in muscle_group ASC order
+// within each bucket. Empty input → empty result.
+//
+// Single batched query replaces the prior one-query-per-exercise
+// pattern. See prog-strength-docs/sows/workout-list-batched-hydration.md.
+func (r *SQLiteRepository) loadMuscleGroupsForExerciseIDs(
+	ctx context.Context,
+	exerciseIDs []string,
+) (map[string][]MuscleGroup, error) {
+	out := make(map[string][]MuscleGroup, len(exerciseIDs))
+	if len(exerciseIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(exerciseIDs))
+	for i, id := range exerciseIDs {
+		args[i] = id
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT muscle_group
+		SELECT exercise_id, muscle_group
 		FROM exercise_muscle_groups
-		WHERE exercise_id = ?
-		ORDER BY muscle_group
-	`, exerciseID)
+		WHERE exercise_id IN (`+placeholders(len(exerciseIDs))+`)
+		ORDER BY exercise_id, muscle_group
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var groups []MuscleGroup
 	for rows.Next() {
+		var exID string
 		var mg MuscleGroup
-		if err := rows.Scan(&mg); err != nil {
+		if err := rows.Scan(&exID, &mg); err != nil {
 			return nil, err
 		}
-		groups = append(groups, mg)
+		out[exID] = append(out[exID], mg)
 	}
-
-	return groups, rows.Err()
+	return out, rows.Err()
 }
 
-// getEquipment fetches all equipment for an exercise.
-func (r *SQLiteRepository) getEquipment(ctx context.Context, exerciseID string) ([]Equipment, error) {
+// loadEquipmentForExerciseIDs mirrors loadMuscleGroupsForExerciseIDs
+// against the exercise_equipment join table.
+func (r *SQLiteRepository) loadEquipmentForExerciseIDs(
+	ctx context.Context,
+	exerciseIDs []string,
+) (map[string][]Equipment, error) {
+	out := make(map[string][]Equipment, len(exerciseIDs))
+	if len(exerciseIDs) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(exerciseIDs))
+	for i, id := range exerciseIDs {
+		args[i] = id
+	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT equipment
+		SELECT exercise_id, equipment
 		FROM exercise_equipment
-		WHERE exercise_id = ?
-		ORDER BY equipment
-	`, exerciseID)
+		WHERE exercise_id IN (`+placeholders(len(exerciseIDs))+`)
+		ORDER BY exercise_id, equipment
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	var equipment []Equipment
 	for rows.Next() {
+		var exID string
 		var eq Equipment
-		if err := rows.Scan(&eq); err != nil {
+		if err := rows.Scan(&exID, &eq); err != nil {
 			return nil, err
 		}
-		equipment = append(equipment, eq)
+		out[exID] = append(out[exID], eq)
 	}
+	return out, rows.Err()
+}
 
-	return equipment, rows.Err()
+// placeholders returns "?,?,?" with n question marks for use in an
+// IN-clause. Caller is responsible for matching the argument slice
+// length to n.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
 }
 
 // SyncCatalog reconciles the exercises table with the given slice on every

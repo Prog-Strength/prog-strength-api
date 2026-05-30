@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
@@ -118,13 +119,15 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, er
 		return nil, err
 	}
 
-	// Load exercises and sets.
-	exercises, err := r.getWorkoutExercises(ctx, id)
+	// Hydrate via the same batched helper ListByUser uses. With a
+	// single-ID input the helper still issues exactly two statements
+	// (exercises + sets), keeping GetByID at three statements total
+	// regardless of how many exercises/sets the workout holds.
+	byWorkout, err := r.loadWorkoutExercisesForWorkoutIDs(ctx, []string{w.ID})
 	if err != nil {
 		return nil, err
 	}
-	w.Exercises = exercises
-
+	w.Exercises = byWorkout[w.ID]
 	return &w, nil
 }
 
@@ -157,13 +160,14 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	query += " LIMIT ? OFFSET ?"
 	args = append(args, limit, opts.Offset)
 
-	// Materialize the parent rows first, then close them, then fetch
-	// nested data. Calling getWorkoutExercises inside rows.Next() would
-	// hold this connection from the pool while issuing another query —
-	// with enough concurrent requests every connection ends up waiting
-	// on a nested call that can never acquire a free conn, and the pool
-	// deadlocks. Draining to a slice releases the connection before the
-	// nested fan-out begins.
+	// Three SQL statements total per call, regardless of page size or
+	// per-workout depth:
+	//   1. SELECT workouts (this query)
+	//   2. SELECT workout_exercises WHERE workout_id IN (...)
+	//   3. SELECT sets WHERE workout_exercise_id IN (...)
+	// The previous implementation issued 1 + N + N*M statements (a
+	// nested query per workout, then per workout_exercise). See
+	// sows/workout-list-batched-hydration.md.
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -183,14 +187,21 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	}
 	rows.Close()
 
-	for i := range workouts {
-		exercises, err := r.getWorkoutExercises(ctx, workouts[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		workouts[i].Exercises = exercises
+	if len(workouts) == 0 {
+		return workouts, nil
 	}
 
+	ids := make([]string, len(workouts))
+	for i, w := range workouts {
+		ids[i] = w.ID
+	}
+	byWorkout, err := r.loadWorkoutExercisesForWorkoutIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range workouts {
+		workouts[i].Exercises = byWorkout[workouts[i].ID]
+	}
 	return workouts, nil
 }
 
@@ -401,28 +412,62 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	return tx.Commit()
 }
 
-// getWorkoutExercises loads all exercises and their sets for a workout.
-func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID string) ([]WorkoutExercise, error) {
-	// Same pattern as ListByUser: drain the parent rows + close the
-	// connection before calling getSets, so we don't hold one pool
-	// connection while waiting on another.
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, exercise_id, exercise_order, superset_group, notes
+// loadWorkoutExercisesForWorkoutIDs hydrates every workout_exercise +
+// its sets for the given workout IDs using two batched IN-clause
+// queries. Returns a map keyed by workout_id so callers attach in
+// O(N) time. Empty input → empty result.
+//
+// Replaces the prior pattern of one query per workout for the exercises
+// + one query per workout_exercise for the sets, which produced
+// 1 + N + N*M statements per page. See
+// prog-strength-docs/sows/workout-list-batched-hydration.md.
+//
+// SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32,766 on 3.32+ (999
+// on older builds). For our single-user beta we're nowhere near that
+// limit even at the backfill caller, which loads every workout in one
+// go. If/when that changes the IDs would need chunking, but the call
+// sites today are all bounded — ListByUser by its LIMIT (max 100),
+// GetByID by definition (one ID), and listAllWorkoutsForBackfill by
+// total workout volume (which is small at v1 scale).
+func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
+	ctx context.Context,
+	workoutIDs []string,
+) (map[string][]WorkoutExercise, error) {
+	if len(workoutIDs) == 0 {
+		return map[string][]WorkoutExercise{}, nil
+	}
+
+	// Step 1: batched exercises query. Order ensures each workout's
+	// exercises arrive grouped together in exercise_order so the
+	// assembled slice preserves the authored order — same invariant
+	// the old per-workout query guaranteed via its `ORDER BY
+	// exercise_order` clause.
+	weArgs := make([]any, len(workoutIDs))
+	for i, id := range workoutIDs {
+		weArgs[i] = id
+	}
+	weQuery := `
+		SELECT id, workout_id, exercise_id, exercise_order, superset_group, notes
 		FROM workout_exercises
-		WHERE workout_id = ?
-		ORDER BY exercise_order
-	`, workoutID)
+		WHERE workout_id IN (` + placeholders(len(workoutIDs)) + `)
+		ORDER BY workout_id, exercise_order
+	`
+	rows, err := r.db.QueryContext(ctx, weQuery, weArgs...)
 	if err != nil {
 		return nil, err
 	}
-	type weRow struct {
-		we   WorkoutExercise
-		weID int64
+	type stagedRow struct {
+		we        WorkoutExercise
+		weID      int64
+		workoutID string
 	}
-	var staged []weRow
+	var staged []stagedRow
 	for rows.Next() {
-		var row weRow
-		if err := rows.Scan(&row.weID, &row.we.ExerciseID, &row.we.Order, &row.we.SupersetGroup, &row.we.Notes); err != nil {
+		var row stagedRow
+		if err := rows.Scan(
+			&row.weID, &row.workoutID,
+			&row.we.ExerciseID, &row.we.Order, &row.we.SupersetGroup, &row.we.Notes,
+		); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -434,43 +479,63 @@ func (r *SQLiteRepository) getWorkoutExercises(ctx context.Context, workoutID st
 	}
 	rows.Close()
 
-	exercises := make([]WorkoutExercise, 0, len(staged))
-	for _, row := range staged {
-		sets, err := r.getSets(ctx, row.weID)
-		if err != nil {
-			return nil, err
-		}
-		row.we.Sets = sets
-		exercises = append(exercises, row.we)
+	byWorkout := make(map[string][]WorkoutExercise, len(workoutIDs))
+	if len(staged) == 0 {
+		return byWorkout, nil
 	}
-	return exercises, nil
-}
 
-// getSets loads all sets for a workout exercise.
-func (r *SQLiteRepository) getSets(ctx context.Context, workoutExerciseID int64) ([]Set, error) {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT reps, weight, unit
+	// Step 2: batched sets query for every workout_exercise we just
+	// loaded. set_order ASC within each workout_exercise mirrors the
+	// old getSets ordering.
+	setArgs := make([]any, len(staged))
+	for i, s := range staged {
+		setArgs[i] = s.weID
+	}
+	setRows, err := r.db.QueryContext(ctx, `
+		SELECT workout_exercise_id, reps, weight, unit
 		FROM sets
-		WHERE workout_exercise_id = ?
-		ORDER BY set_order
-	`, workoutExerciseID)
+		WHERE workout_exercise_id IN (`+placeholders(len(staged))+`)
+		ORDER BY workout_exercise_id, set_order
+	`, setArgs...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var sets []Set
-	for rows.Next() {
+	setsByWE := make(map[int64][]Set, len(staged))
+	for setRows.Next() {
+		var weID int64
 		var s Set
 		var unit string
-		if err := rows.Scan(&s.Reps, &s.Weight, &unit); err != nil {
+		if err := setRows.Scan(&weID, &s.Reps, &s.Weight, &unit); err != nil {
+			setRows.Close()
 			return nil, err
 		}
 		s.Unit = user.WeightUnit(unit)
-		sets = append(sets, s)
+		setsByWE[weID] = append(setsByWE[weID], s)
 	}
+	if err := setRows.Err(); err != nil {
+		setRows.Close()
+		return nil, err
+	}
+	setRows.Close()
 
-	return sets, rows.Err()
+	// Step 3: assemble. Slice append preserves the SQL ORDER BY
+	// (workout_id, exercise_order), so each workout's bucket lands in
+	// authored order without an extra sort pass.
+	for _, row := range staged {
+		row.we.Sets = setsByWE[row.weID]
+		byWorkout[row.workoutID] = append(byWorkout[row.workoutID], row.we)
+	}
+	return byWorkout, nil
+}
+
+// placeholders returns "?,?,?" with n question marks for use in an
+// IN-clause. Caller is responsible for matching the argument slice
+// length to n.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", n), ",")
 }
 
 // writeOneRepMaxHistoryTx inserts the derived 1RM history rows for a
@@ -631,12 +696,19 @@ func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Wo
 		return nil, err
 	}
 
+	if len(workouts) == 0 {
+		return workouts, nil
+	}
+	ids := make([]string, len(workouts))
+	for i, w := range workouts {
+		ids[i] = w.ID
+	}
+	byWorkout, err := r.loadWorkoutExercisesForWorkoutIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	for i := range workouts {
-		ex, err := r.getWorkoutExercises(ctx, workouts[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		workouts[i].Exercises = ex
+		workouts[i].Exercises = byWorkout[workouts[i].ID]
 	}
 	return workouts, nil
 }

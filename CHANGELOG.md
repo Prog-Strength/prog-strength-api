@@ -1,3 +1,10 @@
+## [0.28.4](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.3...v0.28.4) (2026-05-30)
+
+
+### Performance Improvements
+
+* **workout,exercise:** batched IN-clause hydration ([fe8877e](https://github.com/Prog-Strength/prog-strength-api/commit/fe8877e25898c52f5ac7e1ff274a62009d37b190))
+
 ## [0.28.3](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.2...v0.28.3) (2026-05-30)
 
 

@@ -20,6 +20,7 @@ type MemoryRepository struct {
 	mu      sync.RWMutex
 	pantry  map[string]*PantryItem        // id → item
 	log     map[string]*NutritionLogEntry // id → entry
+	recipes map[string]*Recipe            // id → recipe (with components)
 	nowFunc func() time.Time              // injectable for tests
 }
 
@@ -27,6 +28,7 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		pantry:  make(map[string]*PantryItem),
 		log:     make(map[string]*NutritionLogEntry),
+		recipes: make(map[string]*Recipe),
 		nowFunc: time.Now,
 	}
 }
@@ -265,4 +267,136 @@ func exactlyOneRef(e *NutritionLogEntry) bool {
 	hasPantry := e.PantryItemID != nil && *e.PantryItemID != ""
 	hasRecipe := e.RecipeID != nil && *e.RecipeID != ""
 	return hasPantry != hasRecipe
+}
+
+// --- Recipes -------------------------------------------------------
+
+func (r *MemoryRepository) CreateRecipe(ctx context.Context, rec *Recipe) error {
+	if err := rec.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := r.nowFunc().UTC()
+	rec.ID = id.New()
+	rec.CreatedAt = now
+	rec.UpdatedAt = now
+	rec.DeletedAt = nil
+	// Assign positions densely from 0 + per-component IDs.
+	for i := range rec.Components {
+		rec.Components[i].ID = id.New()
+		rec.Components[i].Position = i
+		rec.Components[i].CreatedAt = now
+	}
+
+	stored := *rec
+	// Defensive copy of the component slice so callers can't mutate
+	// our state through the slice header they passed in.
+	stored.Components = append([]RecipeItem(nil), rec.Components...)
+	r.recipes[rec.ID] = &stored
+	return nil
+}
+
+func (r *MemoryRepository) GetRecipe(ctx context.Context, userID, id string) (*Recipe, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rec, ok := r.recipes[id]
+	if !ok || rec.UserID != userID || rec.DeletedAt != nil {
+		return nil, ErrNotFound
+	}
+	cp := *rec
+	cp.Components = append([]RecipeItem(nil), rec.Components...)
+	return &cp, nil
+}
+
+func (r *MemoryRepository) ListRecipes(ctx context.Context, userID string) ([]Recipe, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []Recipe
+	for _, rec := range r.recipes {
+		if rec.UserID != userID || rec.DeletedAt != nil {
+			continue
+		}
+		cp := *rec
+		cp.Components = append([]RecipeItem(nil), rec.Components...)
+		out = append(out, cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, nil
+}
+
+func (r *MemoryRepository) UpdateRecipe(ctx context.Context, rec *Recipe) error {
+	if err := rec.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.recipes[rec.ID]
+	if !ok || existing.UserID != rec.UserID || existing.DeletedAt != nil {
+		return ErrNotFound
+	}
+	now := r.nowFunc().UTC()
+	rec.CreatedAt = existing.CreatedAt
+	rec.UpdatedAt = now
+	rec.DeletedAt = nil
+	for i := range rec.Components {
+		rec.Components[i].ID = id.New()
+		rec.Components[i].Position = i
+		rec.Components[i].CreatedAt = now
+	}
+
+	stored := *rec
+	stored.Components = append([]RecipeItem(nil), rec.Components...)
+	r.recipes[rec.ID] = &stored
+	return nil
+}
+
+func (r *MemoryRepository) DeleteRecipe(ctx context.Context, userID, recipeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.recipes[recipeID]
+	if !ok || existing.UserID != userID || existing.DeletedAt != nil {
+		return ErrNotFound
+	}
+	now := r.nowFunc().UTC()
+	existing.DeletedAt = &now
+	return nil
+}
+
+func (r *MemoryRepository) ComputeRecipeMacros(ctx context.Context, userID, recipeID string) (RecipeMacros, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rec, ok := r.recipes[recipeID]
+	if !ok || rec.UserID != userID || rec.DeletedAt != nil {
+		return RecipeMacros{}, ErrNotFound
+	}
+
+	var totals RecipeMacros
+	for _, c := range rec.Components {
+		// Soft-deleted pantry items are still read for macro math.
+		// The component's macros are what they always were; the
+		// deletion only hides the item from the pantry list, not
+		// from recipes that already reference it.
+		item, ok := r.pantry[c.PantryItemID]
+		if !ok || item.UserID != userID {
+			// True cross-user or hard-missing reference — treat as
+			// zero contribution rather than failing the whole macro
+			// computation. ListRecipes / GetRecipe surface the
+			// stale-component state to the UI via a separate path.
+			continue
+		}
+		totals.Calories += c.Quantity * item.Calories
+		totals.ProteinG += c.Quantity * item.ProteinG
+		totals.FatG += c.Quantity * item.FatG
+		totals.CarbsG += c.Quantity * item.CarbsG
+	}
+	return totals, nil
 }

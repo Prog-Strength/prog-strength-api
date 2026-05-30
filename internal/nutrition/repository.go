@@ -49,4 +49,44 @@ type Repository interface {
 	// in the response — callers that need a dense series fill gaps
 	// client-side.
 	DailyMacros(ctx context.Context, userID string, since, until time.Time) ([]DailyMacros, error)
+
+	// --- Recipes ---------------------------------------------------
+
+	// CreateRecipe persists the recipe + its components inside one
+	// transaction. Caller is responsible for validating that every
+	// component's pantry_item_id exists and belongs to the user; the
+	// repo just inserts.
+	CreateRecipe(ctx context.Context, r *Recipe) error
+
+	// GetRecipe returns the recipe with components in display order
+	// (position ASC), scoped to user_id. Returns ErrNotFound when the
+	// recipe doesn't exist, is soft-deleted, or belongs to another user.
+	GetRecipe(ctx context.Context, userID, id string) (*Recipe, error)
+
+	// ListRecipes returns the user's recipes sorted by name ASC, each
+	// with its components in display order. Soft-deleted recipes are
+	// excluded.
+	ListRecipes(ctx context.Context, userID string) ([]Recipe, error)
+
+	// UpdateRecipe replaces the recipe's name and component set in
+	// one transaction: existing recipe_items are deleted, the new
+	// set is inserted with positions taken from the slice index.
+	UpdateRecipe(ctx context.Context, r *Recipe) error
+
+	// DeleteRecipe soft-deletes the recipe. recipe_items rows are
+	// CASCADE'd by the schema on hard delete, but since this is a
+	// soft delete the components stay; future reads via the soft-
+	// delete-aware queries won't see them anyway.
+	DeleteRecipe(ctx context.Context, userID, id string) error
+
+	// ComputeRecipeMacros returns the per-batch macro total for the
+	// recipe — sum over components of (component.quantity ×
+	// pantry_item per-serving macros). Used at log time to derive the
+	// denormalized macros frozen onto a recipe-based log entry.
+	//
+	// Soft-deleted pantry items are still read for macro math: the
+	// component's macros are what they always were; soft-deleting an
+	// item only hides it from the pantry list, not from recipes that
+	// already reference it.
+	ComputeRecipeMacros(ctx context.Context, userID, recipeID string) (RecipeMacros, error)
 }

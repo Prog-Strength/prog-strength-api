@@ -43,6 +43,13 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Put("/{id}", h.updateLogEntry)
 		r.Delete("/{id}", h.deleteLogEntry)
 	})
+	r.Route("/recipes", func(r chi.Router) {
+		r.Get("/", h.listRecipes)
+		r.Post("/", h.createRecipe)
+		r.Get("/{id}", h.getRecipe)
+		r.Put("/{id}", h.updateRecipe)
+		r.Delete("/{id}", h.deleteRecipe)
+	})
 }
 
 // --- DTOs ----------------------------------------------------------
@@ -281,14 +288,10 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	// Phase 1: recipes not yet supported. Reject up front so the
-	// failure mode is clear rather than a downstream FK error.
-	if req.RecipeID != nil && *req.RecipeID != "" {
-		httpresp.Error(w, http.StatusBadRequest, "recipe-based log entries are not yet supported")
-		return
-	}
-	if req.PantryItemID == nil || *req.PantryItemID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "pantry_item_id is required")
+	hasPantry := req.PantryItemID != nil && *req.PantryItemID != ""
+	hasRecipe := req.RecipeID != nil && *req.RecipeID != ""
+	if hasPantry == hasRecipe {
+		httpresp.Error(w, http.StatusBadRequest, ErrLogEntryReferenceRequired.Error())
 		return
 	}
 	if req.Quantity <= 0 {
@@ -296,32 +299,50 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Look up the pantry item to derive denormalized macros at log time.
-	// Ownership is enforced inside GetPantryItem; a cross-user reference
-	// returns ErrNotFound (which we surface as 404, not 403, deliberately).
-	pantry, err := h.repo.GetPantryItem(r.Context(), userID, *req.PantryItemID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusNotFound, "pantry item not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "look up pantry item", err)
-		return
-	}
-
+	// Derive the denormalized macros at log time from whichever
+	// source the request points at. Whatever lands on the entry's
+	// macro columns is frozen — future edits to the pantry item or
+	// recipe will not retroactively change this entry.
 	consumedAt := time.Now().UTC()
 	if req.ConsumedAt != nil {
 		consumedAt = req.ConsumedAt.UTC()
 	}
 	entry := &NutritionLogEntry{
-		UserID:       userID,
-		ConsumedAt:   consumedAt,
-		PantryItemID: req.PantryItemID,
-		Quantity:     req.Quantity,
-		Calories:     req.Quantity * pantry.Calories,
-		ProteinG:     req.Quantity * pantry.ProteinG,
-		FatG:         req.Quantity * pantry.FatG,
-		CarbsG:       req.Quantity * pantry.CarbsG,
+		UserID:     userID,
+		ConsumedAt: consumedAt,
+		Quantity:   req.Quantity,
+	}
+	if hasPantry {
+		pantry, err := h.repo.GetPantryItem(r.Context(), userID, *req.PantryItemID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.Error(w, http.StatusNotFound, "pantry item not found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "look up pantry item", err)
+			return
+		}
+		entry.PantryItemID = req.PantryItemID
+		entry.Calories = req.Quantity * pantry.Calories
+		entry.ProteinG = req.Quantity * pantry.ProteinG
+		entry.FatG = req.Quantity * pantry.FatG
+		entry.CarbsG = req.Quantity * pantry.CarbsG
+	} else {
+		macros, err := h.repo.ComputeRecipeMacros(r.Context(), userID, *req.RecipeID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.Error(w, http.StatusNotFound, "recipe not found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "compute recipe macros", err)
+			return
+		}
+		scaled := macros.Scale(req.Quantity)
+		entry.RecipeID = req.RecipeID
+		entry.Calories = scaled.Calories
+		entry.ProteinG = scaled.ProteinG
+		entry.FatG = scaled.FatG
+		entry.CarbsG = scaled.CarbsG
 	}
 	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
 		httpresp.ServerError(w, r.Context(), "create nutrition log entry", err)
@@ -414,35 +435,52 @@ func (h *Handler) updateLogEntry(w http.ResponseWriter, r *http.Request) {
 		consumedAt = req.ConsumedAt.UTC()
 	}
 
-	// Phase 1 entries always have PantryItemID set; recompute macros
-	// from the source item. If the source pantry item has been
-	// soft-deleted, GetPantryItem returns ErrNotFound and we surface
-	// a 409 so the caller knows the issue is data state, not the
-	// request shape.
-	if existing.PantryItemID == nil {
-		httpresp.Error(w, http.StatusBadRequest, "log entry has no pantry item to recompute against")
-		return
+	// Re-derive macros from whichever source the original entry
+	// pointed at: pantry item or recipe. We preserve the reference
+	// type — clients can update quantity / time but not switch a
+	// pantry-backed entry into a recipe-backed one (which would be
+	// closer to creating a new entry anyway).
+	entry := &NutritionLogEntry{
+		ID:         id,
+		UserID:     userID,
+		ConsumedAt: consumedAt,
+		Quantity:   quantity,
 	}
-	pantry, err := h.repo.GetPantryItem(r.Context(), userID, *existing.PantryItemID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusConflict, "source pantry item is no longer available")
+	switch {
+	case existing.PantryItemID != nil:
+		pantry, err := h.repo.GetPantryItem(r.Context(), userID, *existing.PantryItemID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.Error(w, http.StatusConflict, "source pantry item is no longer available")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "look up pantry item", err)
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "look up pantry item", err)
+		entry.PantryItemID = existing.PantryItemID
+		entry.Calories = quantity * pantry.Calories
+		entry.ProteinG = quantity * pantry.ProteinG
+		entry.FatG = quantity * pantry.FatG
+		entry.CarbsG = quantity * pantry.CarbsG
+	case existing.RecipeID != nil:
+		macros, err := h.repo.ComputeRecipeMacros(r.Context(), userID, *existing.RecipeID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.Error(w, http.StatusConflict, "source recipe is no longer available")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "compute recipe macros", err)
+			return
+		}
+		scaled := macros.Scale(quantity)
+		entry.RecipeID = existing.RecipeID
+		entry.Calories = scaled.Calories
+		entry.ProteinG = scaled.ProteinG
+		entry.FatG = scaled.FatG
+		entry.CarbsG = scaled.CarbsG
+	default:
+		httpresp.Error(w, http.StatusBadRequest, "log entry has no source to recompute against")
 		return
-	}
-
-	entry := &NutritionLogEntry{
-		ID:           id,
-		UserID:       userID,
-		ConsumedAt:   consumedAt,
-		PantryItemID: existing.PantryItemID,
-		Quantity:     quantity,
-		Calories:     quantity * pantry.Calories,
-		ProteinG:     quantity * pantry.ProteinG,
-		FatG:         quantity * pantry.FatG,
-		CarbsG:       quantity * pantry.CarbsG,
 	}
 	if err := h.repo.UpdateNutritionLogEntry(r.Context(), entry); err != nil {
 		if errors.Is(err, ErrNotFound) {

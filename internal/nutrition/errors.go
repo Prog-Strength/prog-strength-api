@@ -33,4 +33,23 @@ var (
 	ErrLogEntryReferenceRequired = errors.New(
 		"nutrition: log entry must reference exactly one pantry item or recipe",
 	)
+
+	// ErrRecipeComponentsRequired is returned when a recipe is saved
+	// without any components. An empty recipe is meaningless —
+	// macros would be zero across the board — so we reject up front.
+	ErrRecipeComponentsRequired = errors.New("nutrition: at least one component is required")
+
+	// ErrRecipeTooManyComponents is returned when a recipe exceeds
+	// MaxRecipeComponents. Frontend caps as well; the handler
+	// re-validates so a misbehaving client can't bypass it.
+	ErrRecipeTooManyComponents = errors.New("nutrition: too many components in one recipe")
+
+	// ErrRecipeComponentPantryRequired is returned when a recipe
+	// component is missing its pantry_item_id.
+	ErrRecipeComponentPantryRequired = errors.New("nutrition: recipe component is missing pantry_item_id")
+
+	// ErrRecipeComponentDuplicate is returned when the same pantry
+	// item appears twice in one recipe. If the user really wants two
+	// servings, that's quantity > 1 on a single component.
+	ErrRecipeComponentDuplicate = errors.New("nutrition: duplicate component pantry item in recipe")
 )

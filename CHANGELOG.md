@@ -1,3 +1,10 @@
+# [0.26.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.25.0...v0.26.0) (2026-05-30)
+
+
+### Features
+
+* **nutrition:** recipes + recipe-backed log entries (Phase 2) ([d12546a](https://github.com/Prog-Strength/prog-strength-api/commit/d12546a7ddaeced147274e2f6f0ededc06bf4bf5))
+
 # [0.25.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.24.0...v0.25.0) (2026-05-30)
 
 

@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
@@ -74,6 +75,7 @@ func New(cfg config.Config) (*Server, error) {
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
+	var chatRepo chat.Repository
 
 	if cfg.DatabaseURL != "" {
 		// SQLite mode.
@@ -96,6 +98,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewSQLiteRepository(database)
 		nutritionRepo = nutrition.NewSQLiteRepository(database)
 		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
+		chatRepo = chat.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -149,6 +152,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewMemoryRepository()
 		nutritionRepo = nutrition.NewMemoryRepository()
 		bodyweightRepo = bodyweight.NewMemoryRepository()
+		chatRepo = chat.NewMemoryRepository()
 	}
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
@@ -188,6 +192,11 @@ func New(cfg config.Config) (*Server, error) {
 		// router group. Needs the user repository to default unit
 		// from the user's preferred WeightUnit when omitted.
 		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
+		// Chat session persistence. Agent stays stateless; this
+		// surface is just CRUD for sessions + a turn-append endpoint
+		// the clients write to after each completed stream. See
+		// prog-strength-docs/sows/persistent-chat-sessions.md.
+		chat.NewHandler(chatRepo).Mount(r)
 	})
 
 	return &Server{

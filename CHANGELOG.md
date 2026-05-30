@@ -1,3 +1,10 @@
+# [0.25.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.24.0...v0.25.0) (2026-05-30)
+
+
+### Features
+
+* **nutrition:** pantry items + daily nutrition log (Phase 1) ([283ea53](https://github.com/Prog-Strength/prog-strength-api/commit/283ea53d065a34b92df3252f58af08d0e088bf0a))
+
 # [0.24.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.23.1...v0.24.0) (2026-05-21)
 
 

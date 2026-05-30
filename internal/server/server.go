@@ -49,8 +49,14 @@ func New(cfg config.Config) (*Server, error) {
 	// (the block is skipped, no panic); only fires in prod.
 	if cfg.CORSAllowedOrigin != "" {
 		r.Use(cors.Handler(cors.Options{
-			AllowedOrigins:   []string{cfg.CORSAllowedOrigin},
-			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedOrigins: []string{cfg.CORSAllowedOrigin},
+			// PATCH is on the list because /chat-sessions/{id} uses it
+			// for title updates. Without it the browser preflight
+			// blocks the request silently — the agent /title generates
+			// a title and the client's PATCH fails CORS, leaving the
+			// stored title empty and the history UI showing the
+			// "New chat" placeholder for every session.
+			AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 			AllowedHeaders:   []string{"Authorization", "Content-Type"},
 			AllowCredentials: true,
 			MaxAge:           300,

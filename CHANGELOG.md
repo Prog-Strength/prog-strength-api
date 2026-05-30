@@ -1,3 +1,10 @@
+## [0.28.3](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.2...v0.28.3) (2026-05-30)
+
+
+### Bug Fixes
+
+* **exercise:** drain rows before nested queries to avoid SQL pool deadlock ([c60f94b](https://github.com/Prog-Strength/prog-strength-api/commit/c60f94b077a3846c6add42e6d4c089ae8e5f81c6))
+
 ## [0.28.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.1...v0.28.2) (2026-05-30)
 
 

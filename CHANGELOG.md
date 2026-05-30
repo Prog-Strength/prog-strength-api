@@ -1,3 +1,10 @@
+## [0.28.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.0...v0.28.1) (2026-05-30)
+
+
+### Bug Fixes
+
+* **auth:** allow custom-scheme return_to URLs (mobile deep links) ([a64fa11](https://github.com/Prog-Strength/prog-strength-api/commit/a64fa11631999619b1bd23b06680fe8bb03d7d3b))
+
 # [0.28.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.27.0...v0.28.0) (2026-05-30)
 
 

@@ -1,3 +1,10 @@
+# [0.29.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.4...v0.29.0) (2026-05-30)
+
+
+### Features
+
+* **chat:** persistent chat sessions API (Phase 1) ([d1e8db5](https://github.com/Prog-Strength/prog-strength-api/commit/d1e8db5b5c02363c7e7770bbfc7d2d2acdfa02a9))
+
 ## [0.28.4](https://github.com/Prog-Strength/prog-strength-api/compare/v0.28.3...v0.28.4) (2026-05-30)
 
 

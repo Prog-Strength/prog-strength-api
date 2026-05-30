@@ -329,9 +329,15 @@ func randomState() (string, error) {
 // prevent /auth/google/login from being used as an open redirect (which
 // would be a phishing primitive — attacker sends a victim a login link
 // that bounces to an attacker-controlled page with the JWT in the fragment).
+//
+// Custom URL schemes (e.g. the mobile app's "progstrength:///auth/callback")
+// have an empty Host — Go's url.Parse only populates Host when an authority
+// component is actually present. The whitelist comparison is still strict:
+// `progstrength://` only matches the literal `progstrength://` entry, so
+// an attacker can't smuggle a host like `progstrength://evil.example.com`.
 func (h *Handler) isAllowedReturnTo(returnTo string) bool {
 	u, err := url.Parse(returnTo)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if err != nil || u.Scheme == "" {
 		return false
 	}
 	origin := u.Scheme + "://" + u.Host

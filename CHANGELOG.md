@@ -1,3 +1,10 @@
+# [0.28.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.27.0...v0.28.0) (2026-05-30)
+
+
+### Features
+
+* **nutrition:** categorize log entries by meal ([6886e31](https://github.com/Prog-Strength/prog-strength-api/commit/6886e313703ff84d1a9aaef01435dddaad321077))
+
 # [0.27.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.26.0...v0.27.0) (2026-05-30)
 
 

@@ -1,3 +1,10 @@
+# [0.30.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.29.1...v0.30.0) (2026-05-31)
+
+
+### Features
+
+* **nutrition:** per-user daily macro goals API ([2beb0f3](https://github.com/Prog-Strength/prog-strength-api/commit/2beb0f36067cdea0eff9d15cfe9bfba84d5d2005))
+
 ## [0.29.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.29.0...v0.29.1) (2026-05-30)
 
 

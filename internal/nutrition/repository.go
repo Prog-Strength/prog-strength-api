@@ -89,4 +89,20 @@ type Repository interface {
 	// item only hides it from the pantry list, not from recipes that
 	// already reference it.
 	ComputeRecipeMacros(ctx context.Context, userID, recipeID string) (RecipeMacros, error)
+
+	// --- Macro goals (per-user singleton) --------------------------
+
+	// GetMacroGoals returns the user's daily macro targets. Returns a
+	// zero-valued struct (all four numbers 0, both timestamps nil)
+	// when the user has never written goals — the client uses that
+	// state to render the empty-state ring outline. Never returns
+	// ErrNotFound; "not set" is a value, not an error.
+	GetMacroGoals(ctx context.Context, userID string) (MacroGoals, error)
+
+	// UpsertMacroGoals atomically inserts-or-replaces the user's goals
+	// row. Caller is responsible for range validation (handler
+	// enforces ≤ MaxMacroGrams per macro, ≤ MaxCalories on calories);
+	// the repo just persists what it's given. `now` sets updated_at on
+	// every call and created_at on the first.
+	UpsertMacroGoals(ctx context.Context, g MacroGoals, now time.Time) (MacroGoals, error)
 }

@@ -17,19 +17,21 @@ var _ Repository = (*MemoryRepository)(nil)
 // state in maps protected by a single RW mutex — same pattern as the
 // workout package's MemoryRepository.
 type MemoryRepository struct {
-	mu      sync.RWMutex
-	pantry  map[string]*PantryItem        // id → item
-	log     map[string]*NutritionLogEntry // id → entry
-	recipes map[string]*Recipe            // id → recipe (with components)
-	nowFunc func() time.Time              // injectable for tests
+	mu         sync.RWMutex
+	pantry     map[string]*PantryItem        // id → item
+	log        map[string]*NutritionLogEntry // id → entry
+	recipes    map[string]*Recipe            // id → recipe (with components)
+	macroGoals map[string]*MacroGoals        // userID → goals
+	nowFunc    func() time.Time              // injectable for tests
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		pantry:  make(map[string]*PantryItem),
-		log:     make(map[string]*NutritionLogEntry),
-		recipes: make(map[string]*Recipe),
-		nowFunc: time.Now,
+		pantry:     make(map[string]*PantryItem),
+		log:        make(map[string]*NutritionLogEntry),
+		recipes:    make(map[string]*Recipe),
+		macroGoals: make(map[string]*MacroGoals),
+		nowFunc:    time.Now,
 	}
 }
 
@@ -405,4 +407,38 @@ func (r *MemoryRepository) ComputeRecipeMacros(ctx context.Context, userID, reci
 		totals.CarbsG += c.Quantity * item.CarbsG
 	}
 	return totals, nil
+}
+
+// --- Macro goals ---------------------------------------------------
+
+func (r *MemoryRepository) GetMacroGoals(ctx context.Context, userID string) (MacroGoals, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	g, ok := r.macroGoals[userID]
+	if !ok {
+		// "Never set" maps to a zero-valued struct; clients read the
+		// nil timestamps as the empty-state signal.
+		return MacroGoals{UserID: userID}, nil
+	}
+	return *g, nil
+}
+
+func (r *MemoryRepository) UpsertMacroGoals(ctx context.Context, g MacroGoals, now time.Time) (MacroGoals, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	nowUTC := now.UTC()
+	existing, ok := r.macroGoals[g.UserID]
+	if !ok {
+		stored := g
+		stored.CreatedAt = &nowUTC
+		stored.UpdatedAt = &nowUTC
+		r.macroGoals[g.UserID] = &stored
+		return stored, nil
+	}
+	existing.ProteinG = g.ProteinG
+	existing.CarbsG = g.CarbsG
+	existing.FatG = g.FatG
+	existing.Calories = g.Calories
+	existing.UpdatedAt = &nowUTC
+	return *existing, nil
 }

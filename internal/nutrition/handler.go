@@ -50,6 +50,14 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Put("/{id}", h.updateRecipe)
 		r.Delete("/{id}", h.deleteRecipe)
 	})
+	// Per-user macro targets. Lives on /me/... to match the
+	// headline-exercises convention (one row per user, no listing,
+	// set-replacement semantics). See
+	// prog-strength-docs/sows/daily-macro-goals.md.
+	r.Route("/me/macro-goals", func(r chi.Router) {
+		r.Get("/", h.getMyMacroGoals)
+		r.Put("/", h.putMyMacroGoals)
+	})
 }
 
 // --- DTOs ----------------------------------------------------------

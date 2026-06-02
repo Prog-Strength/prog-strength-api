@@ -29,14 +29,16 @@ func (r *SQLiteRepository) InsertTurn(ctx context.Context, t AgentTurn) error {
 			input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
 			total_latency_ms, time_to_first_token_ms,
 			completion_reason, error,
+			intent, intent_prefetch_duration_ms, intent_prefetch_failed,
 			started_at, ended_at, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		t.ID, t.UserID, t.SessionID,
 		t.Model, t.RoutedTier, t.RouterModel, t.RouterLatencyMs,
 		t.InputTokens, t.OutputTokens, t.CacheCreationTokens, t.CacheReadTokens,
 		t.TotalLatencyMs, t.TimeToFirstTokenMs,
 		t.CompletionReason, t.Error,
+		t.Intent, t.IntentPrefetchDurationMs, boolToInt(t.IntentPrefetchFailed),
 		t.StartedAt, t.EndedAt, t.CreatedAt,
 	)
 	if err != nil {
@@ -118,4 +120,14 @@ func isUniqueConstraintErr(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// boolToInt converts a bool to the SQLite INTEGER convention (1/0).
+// SQLite has no native boolean type; storing as INTEGER is idiomatic
+// and matches the column definitions in telemetry_migrations.
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

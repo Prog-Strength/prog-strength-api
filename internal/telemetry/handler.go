@@ -56,10 +56,13 @@ type turnRequest struct {
 	CacheReadTokens     int     `json:"cache_read_tokens"`
 	TotalLatencyMs      int     `json:"total_latency_ms"`
 	TimeToFirstTokenMs  int     `json:"time_to_first_token_ms"`
-	CompletionReason    string  `json:"completion_reason"`
-	Error               *string `json:"error"`
-	StartedAt           string  `json:"started_at"`
-	EndedAt             string  `json:"ended_at"`
+	CompletionReason         string  `json:"completion_reason"`
+	Error                    *string `json:"error"`
+	StartedAt                string  `json:"started_at"`
+	EndedAt                  string  `json:"ended_at"`
+	Intent                   string  `json:"intent"`
+	IntentPrefetchDurationMs int     `json:"intent_prefetch_duration_ms"`
+	IntentPrefetchFailed     bool    `json:"intent_prefetch_failed"`
 }
 
 func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +108,14 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 		CacheReadTokens:     req.CacheReadTokens,
 		TotalLatencyMs:      req.TotalLatencyMs,
 		TimeToFirstTokenMs:  req.TimeToFirstTokenMs,
-		CompletionReason:    req.CompletionReason,
-		Error:               req.Error,
-		StartedAt:           startedAt,
-		EndedAt:             endedAt,
-		CreatedAt:           h.now().UTC(),
+		CompletionReason:         req.CompletionReason,
+		Error:                    req.Error,
+		StartedAt:                startedAt,
+		EndedAt:                  endedAt,
+		CreatedAt:                h.now().UTC(),
+		Intent:                   req.Intent,
+		IntentPrefetchDurationMs: req.IntentPrefetchDurationMs,
+		IntentPrefetchFailed:     req.IntentPrefetchFailed,
 	}
 
 	if err := h.repo.InsertTurn(r.Context(), t); err != nil {

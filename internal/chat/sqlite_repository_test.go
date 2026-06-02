@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -167,6 +168,44 @@ func TestSQLite_ListSessions_OrderedByLastMessageDesc(t *testing.T) {
 			ids[i] = s.ID
 		}
 		t.Errorf("list order = %v, want %s first", ids, b)
+	}
+}
+
+func TestSQLite_SessionIntentRoundTrip(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	ctx := context.Background()
+	s := &Session{ID: "11111111-2222-4333-8444-555555555555", UserID: "u-1"}
+	if err := repo.CreateSession(ctx, s); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	gotIntent, gotAt, err := repo.GetSessionIntent(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("get empty: %v", err)
+	}
+	if gotIntent != nil || gotAt != nil {
+		t.Fatalf("expected nil intent on fresh session, got %v / %v", gotIntent, gotAt)
+	}
+
+	when := time.Now().UTC().Truncate(time.Second)
+	if err := repo.SetSessionIntent(ctx, s.ID, "log_nutrition", when); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+
+	gotIntent, gotAt, err = repo.GetSessionIntent(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("get after set: %v", err)
+	}
+	if gotIntent == nil || *gotIntent != "log_nutrition" || gotAt == nil || !gotAt.Equal(when) {
+		t.Fatalf("intent round-trip mismatch: %v / %v", gotIntent, gotAt)
+	}
+}
+
+func TestSQLite_GetSessionIntent_UnknownSession(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	_, _, err := repo.GetSessionIntent(context.Background(), "11111111-2222-4333-8444-555555555555")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
 

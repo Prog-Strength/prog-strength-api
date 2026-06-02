@@ -1,6 +1,9 @@
 package chat
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // MaxSessionsPerUser is the eviction cap from the SOW. When
 // CreateSession would push the user above this number, the repo
@@ -66,4 +69,19 @@ type Repository interface {
 	// another user — the userID check happens before any messages
 	// are returned.
 	ListMessages(ctx context.Context, userID, sessionID string) ([]Message, error)
+
+	// GetSessionIntent returns the session's last non-general intent
+	// classification (and the timestamp of that classification). Both
+	// pointers are nil when the session has no prior intent. Returns
+	// ErrNotFound when the session doesn't exist or is soft-deleted.
+	// NOTE: no user-id scoping — this endpoint sits behind the docker
+	// network boundary (callers are the agent's internal API client),
+	// not behind user auth.
+	GetSessionIntent(ctx context.Context, sessionID string) (*string, *time.Time, error)
+
+	// SetSessionIntent persists a new intent classification on the
+	// session. Idempotent: calling with the same (intent, at) is a no-op
+	// in observable terms. The caller is expected to only invoke this
+	// for non-general intents — the API does not filter.
+	SetSessionIntent(ctx context.Context, sessionID, intent string, at time.Time) error
 }

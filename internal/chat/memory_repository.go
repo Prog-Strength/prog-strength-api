@@ -171,6 +171,41 @@ func (r *MemoryRepository) ListMessages(ctx context.Context, userID, sessionID s
 	return out, nil
 }
 
+func (r *MemoryRepository) GetSessionIntent(ctx context.Context, sessionID string) (*string, *time.Time, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[sessionID]
+	if !ok || s.DeletedAt != nil {
+		return nil, nil, ErrNotFound
+	}
+	// Defensive copies — callers must not hold pointers to internal state.
+	var intent *string
+	var at *time.Time
+	if s.LastIntent != nil {
+		v := *s.LastIntent
+		intent = &v
+	}
+	if s.LastIntentAt != nil {
+		v := *s.LastIntentAt
+		at = &v
+	}
+	return intent, at, nil
+}
+
+func (r *MemoryRepository) SetSessionIntent(ctx context.Context, sessionID, intent string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[sessionID]
+	if !ok || s.DeletedAt != nil {
+		return ErrNotFound
+	}
+	intentCopy := intent
+	atCopy := at
+	s.LastIntent = &intentCopy
+	s.LastIntentAt = &atCopy
+	return nil
+}
+
 // activeForUserLocked returns a value-typed defensive copy of every
 // non-deleted session for the user. Caller must hold r.mu.
 func (r *MemoryRepository) activeForUserLocked(userID string) []Session {

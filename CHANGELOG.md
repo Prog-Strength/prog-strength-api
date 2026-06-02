@@ -1,3 +1,10 @@
+# [0.31.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.30.1...v0.31.0) (2026-06-02)
+
+
+### Features
+
+* **api:** intent classification persistence + internal endpoint ([#1](https://github.com/Prog-Strength/prog-strength-api/issues/1)) ([abc6b8e](https://github.com/Prog-Strength/prog-strength-api/commit/abc6b8ed8fd6d9799756e4b5fc111b1f3f5f64fb))
+
 ## [0.30.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.30.0...v0.30.1) (2026-05-31)
 
 

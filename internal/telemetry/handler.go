@@ -144,10 +144,11 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.intentSink != nil && t.Intent != "" && t.Intent != "general" {
-		// Fire-and-forget by design — a chat-sessions write failure
-		// must not turn a successful telemetry insert into a 500.
-		// Caller has already returned to the agent by the time this
-		// runs; we just log and move on.
+		// Synchronous write — errors are logged rather than returned
+		// as 500 so a chat-sessions failure cannot retroactively
+		// corrupt a successful telemetry insert. The agent's
+		// telemetry POST is itself fire-and-forget on its end, so
+		// the extra few ms here are off the user's critical path.
 		if err := h.intentSink.SetSessionIntent(r.Context(), t.SessionID, t.Intent, t.EndedAt); err != nil {
 			// chat.ErrNotFound when the session isn't persisted (the
 			// frontend currently mints session IDs without always

@@ -139,7 +139,7 @@ func New(cfg config.Config) (*Server, error) {
 				return nil, err
 			}
 			telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
-			telemetry.NewHandler(telemetryRepo).Mount(r)
+			telemetry.NewHandlerWithIntentSink(telemetryRepo, chatRepo).Mount(r)
 			// Daily TTL: NULLs content/arguments_json/result_summary
 			// after 90 days. Metadata (token counts, latencies, tool
 			// names, timestamps) is kept indefinitely. Background
@@ -204,6 +204,11 @@ func New(cfg config.Config) (*Server, error) {
 		// prog-strength-docs/sows/persistent-chat-sessions.md.
 		chat.NewHandler(chatRepo).Mount(r)
 	})
+
+	// Internal chat routes (read-only intent lookup for the agent).
+	// Lives OUTSIDE the JWT-gated group — auth boundary is the docker
+	// network, identical to /internal/telemetry/*.
+	chat.NewHandler(chatRepo).MountInternal(r)
 
 	return &Server{
 		httpServer: &http.Server{

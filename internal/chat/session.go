@@ -26,6 +26,17 @@ type Session struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 	LastMessageAt time.Time  `json:"last_message_at"`
 	DeletedAt     *time.Time `json:"-"`
+
+	// LastIntent is the most recent non-general intent classification
+	// emitted by the agent's router for this conversation. Nil for
+	// sessions with no classified intent yet (fresh sessions, or only
+	// general turns so far). Read by the agent before classifying the
+	// next turn; written by the telemetry POST when the agent finishes
+	// a non-general turn. JSON-hidden; surfaced via the dedicated
+	// /internal/chat-sessions/{id}/intent endpoint instead of the
+	// regular session payload.
+	LastIntent   *string    `json:"-"`
+	LastIntentAt *time.Time `json:"-"`
 }
 
 // ValidateForCreate runs on the input the handler builds from the

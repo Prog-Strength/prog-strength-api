@@ -1,8 +1,10 @@
 package telemetry
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -11,6 +13,15 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 )
 
+// IntentSink is the subset of chat.Repository the telemetry handler
+// uses to write through the most recent non-general intent to the
+// session row. Optional — Handler.intentSink may be nil, in which
+// case the write-through is skipped (useful for tests that don't
+// care about chat state).
+type IntentSink interface {
+	SetSessionIntent(ctx context.Context, sessionID, intent string, at time.Time) error
+}
+
 // Handler exposes HTTP endpoints under /internal/telemetry/* that
 // accept agent telemetry writes. These routes are intentionally
 // *not* behind the JWT middleware — they live under /internal which
@@ -18,12 +29,17 @@ import (
 // agent and api containers can reach them. The single-host
 // deploy's network boundary is the auth boundary.
 type Handler struct {
-	repo Repository
-	now  func() time.Time // injectable for tests
+	repo       Repository
+	intentSink IntentSink // may be nil
+	now        func() time.Time // injectable for tests
 }
 
 func NewHandler(repo Repository) *Handler {
 	return &Handler{repo: repo, now: time.Now}
+}
+
+func NewHandlerWithIntentSink(repo Repository, sink IntentSink) *Handler {
+	return &Handler{repo: repo, intentSink: sink, now: time.Now}
 }
 
 // Mount registers the three telemetry endpoints under /internal/telemetry.
@@ -56,10 +72,13 @@ type turnRequest struct {
 	CacheReadTokens     int     `json:"cache_read_tokens"`
 	TotalLatencyMs      int     `json:"total_latency_ms"`
 	TimeToFirstTokenMs  int     `json:"time_to_first_token_ms"`
-	CompletionReason    string  `json:"completion_reason"`
-	Error               *string `json:"error"`
-	StartedAt           string  `json:"started_at"`
-	EndedAt             string  `json:"ended_at"`
+	CompletionReason         string  `json:"completion_reason"`
+	Error                    *string `json:"error"`
+	StartedAt                string  `json:"started_at"`
+	EndedAt                  string  `json:"ended_at"`
+	Intent                   string  `json:"intent"`
+	IntentPrefetchDurationMs int     `json:"intent_prefetch_duration_ms"`
+	IntentPrefetchFailed     bool    `json:"intent_prefetch_failed"`
 }
 
 func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
@@ -105,11 +124,14 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 		CacheReadTokens:     req.CacheReadTokens,
 		TotalLatencyMs:      req.TotalLatencyMs,
 		TimeToFirstTokenMs:  req.TimeToFirstTokenMs,
-		CompletionReason:    req.CompletionReason,
-		Error:               req.Error,
-		StartedAt:           startedAt,
-		EndedAt:             endedAt,
-		CreatedAt:           h.now().UTC(),
+		CompletionReason:         req.CompletionReason,
+		Error:                    req.Error,
+		StartedAt:                startedAt,
+		EndedAt:                  endedAt,
+		CreatedAt:                h.now().UTC(),
+		Intent:                   req.Intent,
+		IntentPrefetchDurationMs: req.IntentPrefetchDurationMs,
+		IntentPrefetchFailed:     req.IntentPrefetchFailed,
 	}
 
 	if err := h.repo.InsertTurn(r.Context(), t); err != nil {
@@ -119,6 +141,21 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 		}
 		httpresp.ServerError(w, r.Context(), "insert telemetry turn", err)
 		return
+	}
+
+	if h.intentSink != nil && t.Intent != "" && t.Intent != "general" {
+		// Synchronous write — errors are logged rather than returned
+		// as 500 so a chat-sessions failure cannot retroactively
+		// corrupt a successful telemetry insert. The agent's
+		// telemetry POST is itself fire-and-forget on its end, so
+		// the extra few ms here are off the user's critical path.
+		if err := h.intentSink.SetSessionIntent(r.Context(), t.SessionID, t.Intent, t.EndedAt); err != nil {
+			// chat.ErrNotFound when the session isn't persisted (the
+			// frontend currently mints session IDs without always
+			// calling POST /chat-sessions first; treat as expected).
+			// All other errors are worth a log line.
+			log.Printf("telemetry: write last_intent failed: session=%s err=%v", t.SessionID, err)
+		}
 	}
 
 	httpresp.Created(w, "recorded turn", map[string]string{"id": t.ID})

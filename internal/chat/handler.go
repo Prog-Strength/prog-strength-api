@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
@@ -33,6 +34,36 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Patch("/{id}", h.patch)
 		r.Delete("/{id}", h.delete)
 		r.Post("/{id}/messages", h.appendTurn)
+	})
+}
+
+// MountInternal registers chat routes that sit behind the docker
+// network boundary (and Caddy's refusal to proxy /internal/*) rather
+// than the user-JWT auth middleware. The only consumer is the agent
+// service reading the session's prior intent on the way into /chat.
+func (h *Handler) MountInternal(r chi.Router) {
+	r.Route("/internal/chat-sessions", func(r chi.Router) {
+		r.Get("/{id}/intent", h.getInternalIntent)
+	})
+}
+
+type internalIntentResponse struct {
+	Intent   *string    `json:"intent"`
+	IntentAt *time.Time `json:"intent_at"`
+}
+
+func (h *Handler) getInternalIntent(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	intent, at, err := h.repo.GetSessionIntent(r.Context(), id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		httpresp.ServerError(w, r.Context(), "get chat session intent", err)
+		return
+	}
+	// SOW: 404 returns the same shape as "session has no intent yet"
+	// so the agent's client doesn't have to distinguish.
+	httpresp.OK(w, "got chat session intent", internalIntentResponse{
+		Intent:   intent,
+		IntentAt: at,
 	})
 }
 

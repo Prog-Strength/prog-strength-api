@@ -34,8 +34,20 @@ type AgentTurn struct {
 	TimeToFirstTokenMs  int
 	CompletionReason    string
 	// Error is populated only when CompletionReason == "error".
-	Error      *string
-	StartedAt  time.Time
+	Error *string
+	// Intent classification produced by the agent's router. One of
+	// log_nutrition | log_workout | log_bodyweight | analyze_progress |
+	// general. Empty string means the router didn't run.
+	Intent string
+	// Wall-clock time spent running the intent's prefetch tool calls
+	// (asyncio.gather across multiple MCP tools). Zero when no
+	// prefetch ran (intent == general or router failed).
+	IntentPrefetchDurationMs int
+	// True when any prefetch tool call raised. The harness still
+	// composes the prompt and runs the turn — degraded enrichment is
+	// silent — but this flag lets the dashboard surface the rate.
+	IntentPrefetchFailed bool
+	StartedAt            time.Time
 	EndedAt    time.Time
 	CreatedAt  time.Time
 }

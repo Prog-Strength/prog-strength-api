@@ -288,6 +288,52 @@ func (r *SQLiteRepository) AppendTurn(ctx context.Context, userID, sessionID str
 	return s, []Message{userMsg, assistantMsg}, nil
 }
 
+func (r *SQLiteRepository) GetSessionIntent(ctx context.Context, sessionID string) (*string, *time.Time, error) {
+	const q = `
+SELECT last_intent, last_intent_at
+  FROM chat_sessions
+ WHERE id = ? AND deleted_at IS NULL`
+	var intent sql.NullString
+	var at sql.NullTime
+	err := r.db.QueryRowContext(ctx, q, sessionID).Scan(&intent, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var outIntent *string
+	var outAt *time.Time
+	if intent.Valid {
+		v := intent.String
+		outIntent = &v
+	}
+	if at.Valid {
+		v := at.Time
+		outAt = &v
+	}
+	return outIntent, outAt, nil
+}
+
+func (r *SQLiteRepository) SetSessionIntent(ctx context.Context, sessionID, intent string, at time.Time) error {
+	const q = `
+UPDATE chat_sessions
+   SET last_intent = ?, last_intent_at = ?, updated_at = ?
+ WHERE id = ? AND deleted_at IS NULL`
+	res, err := r.db.ExecContext(ctx, q, intent, at, time.Now().UTC(), sessionID)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (r *SQLiteRepository) ListMessages(ctx context.Context, userID, sessionID string) ([]Message, error) {
 	// Authorize via the session row first so the message read is
 	// scoped to a verified-owned session. Same pattern as workout

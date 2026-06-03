@@ -203,6 +203,10 @@ func New(cfg config.Config) (*Server, error) {
 		// the clients write to after each completed stream. See
 		// prog-strength-docs/sows/persistent-chat-sessions.md.
 		chat.NewHandler(chatRepo).Mount(r)
+		// User self route — exposes the authed user (incl. weight_unit)
+		// for user-scoped frontend reads. Shares the JWT-gated group;
+		// getMe reads the user ID from context.
+		user.NewHandler(userRepo).Mount(r)
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

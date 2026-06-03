@@ -1,3 +1,10 @@
+# [0.33.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.32.0...v0.33.0) (2026-06-03)
+
+
+### Features
+
+* **api:** timezone-aware nutrition date contract + local-day aggregation ([#3](https://github.com/Prog-Strength/prog-strength-api/issues/3)) ([2fe7efb](https://github.com/Prog-Strength/prog-strength-api/commit/2fe7efb744d5add0e3974896dc659ca1615ca522))
+
 # [0.32.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.31.0...v0.32.0) (2026-06-03)
 
 

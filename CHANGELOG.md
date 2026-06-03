@@ -1,3 +1,10 @@
+# [0.32.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.31.0...v0.32.0) (2026-06-03)
+
+
+### Features
+
+* **api:** add GET /me endpoint returning the authed user ([#2](https://github.com/Prog-Strength/prog-strength-api/issues/2)) ([62eaee2](https://github.com/Prog-Strength/prog-strength-api/commit/62eaee2be00639b7d9b371e4a919cc5d02ed6b39))
+
 # [0.31.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.30.1...v0.31.0) (2026-06-02)
 
 

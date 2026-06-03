@@ -6,6 +6,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	// time.LoadLocation needs the IANA tzdata; importing the embedded
+	// copy makes the binary self-contained across the AL2023 base image
+	// (which does ship tzdata, but we don't want to depend on it) and a
+	// developer's macOS laptop.
+	_ "time/tzdata"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/server"
 )

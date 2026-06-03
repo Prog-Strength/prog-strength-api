@@ -3,6 +3,7 @@ package nutrition
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"strings"
 	"time"
 
@@ -334,37 +335,64 @@ func (r *SQLiteRepository) DeleteNutritionLogEntry(ctx context.Context, userID, 
 	return nil
 }
 
-func (r *SQLiteRepository) DailyMacros(ctx context.Context, userID string, since, until time.Time) ([]DailyMacros, error) {
-	// SQLite's strftime gives us the UTC-date bucket. SUM() over the
-	// denormalized macro columns is the whole aggregation; empty days
-	// are omitted by the GROUP BY.
+func (r *SQLiteRepository) DailyMacros(ctx context.Context, userID string, since, until time.Time, loc *time.Location) ([]DailyMacros, error) {
+	// Pull raw rows in [since, until) UTC and group in Go by the
+	// user-local calendar date in loc. SQLite's date(consumed_at, ?)
+	// modifier takes a fixed UTC offset and is wrong on DST transition
+	// days, so the grouping cannot live in SQL.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			strftime('%Y-%m-%d', consumed_at) AS day,
-			SUM(calories), SUM(protein_g), SUM(fat_g), SUM(carbs_g),
-			COUNT(*)
+		SELECT consumed_at, calories, protein_g, fat_g, carbs_g
 		FROM nutrition_log_entries
 		WHERE user_id = ?
 		  AND deleted_at IS NULL
 		  AND consumed_at >= ?
 		  AND consumed_at < ?
-		GROUP BY day
-		ORDER BY day ASC
 	`, userID, since, until)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var out []DailyMacros
+	type accumulator struct {
+		cal, p, f, c float64
+		count        int
+	}
+	buckets := map[string]*accumulator{}
 	for rows.Next() {
-		var d DailyMacros
-		if err := rows.Scan(&d.Date, &d.Calories, &d.ProteinG, &d.FatG, &d.CarbsG, &d.EntryCount); err != nil {
+		var consumedAt time.Time
+		var cal, p, f, c float64
+		if err := rows.Scan(&consumedAt, &cal, &p, &f, &c); err != nil {
 			return nil, err
 		}
-		out = append(out, d)
+		key := consumedAt.In(loc).Format("2006-01-02")
+		a := buckets[key]
+		if a == nil {
+			a = &accumulator{}
+			buckets[key] = a
+		}
+		a.cal += cal
+		a.p += p
+		a.f += f
+		a.c += c
+		a.count++
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]DailyMacros, 0, len(buckets))
+	for date, a := range buckets {
+		out = append(out, DailyMacros{
+			Date:       date,
+			Calories:   a.cal,
+			ProteinG:   a.p,
+			FatG:       a.f,
+			CarbsG:     a.c,
+			EntryCount: a.count,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Date < out[j].Date })
+	return out, nil
 }
 
 func scanLogEntry(s scanner) (*NutritionLogEntry, error) {

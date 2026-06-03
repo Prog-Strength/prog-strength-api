@@ -376,12 +376,12 @@ func (h *Handler) listLogEntries(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	since, until, err := parseSinceUntil(r)
+	start, end, _, err := parseDateRangeQuery(r)
 	if err != nil {
 		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	entries, err := h.repo.ListNutritionLogEntries(r.Context(), userID, since, until)
+	entries, err := h.repo.ListNutritionLogEntries(r.Context(), userID, &start, &end)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list nutrition log", err)
 		return
@@ -553,28 +553,12 @@ func (h *Handler) dailyMacros(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	sinceRaw := r.URL.Query().Get("since")
-	untilRaw := r.URL.Query().Get("until")
-	if sinceRaw == "" || untilRaw == "" {
-		httpresp.Error(w, http.StatusBadRequest, "since and until are required (RFC3339)")
-		return
-	}
-	since, err := time.Parse(time.RFC3339, sinceRaw)
+	start, end, loc, err := parseDateRangeQuery(r)
 	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid since (expected RFC3339)")
+		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	until, err := time.Parse(time.RFC3339, untilRaw)
-	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid until (expected RFC3339)")
-		return
-	}
-	if !since.Before(until) {
-		httpresp.Error(w, http.StatusBadRequest, "since must be strictly before until")
-		return
-	}
-
-	days, err := h.repo.DailyMacros(r.Context(), userID, since, until)
+	days, err := h.repo.DailyMacros(r.Context(), userID, start, end, loc)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "daily macros", err)
 		return
@@ -595,29 +579,58 @@ func (h *Handler) dailyMacros(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers -------------------------------------------------------
 
-// parseSinceUntil reads optional since/until query params as RFC3339.
-// Returns (nil, nil, nil) when neither is set — the caller treats
-// that as "no filter."
-func parseSinceUntil(r *http.Request) (*time.Time, *time.Time, error) {
-	var since, until *time.Time
-	if raw := r.URL.Query().Get("since"); raw != "" {
-		t, err := time.Parse(time.RFC3339, raw)
+// parseDateRangeQuery enforces the timezone-aware date contract shared
+// by the nutrition list and daily-macros endpoints. Returns the UTC
+// half-open interval [start, end) that brackets the user-local calendar
+// day(s), plus the resolved *time.Location for downstream local-date
+// grouping. Errors are 400-grade with stable messages — the handler
+// forwards err.Error() verbatim, so the strings here are the contract.
+func parseDateRangeQuery(r *http.Request) (time.Time, time.Time, *time.Location, error) {
+	q := r.URL.Query()
+	tzName := q.Get("timezone")
+	if tzName == "" {
+		return time.Time{}, time.Time{}, nil, errors.New("timezone is required")
+	}
+	loc, err := loadTimezone(tzName)
+	if err != nil {
+		return time.Time{}, time.Time{}, nil, err
+	}
+
+	date := q.Get("date")
+	startDate := q.Get("start_date")
+	endDate := q.Get("end_date")
+
+	switch {
+	case date != "" && (startDate != "" || endDate != ""):
+		return time.Time{}, time.Time{}, nil, errors.New("supply either date or start_date+end_date, not both")
+	case startDate != "" && endDate == "":
+		return time.Time{}, time.Time{}, nil, errors.New("end_date is required when start_date is supplied")
+	case endDate != "" && startDate == "":
+		return time.Time{}, time.Time{}, nil, errors.New("start_date is required when end_date is supplied")
+	case date == "" && startDate == "" && endDate == "":
+		return time.Time{}, time.Time{}, nil, errors.New("date or start_date+end_date is required")
+	}
+
+	if date != "" {
+		start, end, err := dayBoundsUTC(date, loc)
 		if err != nil {
-			return nil, nil, errors.New("invalid since (expected RFC3339)")
+			return time.Time{}, time.Time{}, nil, err
 		}
-		since = &t
+		return start, end, loc, nil
 	}
-	if raw := r.URL.Query().Get("until"); raw != "" {
-		t, err := time.Parse(time.RFC3339, raw)
-		if err != nil {
-			return nil, nil, errors.New("invalid until (expected RFC3339)")
-		}
-		until = &t
+
+	start, _, err := dayBoundsUTC(startDate, loc)
+	if err != nil {
+		return time.Time{}, time.Time{}, nil, err
 	}
-	if since != nil && until != nil && !since.Before(*until) {
-		return nil, nil, errors.New("since must be strictly before until")
+	endStart, end, err := dayBoundsUTC(endDate, loc)
+	if err != nil {
+		return time.Time{}, time.Time{}, nil, err
 	}
-	return since, until, nil
+	if endStart.Before(start) {
+		return time.Time{}, time.Time{}, nil, errors.New("end_date must be on or after start_date")
+	}
+	return start, end, loc, nil
 }
 
 // isValidationError reports whether err is one of the package's

@@ -223,12 +223,13 @@ func (r *MemoryRepository) DeleteNutritionLogEntry(ctx context.Context, userID, 
 	return nil
 }
 
-func (r *MemoryRepository) DailyMacros(ctx context.Context, userID string, since, until time.Time) ([]DailyMacros, error) {
+func (r *MemoryRepository) DailyMacros(ctx context.Context, userID string, since, until time.Time, loc *time.Location) ([]DailyMacros, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// Aggregate per UTC date bucket. Empty days are omitted; callers
-	// fill gaps client-side if they need a dense series.
+	// Group by user-local calendar date in loc, not UTC date. Empty
+	// days are omitted; callers fill gaps client-side if they need a
+	// dense series.
 	type accumulator struct {
 		cal, p, f, c float64
 		count        int
@@ -241,7 +242,7 @@ func (r *MemoryRepository) DailyMacros(ctx context.Context, userID string, since
 		if e.ConsumedAt.Before(since) || !e.ConsumedAt.Before(until) {
 			continue
 		}
-		key := e.ConsumedAt.UTC().Format("2006-01-02")
+		key := e.ConsumedAt.In(loc).Format("2006-01-02")
 		a := buckets[key]
 		if a == nil {
 			a = &accumulator{}

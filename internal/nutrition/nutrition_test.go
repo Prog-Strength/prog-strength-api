@@ -221,6 +221,7 @@ func TestDailyMacros_AggregatesPerUTCDate(t *testing.T) {
 	got, err := repo.DailyMacros(ctx, "u1",
 		time.Date(2026, 5, 28, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC),
+		time.UTC,
 	)
 	if err != nil {
 		t.Fatalf("daily macros: %v", err)
@@ -258,6 +259,7 @@ func TestDailyMacros_RangeExcludesSoftDeleted(t *testing.T) {
 	got, err := repo.DailyMacros(ctx, "u1",
 		time.Date(2026, 5, 28, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC),
+		time.UTC,
 	)
 	if err != nil {
 		t.Fatalf("daily macros: %v", err)

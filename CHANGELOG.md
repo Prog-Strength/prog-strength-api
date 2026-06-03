@@ -1,3 +1,10 @@
+## [0.33.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.33.0...v0.33.1) (2026-06-03)
+
+
+### Bug Fixes
+
+* **api:** wire timezone date contract into handler + repository ([#4](https://github.com/Prog-Strength/prog-strength-api/issues/4)) ([d3e4f01](https://github.com/Prog-Strength/prog-strength-api/commit/d3e4f01c27d20998b07519b098320d5642a6c16a)), closes [#3](https://github.com/Prog-Strength/prog-strength-api/issues/3) [#3](https://github.com/Prog-Strength/prog-strength-api/issues/3)
+
 # [0.33.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.32.0...v0.33.0) (2026-06-03)
 
 

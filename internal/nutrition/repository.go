@@ -44,11 +44,14 @@ type Repository interface {
 
 	DeleteNutritionLogEntry(ctx context.Context, userID, id string) error
 
-	// DailyMacros aggregates non-deleted entries into per-day totals
-	// for the [since, until) UTC-date range. Empty days do not appear
-	// in the response — callers that need a dense series fill gaps
-	// client-side.
-	DailyMacros(ctx context.Context, userID string, since, until time.Time) ([]DailyMacros, error)
+	// DailyMacros aggregates non-deleted entries into per-day totals.
+	// Entries are filtered by ConsumedAt in [since, until) UTC and
+	// grouped by their *user-local* calendar date in loc — SQLite's
+	// date(consumed_at, ?) modifier takes a fixed UTC offset and is
+	// wrong on DST transition days, so grouping happens in Go. Empty
+	// days do not appear in the response; callers that need a dense
+	// series fill gaps client-side.
+	DailyMacros(ctx context.Context, userID string, since, until time.Time, loc *time.Location) ([]DailyMacros, error)
 
 	// --- Recipes ---------------------------------------------------
 

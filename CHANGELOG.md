@@ -1,3 +1,10 @@
+# [0.34.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.33.1...v0.34.0) (2026-06-04)
+
+
+### Features
+
+* **api:** bodyweight goal endpoints + PUT /bodyweight/{id} ([#5](https://github.com/Prog-Strength/prog-strength-api/issues/5)) ([f8c7a00](https://github.com/Prog-Strength/prog-strength-api/commit/f8c7a00e5974b77433d9c2ba6b38df32c70c12fb))
+
 ## [0.33.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.33.0...v0.33.1) (2026-06-03)
 
 

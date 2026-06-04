@@ -12,11 +12,9 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// Handler serves /bodyweight. CRUD is intentionally narrow:
-// POST creates, GET lists, DELETE soft-deletes. No PUT — the SOW
-// makes corrections a delete + recreate flow so the trend chart's
-// audit trail stays clean rather than allowing silent edits to past
-// readings.
+// Handler serves /bodyweight: POST creates, GET lists, PUT edits, and
+// DELETE soft-deletes a reading. PUT overlays only the supplied fields
+// onto the existing row so corrections stay scoped to what changed.
 type Handler struct {
 	repo     Repository
 	userRepo user.Repository
@@ -33,7 +31,15 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Route("/bodyweight", func(r chi.Router) {
 		r.Get("/", h.list)
 		r.Post("/", h.create)
+		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
+	})
+	// Per-user bodyweight goal. Lives on /me/... to match the
+	// macro-goals convention (one row per user, no listing,
+	// set-replacement semantics).
+	r.Route("/me/bodyweight-goal", func(r chi.Router) {
+		r.Get("/", h.getMyBodyweightGoal)
+		r.Put("/", h.putMyBodyweightGoal)
 	})
 }
 
@@ -145,6 +151,77 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toDTO(e))
 	}
 	httpresp.OK(w, "listed bodyweight entries", out)
+}
+
+type updateRequest struct {
+	Weight     *float64   `json:"weight"`
+	Unit       *string    `json:"unit"`
+	MeasuredAt *time.Time `json:"measured_at"`
+}
+
+// update handles PUT /bodyweight/{id}. Partial update: look up the
+// existing reading, overlay only the fields the request supplied, then
+// persist. Validation of supplied fields produces clean 400s; ID,
+// UserID, and CreatedAt are always preserved from the existing row.
+func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	entryID := chi.URLParam(r, "id")
+	if entryID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "bodyweight entry id is required")
+		return
+	}
+	var req updateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	existing, err := h.repo.Get(r.Context(), userID, entryID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "bodyweight entry not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get bodyweight entry", err)
+		return
+	}
+
+	updated := *existing
+	if req.Weight != nil {
+		if *req.Weight <= 0 {
+			httpresp.Error(w, http.StatusBadRequest, "weight must be positive")
+			return
+		}
+		updated.Weight = *req.Weight
+	}
+	if req.Unit != nil {
+		if !user.WeightUnit(*req.Unit).Valid() {
+			httpresp.Error(w, http.StatusBadRequest, "unit must be 'lb' or 'kg'")
+			return
+		}
+		updated.Unit = user.WeightUnit(*req.Unit)
+	}
+	if req.MeasuredAt != nil {
+		updated.MeasuredAt = req.MeasuredAt.UTC()
+	}
+
+	if err := h.repo.UpdateEntry(r.Context(), &updated); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "bodyweight entry not found")
+			return
+		}
+		if isValidationError(err) {
+			httpresp.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "update bodyweight entry", err)
+		return
+	}
+	httpresp.OK(w, "updated bodyweight entry", toDTO(updated))
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {

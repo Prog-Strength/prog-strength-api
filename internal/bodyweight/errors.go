@@ -18,6 +18,11 @@ var (
 	// rationale as ErrWeightNonPositive — surface as 400, not 500.
 	ErrInvalidUnit = errors.New("bodyweight: unit must be 'lb' or 'kg'")
 
+	// ErrWeightTooLarge is returned for a goal weight above MaxGoalWeight.
+	// Schema CHECK enforces this as well; the handler-side validation
+	// gives the user a clean 400.
+	ErrWeightTooLarge = errors.New("weight must be <= 2000")
+
 	// ErrMeasuredAtRequired is returned when measured_at is the zero
 	// time. The handler accepts an optional client-supplied value and
 	// defaults to now when missing, so callers should never hit this.

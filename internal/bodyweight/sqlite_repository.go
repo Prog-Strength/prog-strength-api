@@ -109,6 +109,75 @@ func (r *SQLiteRepository) Delete(ctx context.Context, userID, entryID string) e
 	return nil
 }
 
+func (r *SQLiteRepository) UpdateEntry(ctx context.Context, e *Entry) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE bodyweight_entries
+		SET weight = ?, unit = ?, measured_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, e.Weight, string(e.Unit), e.MeasuredAt, e.ID, e.UserID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetBodyweightGoal returns the user's goal, collapsing a missing row to
+// a zero-valued Goal with nil timestamps (the "never set" state). See the
+// Repository interface comment; mirrors nutrition.GetMacroGoals.
+func (r *SQLiteRepository) GetBodyweightGoal(ctx context.Context, userID string) (Goal, error) {
+	var (
+		g                    Goal
+		unitStr              string
+		createdAt, updatedAt time.Time
+	)
+	err := r.db.QueryRowContext(ctx, `
+		SELECT user_id, weight, unit, created_at, updated_at
+		FROM user_bodyweight_goal
+		WHERE user_id = ?
+	`, userID).Scan(&g.UserID, &g.Weight, &unitStr, &createdAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return Goal{UserID: userID}, nil
+	}
+	if err != nil {
+		return Goal{}, err
+	}
+	g.Unit = user.WeightUnit(unitStr)
+	g.CreatedAt = &createdAt
+	g.UpdatedAt = &updatedAt
+	return g, nil
+}
+
+// UpsertBodyweightGoal INSERTs the user's first goal row or UPDATEs the
+// existing one in a single statement. ON CONFLICT keeps it race-free vs.
+// get-then-write. now is passed for both created_at and updated_at on
+// insert; created_at is preserved on conflict because the UPDATE clause
+// doesn't touch it. Re-reads so the response carries real timestamps.
+func (r *SQLiteRepository) UpsertBodyweightGoal(ctx context.Context, g Goal, now time.Time) (Goal, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO user_bodyweight_goal (
+			user_id, weight, unit, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET
+			weight     = excluded.weight,
+			unit       = excluded.unit,
+			updated_at = excluded.updated_at
+	`, g.UserID, g.Weight, string(g.Unit), now, now)
+	if err != nil {
+		return Goal{}, err
+	}
+	return r.GetBodyweightGoal(ctx, g.UserID)
+}
+
 // scanner is satisfied by *sql.Row and *sql.Rows; lets the same scan
 // path service both single-row Get and multi-row List loops.
 type scanner interface {

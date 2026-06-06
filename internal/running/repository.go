@@ -33,6 +33,13 @@ type Repository interface {
 	// are returned (keyset pagination). Trackpoints are not loaded.
 	List(ctx context.Context, userID string, limit int, before *time.Time) ([]Session, error)
 
+	// ListInRange returns every live session whose start_time falls in the
+	// half-open interval [since, until), newest-first. Either bound may be
+	// nil to mean "open-ended on that side." This is the calendar's
+	// month-view path; no cursor is returned since the bounds already cap
+	// the result. Trackpoints are not loaded.
+	ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Session, error)
+
 	// Get returns one live session WITH its Trackpoints ordered by
 	// sequence. Returns ErrNotFound when the session is missing,
 	// soft-deleted, or owned by another user.

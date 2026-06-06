@@ -161,6 +161,41 @@ func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, b
 	return out, rows.Err()
 }
 
+func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Session, error) {
+	args := []any{userID}
+	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
+	if since != nil {
+		clauses = append(clauses, "start_time >= ?")
+		args = append(args, *since)
+	}
+	if until != nil {
+		// Half-open interval — a session at exactly `until` belongs to
+		// the next window (callers chain adjacent month boundaries).
+		clauses = append(clauses, "start_time < ?")
+		args = append(args, *until)
+	}
+	q := `
+		SELECT ` + sessionColumns + `
+		FROM running_sessions
+		WHERE ` + strings.Join(clauses, " AND ") + `
+		ORDER BY start_time DESC`
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Session
+	for rows.Next() {
+		s, err := scanSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
 func (r *SQLiteRepository) Get(ctx context.Context, userID, sessionID string) (*Session, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+sessionColumns+`

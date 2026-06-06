@@ -243,6 +243,43 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Two mutually exclusive query patterns share this endpoint:
+	//   - cursor (limit, before): newest-first page, returns next_before
+	//   - range  (since, until):  half-open window [since, until), no cursor
+	// The calendar's month-view uses range; the run list uses cursor.
+	hasSince := r.URL.Query().Get("since") != ""
+	hasUntil := r.URL.Query().Get("until") != ""
+	hasBefore := r.URL.Query().Get("before") != ""
+	hasLimit := r.URL.Query().Get("limit") != ""
+	if (hasSince || hasUntil) && (hasBefore || hasLimit) {
+		httpresp.Error(w, http.StatusBadRequest, "since/until cannot be combined with limit/before")
+		return
+	}
+
+	if hasSince || hasUntil {
+		since, err := parseOptionalTimeParam(r, "since")
+		if err != nil {
+			httpresp.Error(w, http.StatusBadRequest, "since must be an RFC3339 timestamp")
+			return
+		}
+		until, err := parseOptionalTimeParam(r, "until")
+		if err != nil {
+			httpresp.Error(w, http.StatusBadRequest, "until must be an RFC3339 timestamp")
+			return
+		}
+		sessions, err := h.repo.ListInRange(r.Context(), userID, since, until)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "list running sessions in range", err)
+			return
+		}
+		out := make([]sessionDTO, 0, len(sessions))
+		for _, s := range sessions {
+			out = append(out, toSessionDTO(s, false))
+		}
+		httpresp.OK(w, "listed running sessions", listResponse{Sessions: out, NextBefore: nil})
+		return
+	}
+
 	limit := listLimitDefault
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -287,6 +324,21 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresp.OK(w, "listed running sessions", listResponse{Sessions: out, NextBefore: nextBefore})
+}
+
+// parseOptionalTimeParam returns nil when the param is absent or empty,
+// the parsed RFC3339 time when present, or an error when present but
+// malformed. Keeps the listSessions branches readable.
+func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {

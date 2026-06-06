@@ -303,6 +303,64 @@ func TestListPagination(t *testing.T) {
 	}
 }
 
+// --- list date-range (since/until) ---------------------------------
+
+func TestListSinceUntil(t *testing.T) {
+	h, _, repo := newTestHandler()
+	// Seed five sessions across three calendar months. The calendar's
+	// month-view query has the shape since=<monthStart>&until=<nextMonthStart>;
+	// we assert that only the sessions whose start_time falls inside the
+	// half-open interval [since, until) come back, regardless of position.
+	starts := []time.Time{
+		time.Date(2026, 2, 27, 7, 0, 0, 0, time.UTC), // before range
+		time.Date(2026, 3, 1, 6, 0, 0, 0, time.UTC),  // inside (lower edge, inclusive)
+		time.Date(2026, 3, 15, 8, 0, 0, 0, time.UTC), // inside
+		time.Date(2026, 3, 31, 23, 0, 0, 0, time.UTC),// inside (top of month)
+		time.Date(2026, 4, 1, 6, 0, 0, 0, time.UTC),  // after range (upper edge, exclusive)
+	}
+	for i, st := range starts {
+		s := &Session{
+			UserID:           testUserID,
+			GarminActivityID: "range-" + string(rune('a'+i)),
+			StartTime:        st,
+			DistanceMeters:   1000,
+			DurationSeconds:  300,
+		}
+		if err := repo.Create(context.Background(), s, []byte("<tcx/>")); err != nil {
+			t.Fatalf("seed %d: %v", i, err)
+		}
+	}
+
+	url := "/running/sessions?since=2026-03-01T00:00:00Z&until=2026-04-01T00:00:00Z"
+	req := httptest.NewRequest("GET", url, nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.listSessions(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env listEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, want := len(env.Data.Sessions), 3; got != want {
+		t.Fatalf("range result count = %d, want %d (March-only)", got, want)
+	}
+	// Range queries return a complete result; no cursor is meaningful.
+	if env.Data.NextBefore != nil {
+		t.Errorf("range query returned a next_before cursor; range results are complete")
+	}
+
+	// Mixing range params with cursor params is a programmer error; reject.
+	mix := httptest.NewRequest("GET", url+"&before=2026-03-15T00:00:00Z", nil)
+	mix = mix.WithContext(authctx.WithUserID(mix.Context(), testUserID))
+	mw := httptest.NewRecorder()
+	h.listSessions(mw, mix)
+	if mw.Code != http.StatusBadRequest {
+		t.Errorf("mixed since+before status = %d, want 400", mw.Code)
+	}
+}
+
 // --- rename --------------------------------------------------------
 
 func TestRenameHandler(t *testing.T) {

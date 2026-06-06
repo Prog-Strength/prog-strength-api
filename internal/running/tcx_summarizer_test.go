@@ -144,6 +144,95 @@ func TestSummarize_MarathonDownsampling(t *testing.T) {
 	}
 }
 
+func TestSummarize_PaceFilterStationaryStart(t *testing.T) {
+	// A real-world TCX often starts with the watch recording before the user
+	// actually moves: GPS-fix wandering produces tiny sub-meter distance
+	// deltas at 1 Hz, which translate to absurd minute-per-km values that
+	// dominate the chart's Y range. The filter nulls out kept-point pace
+	// when the segment's instantaneous speed is below paceFilterMinSpeedMps
+	// (0.5 m/s ≈ 53:36 min/mile), well below any deliberate walking pace.
+	//
+	// The fixture is 30 s of GPS noise at 0.1 m/s followed by 270 s of
+	// jogging at 3 m/s, all at 1 Hz so stride=1 and every raw point is
+	// kept. Kept points in the noise region must come back with nil pace;
+	// kept points in the jog region must carry a sensible pace.
+	data := buildStationaryStartTCX(30, 0.1, 270, 3.0)
+	p, err := parseTCX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	s := summarize(p)
+
+	if len(s.Trackpoints) < 100 {
+		t.Fatalf("expected stride=1 to keep ~300 points, got %d", len(s.Trackpoints))
+	}
+
+	// Index 0 has no prior segment — pace is nil by existing convention,
+	// not by the filter. Indices 1..29 sit inside the GPS-noise span and
+	// must come back filtered. Indices well past 30 sit in the jog region
+	// and must carry a finite pace.
+	for i := 1; i < 30; i++ {
+		if s.Trackpoints[i].PaceSecPerKm != nil {
+			t.Errorf("trackpoint %d in stationary span has pace=%.2f, want nil",
+				i, *s.Trackpoints[i].PaceSecPerKm)
+		}
+	}
+	// A handful of well-into-the-jog samples — they should ALL carry a
+	// reasonable jogging pace (~333 s/km for 3 m/s).
+	for _, i := range []int{80, 150, 250} {
+		got := s.Trackpoints[i].PaceSecPerKm
+		if got == nil {
+			t.Errorf("trackpoint %d in jog span has nil pace, want ~333 s/km", i)
+			continue
+		}
+		if *got < 300 || *got > 380 {
+			t.Errorf("trackpoint %d pace = %.2f, want ~333 s/km (3 m/s)", i, *got)
+		}
+	}
+}
+
+// buildStationaryStartTCX emits a deterministic Running TCX whose first
+// stationarySamples points crawl at slowMps m/s (GPS noise on a still
+// watch) and whose next runSamples points run at fastMps m/s. All at 1 Hz.
+// Used to verify the pace outlier filter without committing a fixture.
+func buildStationaryStartTCX(stationarySamples int, slowMps float64, runSamples int, fastMps float64) []byte {
+	start := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
+	total := stationarySamples + runSamples
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">` + "\n")
+	b.WriteString("  <Activities>\n")
+	b.WriteString(`    <Activity Sport="Running">` + "\n")
+	b.WriteString("      <Id>stationary-start-001</Id>\n")
+	b.WriteString(`      <Lap StartTime="2026-01-02T08:00:00Z">` + "\n")
+	fmt.Fprintf(&b, "        <TotalTimeSeconds>%d</TotalTimeSeconds>\n", total-1)
+	finalDist := float64(stationarySamples-1)*slowMps + float64(runSamples)*fastMps
+	fmt.Fprintf(&b, "        <DistanceMeters>%.2f</DistanceMeters>\n", finalDist)
+	b.WriteString("        <Track>\n")
+	dist := 0.0
+	for i := 0; i < total; i++ {
+		if i > 0 {
+			step := slowMps
+			if i >= stationarySamples {
+				step = fastMps
+			}
+			dist += step
+		}
+		ts := start.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters></Trackpoint>\n", ts, dist)
+	}
+	b.WriteString("        </Track>\n")
+	b.WriteString("      </Lap>\n")
+	b.WriteString("    </Activity>\n")
+	b.WriteString("  </Activities>\n")
+	b.WriteString("</TrainingCenterDatabase>\n")
+	return []byte(b.String())
+}
+
 // buildMarathonTCX emits a deterministic Running TCX with n points evenly
 // spaced over totalDist meters at 1 Hz. Kept minimal: no HR/altitude, just
 // enough to exercise stride math.

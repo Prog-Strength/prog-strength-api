@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Running">
+      <Id>empty-001</Id>
+      <Notes>Morning Run</Notes>
+      <Lap StartTime="2026-01-02T08:00:00Z">
+        <TotalTimeSeconds>2.0</TotalTimeSeconds>
+        <DistanceMeters>0.00</DistanceMeters>
+        <Track>
+        <Trackpoint>
+          <Time>2026-01-02T08:00:00Z</Time>
+          <DistanceMeters>0.00</DistanceMeters>
+          <HeartRateBpm><Value>120</Value></HeartRateBpm>
+        </Trackpoint>
+        <Trackpoint>
+          <Time>2026-01-02T08:00:01Z</Time>
+          <DistanceMeters>0.00</DistanceMeters>
+          <HeartRateBpm><Value>121</Value></HeartRateBpm>
+        </Trackpoint>
+        <Trackpoint>
+          <Time>2026-01-02T08:00:02Z</Time>
+          <DistanceMeters>0.00</DistanceMeters>
+          <HeartRateBpm><Value>122</Value></HeartRateBpm>
+        </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>

@@ -1,3 +1,10 @@
+# [0.36.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.35.0...v0.36.0) (2026-06-06)
+
+
+### Features
+
+* **api:** record had_image telemetry on agent turns ([#7](https://github.com/Prog-Strength/prog-strength-api/issues/7)) ([94c5aa1](https://github.com/Prog-Strength/prog-strength-api/commit/94c5aa1481e83d52943f40be31c66cb334ac039e))
+
 # [0.35.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.34.0...v0.35.0) (2026-06-06)
 
 

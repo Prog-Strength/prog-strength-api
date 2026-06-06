@@ -145,6 +145,41 @@ func TestCreate_DuplicateGarminActivity(t *testing.T) {
 	}
 }
 
+func TestCreate_ReimportAfterSoftDelete(t *testing.T) {
+	// The dedup constraint should only fire on LIVE rows. A user who
+	// deletes a run and then re-imports the same TCX (e.g. to pick up an
+	// algorithm change in the summarizer) must be able to do so — the
+	// soft-deleted row is preserved for audit but no longer blocks the
+	// activity slot.
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	s1 := newSession("u1", "reimport", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	if err := repo.Create(ctx, s1, []byte("a")); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	if err := repo.SoftDelete(ctx, "u1", s1.ID); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+
+	s2 := newSession("u1", "reimport", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	if err := repo.Create(ctx, s2, []byte("b")); err != nil {
+		t.Fatalf("re-import after soft-delete should succeed, got %v", err)
+	}
+	if s2.ID == "" || s2.ID == s1.ID {
+		t.Errorf("re-imported session should get a fresh ID; got s1=%q s2=%q", s1.ID, s2.ID)
+	}
+
+	// A second re-import while s2 is still live should still 409 — the
+	// constraint is "no two LIVE rows share an activity ID," not "any
+	// row can be re-imported any time."
+	s3 := newSession("u1", "reimport", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	if err := repo.Create(ctx, s3, []byte("c")); !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("re-import while a live row exists must still 409, got %v", err)
+	}
+}
+
 func TestCreate_ArchiverFailureRollsBack(t *testing.T) {
 	t.Parallel()
 	repo, arch := newRepo(t)

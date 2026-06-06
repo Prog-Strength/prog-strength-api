@@ -120,25 +120,58 @@ func TestLogEntry_ExactlyOneReferenceEnforced(t *testing.T) {
 	repo := NewMemoryRepository()
 	ctx := context.Background()
 
-	// Neither reference set.
-	err := repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
-		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
-		Meal: MealBreakfast,
-	})
-	if !errors.Is(err, ErrLogEntryReferenceRequired) {
-		t.Errorf("neither set: want ErrLogEntryReferenceRequired, got %v", err)
-	}
-
-	// Both references set.
 	pantryID := "p1"
 	recipeID := "r1"
-	err = repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
-		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
-		PantryItemID: &pantryID, RecipeID: &recipeID,
-		Meal: MealBreakfast,
-	})
-	if !errors.Is(err, ErrLogEntryReferenceRequired) {
-		t.Errorf("both set: want ErrLogEntryReferenceRequired, got %v", err)
+	name := "Chipotle chicken bowl"
+
+	// base returns a fresh entry with the common required fields set.
+	// Each case overrides the source pointers.
+	base := func() *NutritionLogEntry {
+		return &NutritionLogEntry{
+			UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
+			Calories: 850, ProteinG: 45, FatG: 30, CarbsG: 90,
+			Meal: MealBreakfast,
+		}
+	}
+
+	// Exactly one source set — all three valid shapes succeed.
+	valid := []struct {
+		name  string
+		apply func(e *NutritionLogEntry)
+	}{
+		{"pantry-only", func(e *NutritionLogEntry) { e.PantryItemID = &pantryID }},
+		{"recipe-only", func(e *NutritionLogEntry) { e.RecipeID = &recipeID }},
+		{"custom-only", func(e *NutritionLogEntry) { e.CustomMealName = &name }},
+	}
+	for _, tc := range valid {
+		e := base()
+		tc.apply(e)
+		if err := repo.CreateNutritionLogEntry(ctx, e); err != nil {
+			t.Errorf("%s: want success, got %v", tc.name, err)
+		}
+	}
+
+	// Zero, two, or three sources set — every shape is rejected.
+	invalid := []struct {
+		name  string
+		apply func(e *NutritionLogEntry)
+	}{
+		{"none", func(e *NutritionLogEntry) {}},
+		{"pantry+recipe", func(e *NutritionLogEntry) { e.PantryItemID = &pantryID; e.RecipeID = &recipeID }},
+		{"pantry+custom", func(e *NutritionLogEntry) { e.PantryItemID = &pantryID; e.CustomMealName = &name }},
+		{"recipe+custom", func(e *NutritionLogEntry) { e.RecipeID = &recipeID; e.CustomMealName = &name }},
+		{"all-three", func(e *NutritionLogEntry) {
+			e.PantryItemID = &pantryID
+			e.RecipeID = &recipeID
+			e.CustomMealName = &name
+		}},
+	}
+	for _, tc := range invalid {
+		e := base()
+		tc.apply(e)
+		if err := repo.CreateNutritionLogEntry(ctx, e); !errors.Is(err, ErrLogEntryReferenceRequired) {
+			t.Errorf("%s: want ErrLogEntryReferenceRequired, got %v", tc.name, err)
+		}
 	}
 }
 

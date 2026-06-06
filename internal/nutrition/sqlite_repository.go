@@ -174,8 +174,8 @@ type scanner interface {
 
 func scanPantry(s scanner) (*PantryItem, error) {
 	var (
-		p           PantryItem
-		deletedAt   sql.NullTime
+		p         PantryItem
+		deletedAt sql.NullTime
 	)
 	if err := s.Scan(
 		&p.ID, &p.UserID, &p.Name,
@@ -198,7 +198,7 @@ func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 	if e.Quantity <= 0 {
 		return ErrQuantityNonPositive
 	}
-	if !exactlyOneRef(e) {
+	if !exactlyOneSource(e) {
 		return ErrLogEntryReferenceRequired
 	}
 	if !e.Meal.Valid() {
@@ -212,12 +212,12 @@ func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO nutrition_log_entries (
 			id, user_id, consumed_at,
-			pantry_item_id, recipe_id, quantity,
+			pantry_item_id, recipe_id, custom_meal_name, quantity,
 			calories, protein_g, fat_g, carbs_g,
 			meal, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, e.ID, e.UserID, e.ConsumedAt,
-		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
+		nullableString(e.PantryItemID), nullableString(e.RecipeID), nullableString(e.CustomMealName), e.Quantity,
 		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
 		string(e.Meal), e.CreatedAt)
 	return err
@@ -226,7 +226,7 @@ func (r *SQLiteRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 func (r *SQLiteRepository) GetNutritionLogEntry(ctx context.Context, userID, entryID string) (*NutritionLogEntry, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, user_id, consumed_at,
-		       pantry_item_id, recipe_id, quantity,
+		       pantry_item_id, recipe_id, custom_meal_name, quantity,
 		       calories, protein_g, fat_g, carbs_g,
 		       meal, created_at, deleted_at
 		FROM nutrition_log_entries
@@ -256,7 +256,7 @@ func (r *SQLiteRepository) ListNutritionLogEntries(ctx context.Context, userID s
 	}
 	q := `
 		SELECT id, user_id, consumed_at,
-		       pantry_item_id, recipe_id, quantity,
+		       pantry_item_id, recipe_id, custom_meal_name, quantity,
 		       calories, protein_g, fat_g, carbs_g,
 		       meal, created_at, deleted_at
 		FROM nutrition_log_entries
@@ -284,7 +284,7 @@ func (r *SQLiteRepository) UpdateNutritionLogEntry(ctx context.Context, e *Nutri
 	if e.Quantity <= 0 {
 		return ErrQuantityNonPositive
 	}
-	if !exactlyOneRef(e) {
+	if !exactlyOneSource(e) {
 		return ErrLogEntryReferenceRequired
 	}
 	if !e.Meal.Valid() {
@@ -293,12 +293,12 @@ func (r *SQLiteRepository) UpdateNutritionLogEntry(ctx context.Context, e *Nutri
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE nutrition_log_entries
 		SET consumed_at = ?,
-		    pantry_item_id = ?, recipe_id = ?, quantity = ?,
+		    pantry_item_id = ?, recipe_id = ?, custom_meal_name = ?, quantity = ?,
 		    calories = ?, protein_g = ?, fat_g = ?, carbs_g = ?,
 		    meal = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, e.ConsumedAt,
-		nullableString(e.PantryItemID), nullableString(e.RecipeID), e.Quantity,
+		nullableString(e.PantryItemID), nullableString(e.RecipeID), nullableString(e.CustomMealName), e.Quantity,
 		e.Calories, e.ProteinG, e.FatG, e.CarbsG,
 		string(e.Meal),
 		e.ID, e.UserID)
@@ -397,15 +397,16 @@ func (r *SQLiteRepository) DailyMacros(ctx context.Context, userID string, since
 
 func scanLogEntry(s scanner) (*NutritionLogEntry, error) {
 	var (
-		e            NutritionLogEntry
-		pantryItemID sql.NullString
-		recipeID     sql.NullString
-		meal         string
-		deletedAt    sql.NullTime
+		e              NutritionLogEntry
+		pantryItemID   sql.NullString
+		recipeID       sql.NullString
+		customMealName sql.NullString
+		meal           string
+		deletedAt      sql.NullTime
 	)
 	if err := s.Scan(
 		&e.ID, &e.UserID, &e.ConsumedAt,
-		&pantryItemID, &recipeID, &e.Quantity,
+		&pantryItemID, &recipeID, &customMealName, &e.Quantity,
 		&e.Calories, &e.ProteinG, &e.FatG, &e.CarbsG,
 		&meal, &e.CreatedAt, &deletedAt,
 	); err != nil {
@@ -418,6 +419,10 @@ func scanLogEntry(s scanner) (*NutritionLogEntry, error) {
 	if recipeID.Valid {
 		s := recipeID.String
 		e.RecipeID = &s
+	}
+	if customMealName.Valid {
+		s := customMealName.String
+		e.CustomMealName = &s
 	}
 	e.Meal = MealType(meal)
 	if deletedAt.Valid {

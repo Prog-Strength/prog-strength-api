@@ -1,3 +1,10 @@
+## [0.38.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.0...v0.38.1) (2026-06-06)
+
+
+### Bug Fixes
+
+* **running:** allow re-import of a deleted run ([#11](https://github.com/Prog-Strength/prog-strength-api/issues/11)) ([c31d224](https://github.com/Prog-Strength/prog-strength-api/commit/c31d22466e32b0360bca03408722bd5057f2897a))
+
 # [0.38.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.37.0...v0.38.0) (2026-06-06)
 
 

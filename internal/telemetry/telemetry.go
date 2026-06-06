@@ -47,7 +47,10 @@ type AgentTurn struct {
 	// composes the prompt and runs the turn — degraded enrichment is
 	// silent — but this flag lets the dashboard surface the rate.
 	IntentPrefetchFailed bool
-	StartedAt            time.Time
+	// True when the user's turn carried an image content block (the
+	// photo-meal-logging on-ramp); lets us measure vision-turn volume.
+	HadImage  bool
+	StartedAt time.Time
 	EndedAt    time.Time
 	CreatedAt  time.Time
 }

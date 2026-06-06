@@ -27,7 +27,8 @@ func TestTurnHandler_PersistsIntent(t *testing.T) {
 		"ended_at":   "2026-06-02T00:00:01Z",
 		"intent": "log_nutrition",
 		"intent_prefetch_duration_ms": 87,
-		"intent_prefetch_failed": false
+		"intent_prefetch_failed": false,
+		"had_image": true
 	}`)
 	req := httptest.NewRequest("POST", "/internal/telemetry/turns", body)
 	w := httptest.NewRecorder()
@@ -43,16 +44,57 @@ func TestTurnHandler_PersistsIntent(t *testing.T) {
 		gotIntent           string
 		gotPrefetchDuration int
 		gotPrefetchFailed   int
+		gotHadImage         int
 	)
 	err := repo.db.QueryRow(
-		`SELECT intent, intent_prefetch_duration_ms, intent_prefetch_failed
+		`SELECT intent, intent_prefetch_duration_ms, intent_prefetch_failed, had_image
 		   FROM agent_turns WHERE id = ?`, "turn-1",
-	).Scan(&gotIntent, &gotPrefetchDuration, &gotPrefetchFailed)
+	).Scan(&gotIntent, &gotPrefetchDuration, &gotPrefetchFailed, &gotHadImage)
 	if err != nil {
 		t.Fatalf("readback: %v", err)
 	}
-	if gotIntent != "log_nutrition" || gotPrefetchDuration != 87 || gotPrefetchFailed != 0 {
-		t.Fatalf("turn not persisted with intent fields: intent=%q dur=%d failed=%d", gotIntent, gotPrefetchDuration, gotPrefetchFailed)
+	if gotIntent != "log_nutrition" || gotPrefetchDuration != 87 || gotPrefetchFailed != 0 || gotHadImage != 1 {
+		t.Fatalf("turn not persisted with intent fields: intent=%q dur=%d failed=%d had_image=%d", gotIntent, gotPrefetchDuration, gotPrefetchFailed, gotHadImage)
+	}
+}
+
+// TestTurnHandler_HadImageDefaultsFalse confirms a body that omits
+// had_image (an older agent client) persists 0 via the Go zero value
+// and column default rather than 400ing.
+func TestTurnHandler_HadImageDefaultsFalse(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+	h := NewHandler(repo)
+
+	body := strings.NewReader(`{
+		"id": "turn-noimg",
+		"user_id": "u-1",
+		"session_id": "s-1",
+		"model": "claude-haiku-4-5-20251001",
+		"routed_tier": "simple",
+		"router_model": "claude-haiku-4-5-20251001",
+		"router_latency_ms": 400,
+		"completion_reason": "end_turn",
+		"started_at": "2026-06-02T00:00:00Z",
+		"ended_at":   "2026-06-02T00:00:01Z",
+		"intent": "general"
+	}`)
+	req := httptest.NewRequest("POST", "/internal/telemetry/turns", body)
+	w := httptest.NewRecorder()
+
+	h.turn(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d want 201, body=%s", w.Code, w.Body.String())
+	}
+
+	var gotHadImage int
+	if err := repo.db.QueryRow(
+		`SELECT had_image FROM agent_turns WHERE id = ?`, "turn-noimg",
+	).Scan(&gotHadImage); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if gotHadImage != 0 {
+		t.Fatalf("had_image: got %d want 0", gotHadImage)
 	}
 }
 

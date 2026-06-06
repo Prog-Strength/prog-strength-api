@@ -1,3 +1,10 @@
+# [0.38.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.37.0...v0.38.0) (2026-06-06)
+
+
+### Features
+
+* **running:** pace outlier filter + date-range listing ([#10](https://github.com/Prog-Strength/prog-strength-api/issues/10)) ([cda4174](https://github.com/Prog-Strength/prog-strength-api/commit/cda41742bf9ff73a7c97324286ea6220a1ee2a1f))
+
 # [0.37.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.36.0...v0.37.0) (2026-06-06)
 
 

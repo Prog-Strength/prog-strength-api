@@ -1,3 +1,10 @@
+# [0.37.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.36.0...v0.37.0) (2026-06-06)
+
+
+### Features
+
+* **running:** Garmin TCX import, sessions, metrics (migration 013) ([#9](https://github.com/Prog-Strength/prog-strength-api/issues/9)) ([43e93bc](https://github.com/Prog-Strength/prog-strength-api/commit/43e93bcf903011f12245aef83f9728b5d4031783))
+
 # [0.36.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.35.0...v0.36.0) (2026-06-06)
 
 

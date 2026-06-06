@@ -264,6 +264,9 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName strin
 		Email:       email,
 		DisplayName: displayName,
 		WeightUnit:  user.WeightUnitPounds,
+		// distance_unit mirrors weight_unit: new accounts default to the
+		// US-centric unit (miles), matching the migration's backfill.
+		DistanceUnit: user.DistanceUnitMiles,
 	}
 	if err := h.users.Create(ctx, newUser); err != nil {
 		return nil, err

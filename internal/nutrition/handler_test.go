@@ -5,13 +5,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	_ "time/tzdata"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 )
+
+// logEnvelope mirrors the httpresp success shape for single-entry
+// responses (POST /custom, PUT /{id}) so handler tests can assert on
+// the returned entry.
+type logEnvelope struct {
+	Message string      `json:"message"`
+	Data    logEntryDTO `json:"data"`
+}
 
 // listEnvelope mirrors the httpresp success shape with the log-entry list
 // payload typed so handler tests can assert on returned entries.
@@ -44,6 +54,79 @@ func seedLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, con
 		t.Fatalf("seed: %v", err)
 	}
 	return e.ID
+}
+
+// seedCustomLogEntry inserts a custom-typed entry (CustomMealName set,
+// quantity 1) for user u1 and returns its ID.
+func seedCustomLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, name string, calories float64) string {
+	t.Helper()
+	n := name
+	e := &NutritionLogEntry{
+		UserID: "u1", ConsumedAt: time.Now().UTC(),
+		CustomMealName: &n, Quantity: 1,
+		Calories: calories,
+		Meal:     MealLunch,
+	}
+	if err := repo.CreateNutritionLogEntry(ctx, e); err != nil {
+		t.Fatalf("seed custom: %v", err)
+	}
+	return e.ID
+}
+
+// seedRecipeLogEntry inserts a recipe-backed entry for user u1 and
+// returns its ID. The recipe ID need not resolve: the PUT tests that use
+// it 400 on the custom-only field guard before any recipe lookup.
+func seedRecipeLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context) string {
+	t.Helper()
+	recipeID := "r1"
+	e := &NutritionLogEntry{
+		UserID: "u1", ConsumedAt: time.Now().UTC(),
+		RecipeID: &recipeID, Quantity: 1,
+		Calories: 500,
+		Meal:     MealDinner,
+	}
+	if err := repo.CreateNutritionLogEntry(ctx, e); err != nil {
+		t.Fatalf("seed recipe: %v", err)
+	}
+	return e.ID
+}
+
+// postCustom drives the createCustomLogEntry handler with the given JSON
+// body and userID-in-context.
+func postCustom(t *testing.T, repo *MemoryRepository, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/nutrition-log/custom", strings.NewReader(body))
+	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+	NewHandler(repo).createCustomLogEntry(w, req)
+	return w
+}
+
+// putLog drives the updateLogEntry handler against entry id with the
+// given JSON body and userID-in-context.
+func putLog(t *testing.T, repo *MemoryRepository, id, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("PUT", "/nutrition-log/"+id, strings.NewReader(body))
+	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
+	rc := chi.NewRouteContext()
+	rc.URLParams.Add("id", id)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rc))
+	w := httptest.NewRecorder()
+	NewHandler(repo).updateLogEntry(w, req)
+	return w
+}
+
+// decodeEntry asserts a 2xx and returns the single-entry payload.
+func decodeEntry(t *testing.T, w *httptest.ResponseRecorder, wantStatus int) logEntryDTO {
+	t.Helper()
+	if w.Code != wantStatus {
+		t.Fatalf("status: got %d want %d, body=%s", w.Code, wantStatus, w.Body.String())
+	}
+	var got logEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return got.Data
 }
 
 // listLog drives the listLogEntries handler with the given query string and
@@ -233,6 +316,113 @@ func assertBadRequest(t *testing.T, w *httptest.ResponseRecorder, wantMsg string
 	if got.Error != wantMsg {
 		t.Fatalf("error = %q, want %q", got.Error, wantMsg)
 	}
+}
+
+func TestCreateCustomLogEntry_HappyPath(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{"name":"  Chipotle bowl  ","calories":850,"protein_g":45,"fat_g":30,"carbs_g":80,"meal":"lunch"}`
+	w := postCustom(t, repo, body)
+	got := decodeEntry(t, w, http.StatusCreated)
+
+	if got.CustomMealName == nil || *got.CustomMealName != "Chipotle bowl" {
+		t.Fatalf("custom_meal_name = %v, want %q", got.CustomMealName, "Chipotle bowl")
+	}
+	if got.Calories != 850 || got.ProteinG != 45 || got.FatG != 30 || got.CarbsG != 80 {
+		t.Fatalf("macros not stored as-typed: %+v", got)
+	}
+	if got.Quantity != 1 {
+		t.Fatalf("quantity = %v, want 1", got.Quantity)
+	}
+	if got.Meal != "lunch" {
+		t.Fatalf("meal = %q, want lunch", got.Meal)
+	}
+	if got.PantryItemID != nil || got.RecipeID != nil {
+		t.Fatalf("expected no pantry/recipe source, got %+v", got)
+	}
+}
+
+func TestCreateCustomLogEntry_DefaultsConsumedAtToNow(t *testing.T) {
+	repo := NewMemoryRepository()
+	before := time.Now().UTC().Add(-time.Minute)
+	w := postCustom(t, repo, `{"name":"Snack","calories":100,"protein_g":1,"fat_g":2,"carbs_g":3,"meal":"snack"}`)
+	got := decodeEntry(t, w, http.StatusCreated)
+	if got.ConsumedAt.IsZero() {
+		t.Fatal("consumed_at is zero; expected a defaulted recent timestamp")
+	}
+	if got.ConsumedAt.Before(before) || got.ConsumedAt.After(time.Now().UTC().Add(time.Minute)) {
+		t.Fatalf("consumed_at = %v, want ~now", got.ConsumedAt)
+	}
+}
+
+func TestCreateCustomLogEntry_Validation(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{"blank name", `{"name":"   ","calories":1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"lunch"}`, "name is required"},
+		{"long name", `{"name":"` + strings.Repeat("a", 201) + `","calories":1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"lunch"}`, "name is too long"},
+		{"calories high", `{"name":"X","calories":100001,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"lunch"}`, "calories out of range"},
+		{"calories negative", `{"name":"X","calories":-1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"lunch"}`, "calories out of range"},
+		{"protein high", `{"name":"X","calories":1,"protein_g":10001,"fat_g":1,"carbs_g":1,"meal":"lunch"}`, "protein_g out of range"},
+		{"fat high", `{"name":"X","calories":1,"protein_g":1,"fat_g":10001,"carbs_g":1,"meal":"lunch"}`, "fat_g out of range"},
+		{"carbs high", `{"name":"X","calories":1,"protein_g":1,"fat_g":1,"carbs_g":10001,"meal":"lunch"}`, "carbs_g out of range"},
+		{"invalid meal", `{"name":"X","calories":1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"brunch"}`, ErrInvalidMeal.Error()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := postCustom(t, NewMemoryRepository(), tc.body)
+			assertBadRequest(t, w, tc.wantMsg)
+		})
+	}
+}
+
+func TestUpdateLogEntry_CustomNewName(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	id := seedCustomLogEntry(t, repo, ctx, "Old name", 500)
+
+	w := putLog(t, repo, id, `{"name":"  New name  "}`)
+	got := decodeEntry(t, w, http.StatusOK)
+	if got.CustomMealName == nil || *got.CustomMealName != "New name" {
+		t.Fatalf("custom_meal_name = %v, want %q", got.CustomMealName, "New name")
+	}
+	if got.Calories != 500 {
+		t.Fatalf("calories changed unexpectedly: %v", got.Calories)
+	}
+}
+
+func TestUpdateLogEntry_CustomNewMacros(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	id := seedCustomLogEntry(t, repo, ctx, "Meal", 500)
+
+	w := putLog(t, repo, id, `{"calories":640,"protein_g":50,"fat_g":20,"carbs_g":70}`)
+	got := decodeEntry(t, w, http.StatusOK)
+	if got.Calories != 640 || got.ProteinG != 50 || got.FatG != 20 || got.CarbsG != 70 {
+		t.Fatalf("macros not updated: %+v", got)
+	}
+	if got.CustomMealName == nil || *got.CustomMealName != "Meal" {
+		t.Fatalf("custom_meal_name should be preserved, got %v", got.CustomMealName)
+	}
+}
+
+func TestUpdateLogEntry_PantryWithNameRejected(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	id := seedLogEntry(t, repo, ctx, time.Now().UTC(), 200)
+
+	w := putLog(t, repo, id, `{"name":"Whatever"}`)
+	assertBadRequest(t, w, "name is only editable on custom meal entries")
+}
+
+func TestUpdateLogEntry_RecipeWithCaloriesRejected(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	id := seedRecipeLogEntry(t, repo, ctx)
+
+	w := putLog(t, repo, id, `{"calories":123}`)
+	assertBadRequest(t, w, "calories is only editable on custom meal entries")
 }
 
 func decodeList(t *testing.T, w *httptest.ResponseRecorder) []logEntryDTO {

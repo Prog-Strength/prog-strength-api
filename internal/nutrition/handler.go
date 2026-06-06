@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,6 +38,7 @@ func (h *Handler) Mount(r chi.Router) {
 		// Registered before /{id} so chi matches the literal segment
 		// rather than interpreting "daily" as a log entry ID.
 		r.Get("/daily", h.dailyMacros)
+		r.Post("/custom", h.createCustomLogEntry)
 		r.Get("/", h.listLogEntries)
 		r.Post("/", h.createLogEntry)
 		r.Get("/{id}", h.getLogEntry)
@@ -105,28 +107,32 @@ type logEntryDTO struct {
 	ConsumedAt   time.Time `json:"consumed_at"`
 	PantryItemID *string   `json:"pantry_item_id,omitempty"`
 	RecipeID     *string   `json:"recipe_id,omitempty"`
-	Quantity     float64   `json:"quantity"`
-	Calories     float64   `json:"calories"`
-	ProteinG     float64   `json:"protein_g"`
-	FatG         float64   `json:"fat_g"`
-	CarbsG       float64   `json:"carbs_g"`
-	Meal         string    `json:"meal"`
-	CreatedAt    time.Time `json:"created_at"`
+	// CustomMealName is null for pantry/recipe-backed rows. The key is
+	// always present (no omitempty) so clients can branch on it.
+	CustomMealName *string   `json:"custom_meal_name"`
+	Quantity       float64   `json:"quantity"`
+	Calories       float64   `json:"calories"`
+	ProteinG       float64   `json:"protein_g"`
+	FatG           float64   `json:"fat_g"`
+	CarbsG         float64   `json:"carbs_g"`
+	Meal           string    `json:"meal"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 func toLogDTO(e NutritionLogEntry) logEntryDTO {
 	return logEntryDTO{
-		ID:           e.ID,
-		ConsumedAt:   e.ConsumedAt,
-		PantryItemID: e.PantryItemID,
-		RecipeID:     e.RecipeID,
-		Quantity:     e.Quantity,
-		Calories:     e.Calories,
-		ProteinG:     e.ProteinG,
-		FatG:         e.FatG,
-		CarbsG:       e.CarbsG,
-		Meal:         string(e.Meal),
-		CreatedAt:    e.CreatedAt,
+		ID:             e.ID,
+		ConsumedAt:     e.ConsumedAt,
+		PantryItemID:   e.PantryItemID,
+		RecipeID:       e.RecipeID,
+		CustomMealName: e.CustomMealName,
+		Quantity:       e.Quantity,
+		Calories:       e.Calories,
+		ProteinG:       e.ProteinG,
+		FatG:           e.FatG,
+		CarbsG:         e.CarbsG,
+		Meal:           string(e.Meal),
+		CreatedAt:      e.CreatedAt,
 	}
 }
 
@@ -138,6 +144,26 @@ type logEntryRequest struct {
 	// Meal is required on create. Update accepts an empty string to
 	// signal "leave the existing meal in place."
 	Meal string `json:"meal"`
+	// Custom-only fields, valid on update against a custom-meal entry.
+	// updateLogEntry 400s if any of these is set against a pantry- or
+	// recipe-backed row, since those rows' macros derive from a source.
+	Name     *string  `json:"name,omitempty"`
+	Calories *float64 `json:"calories,omitempty"`
+	ProteinG *float64 `json:"protein_g,omitempty"`
+	FatG     *float64 `json:"fat_g,omitempty"`
+	CarbsG   *float64 `json:"carbs_g,omitempty"`
+}
+
+// customLogEntryRequest is the body for POST /nutrition-log/custom — a
+// one-off meal the user typed, not backed by a pantry item or recipe.
+type customLogEntryRequest struct {
+	Name       string     `json:"name"`
+	Calories   float64    `json:"calories"`
+	ProteinG   float64    `json:"protein_g"`
+	FatG       float64    `json:"fat_g"`
+	CarbsG     float64    `json:"carbs_g"`
+	Meal       string     `json:"meal"`
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
 }
 
 type dailyMacrosDTO struct {
@@ -370,6 +396,74 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 	httpresp.Created(w, "logged consumption", toLogDTO(*entry))
 }
 
+// createCustomLogEntry logs a one-off meal the user typed, not backed
+// by a pantry item or recipe. The macros land verbatim on the row's
+// denormalized columns (no source to derive from) and quantity is
+// fixed at 1 — the user types the totals they ate.
+func (h *Handler) createCustomLogEntry(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	var req customLogEntryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		httpresp.Error(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if len(name) > 200 {
+		httpresp.Error(w, http.StatusBadRequest, "name is too long")
+		return
+	}
+	if req.Calories < 0 || req.Calories > MaxCalories {
+		httpresp.Error(w, http.StatusBadRequest, "calories out of range")
+		return
+	}
+	for _, m := range []struct {
+		name string
+		val  float64
+	}{
+		{"protein_g", req.ProteinG},
+		{"fat_g", req.FatG},
+		{"carbs_g", req.CarbsG},
+	} {
+		if m.val < 0 || m.val > MaxMacroGrams {
+			httpresp.Error(w, http.StatusBadRequest, m.name+" out of range")
+			return
+		}
+	}
+	meal := MealType(req.Meal)
+	if !meal.Valid() {
+		httpresp.Error(w, http.StatusBadRequest, ErrInvalidMeal.Error())
+		return
+	}
+	consumedAt := time.Now().UTC()
+	if req.ConsumedAt != nil {
+		consumedAt = req.ConsumedAt.UTC()
+	}
+	entry := &NutritionLogEntry{
+		UserID:         userID,
+		ConsumedAt:     consumedAt,
+		CustomMealName: &name,
+		Quantity:       1,
+		Calories:       req.Calories,
+		ProteinG:       req.ProteinG,
+		FatG:           req.FatG,
+		CarbsG:         req.CarbsG,
+		Meal:           meal,
+	}
+	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
+		httpresp.ServerError(w, r.Context(), "create custom nutrition log entry", err)
+		return
+	}
+	httpresp.Created(w, "logged custom meal", toLogDTO(*entry))
+}
+
 func (h *Handler) listLogEntries(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -445,6 +539,28 @@ func (h *Handler) updateLogEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The custom-only fields (name + the four macros) are editable only
+	// on a custom-meal row. On a pantry/recipe-backed row those macros
+	// derive from the source, so reject the first offending field rather
+	// than silently dropping it.
+	if existing.CustomMealName == nil {
+		for _, f := range []struct {
+			name string
+			set  bool
+		}{
+			{"name", req.Name != nil},
+			{"calories", req.Calories != nil},
+			{"protein_g", req.ProteinG != nil},
+			{"fat_g", req.FatG != nil},
+			{"carbs_g", req.CarbsG != nil},
+		} {
+			if f.set {
+				httpresp.Error(w, http.StatusBadRequest, f.name+" is only editable on custom meal entries")
+				return
+			}
+		}
+	}
+
 	quantity := existing.Quantity
 	if req.Quantity > 0 {
 		quantity = req.Quantity
@@ -479,6 +595,53 @@ func (h *Handler) updateLogEntry(w http.ResponseWriter, r *http.Request) {
 		Meal:       meal,
 	}
 	switch {
+	case existing.CustomMealName != nil:
+		// Custom rows have no source to re-derive against — carry the
+		// existing name + macros forward and overwrite only the fields
+		// the request supplied (each range-checked the same way the
+		// POST /custom path validates).
+		entry.CustomMealName = existing.CustomMealName
+		entry.Calories = existing.Calories
+		entry.ProteinG = existing.ProteinG
+		entry.FatG = existing.FatG
+		entry.CarbsG = existing.CarbsG
+		if req.Name != nil {
+			name := strings.TrimSpace(*req.Name)
+			if name == "" {
+				httpresp.Error(w, http.StatusBadRequest, "name is required")
+				return
+			}
+			if len(name) > 200 {
+				httpresp.Error(w, http.StatusBadRequest, "name is too long")
+				return
+			}
+			entry.CustomMealName = &name
+		}
+		if req.Calories != nil {
+			if *req.Calories < 0 || *req.Calories > MaxCalories {
+				httpresp.Error(w, http.StatusBadRequest, "calories out of range")
+				return
+			}
+			entry.Calories = *req.Calories
+		}
+		for _, m := range []struct {
+			name string
+			val  *float64
+			dst  *float64
+		}{
+			{"protein_g", req.ProteinG, &entry.ProteinG},
+			{"fat_g", req.FatG, &entry.FatG},
+			{"carbs_g", req.CarbsG, &entry.CarbsG},
+		} {
+			if m.val == nil {
+				continue
+			}
+			if *m.val < 0 || *m.val > MaxMacroGrams {
+				httpresp.Error(w, http.StatusBadRequest, m.name+" out of range")
+				return
+			}
+			*m.dst = *m.val
+		}
 	case existing.PantryItemID != nil:
 		pantry, err := h.repo.GetPantryItem(r.Context(), userID, *existing.PantryItemID)
 		if err != nil {

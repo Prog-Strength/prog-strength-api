@@ -128,8 +128,8 @@ func (r *MemoryRepository) CreateNutritionLogEntry(ctx context.Context, e *Nutri
 	if e.Quantity <= 0 {
 		return ErrQuantityNonPositive
 	}
-	// Schema CHECK requires exactly one of pantry_item_id / recipe_id.
-	if !exactlyOneRef(e) {
+	// Schema CHECK requires exactly one of pantry_item_id / recipe_id / custom_meal_name.
+	if !exactlyOneSource(e) {
 		return ErrLogEntryReferenceRequired
 	}
 	if !e.Meal.Valid() {
@@ -188,7 +188,7 @@ func (r *MemoryRepository) UpdateNutritionLogEntry(ctx context.Context, e *Nutri
 	if e.Quantity <= 0 {
 		return ErrQuantityNonPositive
 	}
-	if !exactlyOneRef(e) {
+	if !exactlyOneSource(e) {
 		return ErrLogEntryReferenceRequired
 	}
 	if !e.Meal.Valid() {
@@ -270,12 +270,21 @@ func (r *MemoryRepository) DailyMacros(ctx context.Context, userID string, since
 	return out, nil
 }
 
-// exactlyOneRef returns true when the entry has exactly one of
-// PantryItemID and RecipeID set, mirroring the schema CHECK.
-func exactlyOneRef(e *NutritionLogEntry) bool {
-	hasPantry := e.PantryItemID != nil && *e.PantryItemID != ""
-	hasRecipe := e.RecipeID != nil && *e.RecipeID != ""
-	return hasPantry != hasRecipe
+// exactlyOneSource returns true when the entry has exactly one of
+// PantryItemID, RecipeID, or CustomMealName set, mirroring the schema
+// CHECK. An empty-string pointer counts as unset.
+func exactlyOneSource(e *NutritionLogEntry) bool {
+	n := 0
+	if e.PantryItemID != nil && *e.PantryItemID != "" {
+		n++
+	}
+	if e.RecipeID != nil && *e.RecipeID != "" {
+		n++
+	}
+	if e.CustomMealName != nil && *e.CustomMealName != "" {
+		n++
+	}
+	return n == 1
 }
 
 // --- Recipes -------------------------------------------------------

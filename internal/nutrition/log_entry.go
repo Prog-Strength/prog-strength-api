@@ -11,16 +11,18 @@ import "time"
 // nil until the recipes domain ships. The CHECK on the underlying
 // table enforces exactly-one regardless of which phase wrote the row.
 type NutritionLogEntry struct {
-	ID            string
-	UserID        string
-	ConsumedAt    time.Time
-	PantryItemID  *string
-	RecipeID      *string
-	Quantity      float64
-	Calories      float64
-	ProteinG      float64
-	FatG          float64
-	CarbsG        float64
+	ID           string
+	UserID       string
+	ConsumedAt   time.Time
+	PantryItemID *string
+	RecipeID     *string
+	// Non-nil iff this is a custom-typed meal.
+	CustomMealName *string
+	Quantity       float64
+	Calories       float64
+	ProteinG       float64
+	FatG           float64
+	CarbsG         float64
 	// Meal bucket the entry rolls into on the /nutrition UI. Set by
 	// the client at log time — see migration 007 for the schema-side
 	// default + CHECK constraint.

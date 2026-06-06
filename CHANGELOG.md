@@ -1,3 +1,10 @@
+# [0.35.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.34.0...v0.35.0) (2026-06-06)
+
+
+### Features
+
+* **api:** custom meal log entries (migration 012 + endpoint + PUT extension) ([#6](https://github.com/Prog-Strength/prog-strength-api/issues/6)) ([6ee9090](https://github.com/Prog-Strength/prog-strength-api/commit/6ee9090a18eeb9172f0a90883b5084fd36655584))
+
 # [0.34.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.33.1...v0.34.0) (2026-06-04)
 
 

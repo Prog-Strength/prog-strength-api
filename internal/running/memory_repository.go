@@ -102,6 +102,34 @@ func (r *MemoryRepository) List(ctx context.Context, userID string, limit int, b
 	return out, nil
 }
 
+func (r *MemoryRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Session, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []Session
+	for _, s := range r.sessions {
+		if s.UserID != userID || s.DeletedAt != nil {
+			continue
+		}
+		if since != nil && s.StartTime.Before(*since) {
+			continue
+		}
+		// Half-open: a session at exactly `until` belongs to the NEXT
+		// range, so callers can pass adjacent month boundaries without
+		// double-counting the midnight session.
+		if until != nil && !s.StartTime.Before(*until) {
+			continue
+		}
+		cp := *s
+		cp.Trackpoints = nil
+		out = append(out, cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].StartTime.After(out[j].StartTime)
+	})
+	return out, nil
+}
+
 func (r *MemoryRepository) Get(ctx context.Context, userID, id string) (*Session, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

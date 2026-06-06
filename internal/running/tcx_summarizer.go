@@ -7,6 +7,18 @@ import "math"
 // typical screen width.
 const maxTrackpoints = 300
 
+// paceFilterMinSpeedMps is the lower bound on instantaneous speed that
+// produces a real pace value on a downsampled trackpoint. Segments slower
+// than this are treated as stationary (warmup standing, GPS-fix wandering
+// before the start) and their pace is nulled out so the chart doesn't
+// render a multi-thousand-s/km spike that flattens the rest of the line.
+//
+// 0.5 m/s is ~33:20 min/km / ~53:36 min/mile — well below any plausible
+// walking pace (a 30 min/mile walker still moves at ~0.9 m/s), so the
+// filter only catches genuinely stationary periods, not slow walking
+// recoveries during interval workouts.
+const paceFilterMinSpeedMps = 0.5
+
 // summarize turns a validated parsedTCX into a Session (with its
 // downsampled Trackpoints) ready for the caller to stamp with
 // ID/UserID/TCXS3Key/timestamps. It assumes validate has already passed,
@@ -183,11 +195,15 @@ func downsample(raw []parsedTrackpoint, first parsedTrackpoint) []Trackpoint {
 			HeartRateBpm:    rp.HeartRateBpm,
 			ElevationMeters: rp.AltitudeMeters,
 		}
-		// Pace is nil for the first kept point (no prior segment) and when
-		// two kept points share a distance (would divide by zero).
+		// Pace is nil for the first kept point (no prior segment), when
+		// two kept points share a distance (would divide by zero), and
+		// when the segment's instantaneous speed falls below the
+		// stationary-filter threshold (see paceFilterMinSpeedMps).
 		if prev != nil {
-			if dKm := (rp.DistanceMeters - prev.DistanceMeters) / 1000; dKm > 0 {
-				pace := rp.Time.Sub(prev.Time).Seconds() / dKm
+			dMeters := rp.DistanceMeters - prev.DistanceMeters
+			dSeconds := rp.Time.Sub(prev.Time).Seconds()
+			if dMeters > 0 && dSeconds > 0 && dMeters/dSeconds >= paceFilterMinSpeedMps {
+				pace := dSeconds / (dMeters / 1000)
 				tp.PaceSecPerKm = &pace
 			}
 		}

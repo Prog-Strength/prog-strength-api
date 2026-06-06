@@ -79,6 +79,7 @@ type turnRequest struct {
 	Intent                   string  `json:"intent"`
 	IntentPrefetchDurationMs int     `json:"intent_prefetch_duration_ms"`
 	IntentPrefetchFailed     bool    `json:"intent_prefetch_failed"`
+	HadImage                 bool    `json:"had_image"`
 }
 
 func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
@@ -132,6 +133,7 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 		Intent:                   req.Intent,
 		IntentPrefetchDurationMs: req.IntentPrefetchDurationMs,
 		IntentPrefetchFailed:     req.IntentPrefetchFailed,
+		HadImage:                 req.HadImage,
 	}
 
 	if err := h.repo.InsertTurn(r.Context(), t); err != nil {

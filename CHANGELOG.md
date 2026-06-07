@@ -1,3 +1,10 @@
+## [0.38.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.1...v0.38.2) (2026-06-07)
+
+
+### Bug Fixes
+
+* **deploy:** forward TCX_BUCKET_NAME into prod .env ([#12](https://github.com/Prog-Strength/prog-strength-api/issues/12)) ([a76253c](https://github.com/Prog-Strength/prog-strength-api/commit/a76253cb8e4ded195fc32ca52e503f8bd2d67fbb))
+
 ## [0.38.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.0...v0.38.1) (2026-06-06)
 
 

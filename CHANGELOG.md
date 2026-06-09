@@ -1,3 +1,10 @@
+# [0.41.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.40.0...v0.41.0) (2026-06-09)
+
+
+### Features
+
+* **usage:** per-user daily usage cap — GET /me/usage + speak telemetry ([#16](https://github.com/Prog-Strength/prog-strength-api/issues/16)) ([ef2c610](https://github.com/Prog-Strength/prog-strength-api/commit/ef2c61062b52b50d7d1a9aca12c6ed65cb31839e))
+
 # [0.40.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.39.0...v0.40.0) (2026-06-09)
 
 

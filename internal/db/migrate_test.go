@@ -99,7 +99,7 @@ func TestMigrate012_CustomMealNameXOR(t *testing.T) {
 	}
 }
 
-// seedUser inserts a minimal user row so running_sessions / distance_unit
+// seedUser inserts a minimal user row so activities / distance_unit
 // tests have an owner to reference (user_id is not a FK, but the
 // distance_unit default and CHECK live on this table).
 func seedUser(t *testing.T, db *sql.DB, id string) {
@@ -112,33 +112,36 @@ func seedUser(t *testing.T, db *sql.DB, id string) {
 	}
 }
 
-// seedSession inserts a running_sessions row with the NOT NULL fields set.
-func seedSession(t *testing.T, db *sql.DB, id, userID, garminID string) {
+// seedActivity inserts an activities row with the NOT NULL fields set.
+// Pinned to manual_tcx + running so the post-015 schema is exercised on
+// the path the running domain still produces.
+func seedActivity(t *testing.T, db *sql.DB, id, userID, sourceActivityID string) {
 	t.Helper()
 	if _, err := db.Exec(`
-		INSERT INTO running_sessions (
-			id, user_id, garmin_activity_id, start_time,
-			distance_meters, duration_seconds, avg_pace_sec_per_km,
+		INSERT INTO activities (
+			id, user_id, activity_type, ingest_source, source_activity_id,
+			start_time, distance_meters, duration_seconds, avg_pace_sec_per_km,
 			tcx_s3_key, created_at
-		) VALUES (?, ?, ?, '2026-06-06T07:00:00Z', 10000, 3000, 300, ?, '2026-06-06T07:30:00Z')
-	`, id, userID, garminID, "runs/"+userID+"/"+id+".tcx"); err != nil {
-		t.Fatalf("seed session %s: %v", id, err)
+		) VALUES (?, ?, 'running', 'manual_tcx', ?, '2026-06-06T07:00:00Z', 10000, 3000, 300, ?, '2026-06-06T07:30:00Z')
+	`, id, userID, sourceActivityID, "user_id="+userID+"/activity_type=running/year=2026/month=06/day=06/"+id+".tcx"); err != nil {
+		t.Fatalf("seed activity %s: %v", id, err)
 	}
 }
 
-// TestMigrate013_RunningTablesExist exercises a full happy-path write:
-// a user, one running session, and two trackpoints all insert and read back.
-func TestMigrate013_RunningTablesExist(t *testing.T) {
+// TestActivities_TablesExist exercises a full happy-path write against the
+// post-015 schema: a user, one activity, and two trackpoints all insert
+// and read back.
+func TestActivities_TablesExist(t *testing.T) {
 	t.Parallel()
 	db := newMigratedDB(t)
 
 	seedUser(t, db, "u1")
-	seedSession(t, db, "s1", "u1", "garmin-1")
+	seedActivity(t, db, "s1", "u1", "garmin-1")
 
 	for seq, elapsed := range []int{0, 10} {
 		if _, err := db.Exec(`
-			INSERT INTO running_trackpoints (
-				session_id, sequence, elapsed_seconds, distance_meters,
+			INSERT INTO activity_trackpoints (
+				activity_id, sequence, elapsed_seconds, distance_meters,
 				heart_rate_bpm, pace_sec_per_km, elevation_meters
 			) VALUES ('s1', ?, ?, ?, 150, 300, 12.5)
 		`, seq, elapsed, elapsed*3); err != nil {
@@ -146,16 +149,16 @@ func TestMigrate013_RunningTablesExist(t *testing.T) {
 		}
 	}
 
-	var sessionCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM running_sessions WHERE user_id = 'u1'`).Scan(&sessionCount); err != nil {
-		t.Fatalf("count sessions: %v", err)
+	var activityCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activities WHERE user_id = 'u1'`).Scan(&activityCount); err != nil {
+		t.Fatalf("count activities: %v", err)
 	}
-	if sessionCount != 1 {
-		t.Fatalf("want 1 session, got %d", sessionCount)
+	if activityCount != 1 {
+		t.Fatalf("want 1 activity, got %d", activityCount)
 	}
 
 	var pointCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM running_trackpoints WHERE session_id = 's1'`).Scan(&pointCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_trackpoints WHERE activity_id = 's1'`).Scan(&pointCount); err != nil {
 		t.Fatalf("count trackpoints: %v", err)
 	}
 	if pointCount != 2 {
@@ -163,53 +166,71 @@ func TestMigrate013_RunningTablesExist(t *testing.T) {
 	}
 }
 
-// TestMigrate013_UniqueGarminActivity verifies the dedup constraint: a
-// second session with the same (user_id, garmin_activity_id) is rejected,
-// while the same garmin_activity_id under a different user is allowed.
-func TestMigrate013_UniqueGarminActivity(t *testing.T) {
+// TestActivities_UniqueSourceActivity verifies the post-015 dedup
+// constraint: a second activity with the same
+// (user_id, ingest_source, source_activity_id) is rejected, while the
+// same source_activity_id under a different user or a different ingest
+// source is allowed.
+func TestActivities_UniqueSourceActivity(t *testing.T) {
 	t.Parallel()
 	db := newMigratedDB(t)
 
 	seedUser(t, db, "u1")
-	seedSession(t, db, "s1", "u1", "garmin-dup")
+	seedActivity(t, db, "s1", "u1", "src-dup")
 
-	// Same (user_id, garmin_activity_id) violates UNIQUE.
+	// Same (user_id, ingest_source, source_activity_id) violates UNIQUE.
 	if _, err := db.Exec(`
-		INSERT INTO running_sessions (
-			id, user_id, garmin_activity_id, start_time,
-			distance_meters, duration_seconds, avg_pace_sec_per_km,
+		INSERT INTO activities (
+			id, user_id, activity_type, ingest_source, source_activity_id,
+			start_time, distance_meters, duration_seconds, avg_pace_sec_per_km,
 			tcx_s3_key, created_at
-		) VALUES ('s2', 'u1', 'garmin-dup', '2026-06-06T07:00:00Z', 10000, 3000, 300, 'k', '2026-06-06T07:30:00Z')
+		) VALUES ('s2', 'u1', 'running', 'manual_tcx', 'src-dup',
+		          '2026-06-06T07:00:00Z', 10000, 3000, 300, 'k', '2026-06-06T07:30:00Z')
 	`); err == nil {
-		t.Fatal("duplicate (user_id, garmin_activity_id) insert should fail UNIQUE, got nil error")
+		t.Fatal("duplicate (user_id, ingest_source, source_activity_id) insert should fail UNIQUE, got nil error")
 	}
 
-	// Same garmin_activity_id for a different user is fine.
+	// Same source_activity_id for a different user is fine.
 	seedUser(t, db, "u2")
-	seedSession(t, db, "s3", "u2", "garmin-dup")
+	seedActivity(t, db, "s3", "u2", "src-dup")
+
+	// Same source_activity_id from a different ingest source is fine
+	// (a future Garmin Connect sync of a run already uploaded via TCX is
+	// a separate record by design).
+	if _, err := db.Exec(`
+		INSERT INTO activities (
+			id, user_id, activity_type, ingest_source, source_activity_id,
+			start_time, distance_meters, duration_seconds, avg_pace_sec_per_km,
+			tcx_s3_key, created_at
+		) VALUES ('s4', 'u1', 'running', 'garmin_api', 'src-dup',
+		          '2026-06-06T08:00:00Z', 10000, 3000, 300, 'k4', '2026-06-06T08:30:00Z')
+	`); err != nil {
+		t.Fatalf("cross-source same activity id should succeed: %v", err)
+	}
 }
 
-// TestMigrate013_TrackpointCascade verifies ON DELETE CASCADE: deleting a
-// session removes its trackpoints. newMigratedDB opens with _foreign_keys=on.
-func TestMigrate013_TrackpointCascade(t *testing.T) {
+// TestActivities_TrackpointCascade verifies ON DELETE CASCADE: deleting
+// an activity removes its trackpoints. newMigratedDB opens with
+// _foreign_keys=on.
+func TestActivities_TrackpointCascade(t *testing.T) {
 	t.Parallel()
 	db := newMigratedDB(t)
 
 	seedUser(t, db, "u1")
-	seedSession(t, db, "s1", "u1", "garmin-1")
+	seedActivity(t, db, "s1", "u1", "garmin-1")
 	if _, err := db.Exec(`
-		INSERT INTO running_trackpoints (session_id, sequence, elapsed_seconds, distance_meters)
+		INSERT INTO activity_trackpoints (activity_id, sequence, elapsed_seconds, distance_meters)
 		VALUES ('s1', 0, 0, 0), ('s1', 1, 10, 30)
 	`); err != nil {
 		t.Fatalf("insert trackpoints: %v", err)
 	}
 
-	if _, err := db.Exec(`DELETE FROM running_sessions WHERE id = 's1'`); err != nil {
-		t.Fatalf("delete session: %v", err)
+	if _, err := db.Exec(`DELETE FROM activities WHERE id = 's1'`); err != nil {
+		t.Fatalf("delete activity: %v", err)
 	}
 
 	var pointCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM running_trackpoints WHERE session_id = 's1'`).Scan(&pointCount); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_trackpoints WHERE activity_id = 's1'`).Scan(&pointCount); err != nil {
 		t.Fatalf("count trackpoints after delete: %v", err)
 	}
 	if pointCount != 0 {

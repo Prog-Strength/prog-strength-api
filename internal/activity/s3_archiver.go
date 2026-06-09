@@ -1,4 +1,4 @@
-package running
+package activity
 
 import (
 	"bytes"
@@ -12,12 +12,25 @@ import (
 // vendor type is the most precise; it's plain XML on the wire.
 const tcxContentType = "application/vnd.garmin.tcx+xml"
 
-// Archiver stores and removes the raw TCX file backing a session. The
+// ObjectMetadata is the set of S3-level metadata stamps applied to every
+// archived TCX object. The activity domain controls the metadata schema
+// so the archiver interface doesn't have to know about ingest sources or
+// any other domain concept.
+//
+// IngestSource lands in the object's user-defined metadata as
+// "ingest-source: {value}" so a future audit of the bucket — or a Glue
+// catalog that surfaces metadata — can tell apart manually-uploaded TCX
+// files from API-synced ones without consulting the database.
+type ObjectMetadata struct {
+	IngestSource IngestSource
+}
+
+// Archiver stores and removes the raw TCX file backing an activity. The
 // repository writes through it so the "DB row + S3 object" pair stays
 // consistent; the in-memory implementation (MemoryArchiver) is used in
 // dev/tests when no bucket is configured.
 type Archiver interface {
-	Put(ctx context.Context, key string, body []byte) error
+	Put(ctx context.Context, key string, body []byte, meta ObjectMetadata) error
 	Delete(ctx context.Context, key string) error
 }
 
@@ -42,13 +55,21 @@ func NewS3Archiver(ctx context.Context, bucket string) (*S3Archiver, error) {
 	return &S3Archiver{client: s3.NewFromConfig(cfg), bucket: bucket}, nil
 }
 
-func (a *S3Archiver) Put(ctx context.Context, key string, body []byte) error {
+func (a *S3Archiver) Put(ctx context.Context, key string, body []byte, meta ObjectMetadata) error {
 	ct := tcxContentType
+	// S3 user metadata is the right place for this tag (vs. an object
+	// tag): it travels with the object on copies/restores and shows up
+	// in HeadObject without an extra API call. Keys are case-insensitive
+	// per the S3 contract but stored lowercased on the wire.
+	metadata := map[string]string{
+		"ingest-source": string(meta.IngestSource),
+	}
 	_, err := a.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      &a.bucket,
 		Key:         &key,
 		Body:        bytes.NewReader(body),
 		ContentType: &ct,
+		Metadata:    metadata,
 	})
 	return err
 }

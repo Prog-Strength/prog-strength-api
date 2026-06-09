@@ -1,4 +1,4 @@
-package running
+package activity
 
 import "math"
 
@@ -19,12 +19,19 @@ const maxTrackpoints = 300
 // recoveries during interval workouts.
 const paceFilterMinSpeedMps = 0.5
 
-// summarize turns a validated parsedTCX into a Session (with its
+// summarize turns a validated parsedTCX into an Activity (with its
 // downsampled Trackpoints) ready for the caller to stamp with
-// ID/UserID/TCXS3Key/timestamps. It assumes validate has already passed,
-// so there is at least one trackpoint with non-zero cumulative distance;
-// callers must not invoke it on an invalid file.
-func summarize(p *parsedTCX) Session {
+// ID/UserID/IngestSource/TCXS3Key/timestamps. It assumes validate has
+// already passed, so there is at least one trackpoint with non-zero
+// cumulative distance; callers must not invoke it on an invalid file.
+//
+// actType drives which summary fields are populated:
+//   - Pace fields (avg, best) are computed only for ActivityRunning.
+//     Pace is a running-display concept; surfacing a "fastest 1km split"
+//     on a cycling ride or walk would be misleading at the UI layer.
+//   - HR, calories, elevation are computed when the source data carries
+//     them, regardless of sport — they're meaningful for any activity.
+func summarize(p *parsedTCX, actType ActivityType) Activity {
 	tps := p.Trackpoints
 	first := tps[0]
 	last := tps[len(tps)-1]
@@ -32,25 +39,28 @@ func summarize(p *parsedTCX) Session {
 	distance := last.DistanceMeters
 	duration := int(last.Time.Sub(first.Time).Seconds())
 
-	// The validator guarantees at least one non-zero-distance trackpoint, but
-	// cumulative distance isn't guaranteed monotonic for hand-crafted input,
-	// so guard the division rather than risk a +Inf/NaN pace.
-	var avgPace float64
-	if distance > 0 {
-		avgPace = float64(duration) / (distance / 1000)
-	}
-
-	s := Session{
-		GarminActivityID:    p.ActivityID,
+	a := Activity{
+		SourceActivityID:    p.ActivityID,
+		ActivityType:        actType,
 		StartTime:           first.Time,
 		Name:                p.Notes,
 		DistanceMeters:      distance,
 		DurationSeconds:     duration,
-		AvgPaceSecPerKm:     avgPace,
 		AvgHeartRateBpm:     avgHeartRate(tps),
 		MaxHeartRateBpm:     maxHeartRate(tps),
 		ElevationGainMeters: elevationGain(tps),
-		BestPaceSecPerKm:    bestPace(tps),
+	}
+
+	if actType == ActivityRunning {
+		// Guard the division rather than risk a +Inf/NaN pace: validate
+		// guarantees at least one non-zero-distance trackpoint, but the
+		// cumulative distance axis isn't guaranteed monotonic for
+		// hand-crafted input.
+		if distance > 0 {
+			avg := float64(duration) / (distance / 1000)
+			a.AvgPaceSecPerKm = &avg
+		}
+		a.BestPaceSecPerKm = bestPace(tps)
 	}
 
 	if p.hasCalories {
@@ -58,11 +68,11 @@ func summarize(p *parsedTCX) Session {
 		for _, c := range p.LapCalories {
 			total += c
 		}
-		s.TotalCalories = &total
+		a.TotalCalories = &total
 	}
 
-	s.Trackpoints = downsample(tps, first)
-	return s
+	a.Trackpoints = downsample(tps, first, actType)
+	return a
 }
 
 // avgHeartRate is the rounded mean over only the trackpoints that carry
@@ -99,7 +109,7 @@ func maxHeartRate(tps []parsedTrackpoint) *int {
 
 // elevationGain sums only the positive consecutive altitude deltas (total
 // ascent). Returns nil when no trackpoint had altitude at all — distinct
-// from a flat run, which legitimately gains 0.
+// from a flat activity, which legitimately gains 0.
 func elevationGain(tps []parsedTrackpoint) *float64 {
 	var prev *float64
 	gain := 0.0
@@ -128,7 +138,8 @@ func elevationGain(tps []parsedTrackpoint) *float64 {
 // 1 km. Anchoring on distance (not sample count) makes the result robust
 // to GPS jitter: a single noisy sample (e.g. a 50 m teleport in 1 s) is
 // diluted across a full kilometer, so it can't poison the minimum the way
-// an instantaneous per-sample pace would. Returns nil when run is < 1 km.
+// an instantaneous per-sample pace would. Returns nil when the activity
+// is < 1 km. Only meaningful for running; callers gate accordingly.
 func bestPace(tps []parsedTrackpoint) *float64 {
 	if len(tps) == 0 || tps[len(tps)-1].DistanceMeters-tps[0].DistanceMeters < 1000 {
 		return nil
@@ -136,18 +147,11 @@ func bestPace(tps []parsedTrackpoint) *float64 {
 	best := math.Inf(1)
 	left := 0
 	for right := 0; right < len(tps); right++ {
-		// Advance left while the window can shrink and still span >= 1 km,
-		// so each right edge pairs with the tightest qualifying window (the
-		// fastest candidate ending at that point). We stop one short of the
-		// boundary: moving left further would drop below 1 km.
 		for left+1 < right && tps[right].DistanceMeters-tps[left+1].DistanceMeters >= 1000 {
 			left++
 		}
 		if tps[right].DistanceMeters-tps[left].DistanceMeters >= 1000 {
 			elapsed := tps[right].Time.Sub(tps[left].Time).Seconds()
-			// Normalize by the window's actual span (>= 1 km), not a flat
-			// 1.0, so a window slightly over 1 km isn't reported as
-			// artificially slow.
 			km := (tps[right].DistanceMeters - tps[left].DistanceMeters) / 1000
 			if pace := elapsed / km; pace < best {
 				best = pace
@@ -163,8 +167,9 @@ func bestPace(tps []parsedTrackpoint) *float64 {
 // downsample reduces the raw track to ~maxTrackpoints evenly strided
 // points, always keeping the first and last so the chart's endpoints are
 // exact. Per-kept-point pace is computed between consecutive KEPT points
-// (not raw neighbors), matching what the chart actually draws.
-func downsample(raw []parsedTrackpoint, first parsedTrackpoint) []Trackpoint {
+// (not raw neighbors) for running activities, matching what the chart
+// draws. Non-running activities skip the per-point pace computation.
+func downsample(raw []parsedTrackpoint, first parsedTrackpoint, actType ActivityType) []Trackpoint {
 	// summarize only calls this on a validated (non-empty) track, but guard
 	// anyway so the index math below can't panic on a degenerate input.
 	if len(raw) == 0 {
@@ -175,7 +180,6 @@ func downsample(raw []parsedTrackpoint, first parsedTrackpoint) []Trackpoint {
 		stride = 1
 	}
 
-	// Collect indices on the stride, then guarantee the final raw point.
 	var idx []int
 	for i := 0; i < len(raw); i += stride {
 		idx = append(idx, i)
@@ -198,8 +202,10 @@ func downsample(raw []parsedTrackpoint, first parsedTrackpoint) []Trackpoint {
 		// Pace is nil for the first kept point (no prior segment), when
 		// two kept points share a distance (would divide by zero), and
 		// when the segment's instantaneous speed falls below the
-		// stationary-filter threshold (see paceFilterMinSpeedMps).
-		if prev != nil {
+		// stationary-filter threshold (see paceFilterMinSpeedMps). Also
+		// nil for non-running activities — pace is a running display
+		// concept.
+		if actType == ActivityRunning && prev != nil {
 			dMeters := rp.DistanceMeters - prev.DistanceMeters
 			dSeconds := rp.Time.Sub(prev.Time).Seconds()
 			if dMeters > 0 && dSeconds > 0 && dMeters/dSeconds >= paceFilterMinSpeedMps {

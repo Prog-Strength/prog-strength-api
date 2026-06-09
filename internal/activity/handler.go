@@ -1,9 +1,8 @@
-package running
+package activity
 
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -17,36 +16,42 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 )
 
-// maxTCXBytes caps the multipart upload size. A typical run TCX is a few
-// hundred KB; 10 MB is generous headroom while bounding memory per import
-// (the whole file is read into a byte slice for parse + archive).
+// maxTCXBytes caps the multipart upload size. A typical activity TCX is
+// a few hundred KB; 10 MB is generous headroom while bounding memory per
+// import (the whole file is read into a byte slice for parse + archive).
 const maxTCXBytes = 10 << 20
 
-// listLimitDefault / listLimitMax bound the page size for GET /sessions.
+// listLimitDefault / listLimitMax bound the page size for GET /activities.
 const (
 	listLimitDefault = 50
 	listLimitMax     = 100
 )
 
-// Handler exposes the HTTP surface for running sessions: TCX import, the
-// list/detail/rename/delete CRUD, and the dashboard metrics tiles.
+// Handler exposes the HTTP surface for activities: TCX import, the
+// list/detail/rename/delete CRUD, and the running-specific dashboard
+// metrics tiles.
 type Handler struct {
 	repo Repository
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo} }
 
-// Mount registers routes under /running. Callers are expected to have
-// already wrapped the router in auth.RequireUser — these handlers read the
-// user ID from request context and assume it's present.
+// Mount registers routes under /activities. Callers are expected to
+// have already wrapped the router in auth.RequireUser — these handlers
+// read the user ID from request context and assume it's present.
+//
+// POST /activities/tcx is the manual-upload ingest path. A future
+// Garmin Connect sync wires into IngestTCX via a different transport
+// (likely a background worker triggered by a webhook); it doesn't need
+// a new HTTP route.
 func (h *Handler) Mount(r chi.Router) {
-	r.Route("/running", func(r chi.Router) {
-		r.Post("/sessions/imports", h.importSession)
-		r.Get("/sessions", h.listSessions)
-		r.Get("/sessions/{id}", h.getSession)
-		r.Patch("/sessions/{id}", h.renameSession)
-		r.Delete("/sessions/{id}", h.deleteSession)
-		r.Get("/metrics", h.metrics)
+	r.Route("/activities", func(r chi.Router) {
+		r.Post("/tcx", h.uploadTCX)
+		r.Get("/", h.list)
+		r.Get("/running-metrics", h.runningMetrics)
+		r.Get("/{id}", h.get)
+		r.Patch("/{id}", h.rename)
+		r.Delete("/{id}", h.delete)
 	})
 }
 
@@ -64,19 +69,21 @@ type trackpointDTO struct {
 	ElevationMeters *float64 `json:"elevation_meters"`
 }
 
-// sessionDTO is the wire shape of a running session. Nullable numerics are
+// activityDTO is the wire shape of an activity. Nullable numerics are
 // pointers WITHOUT omitempty so the key is always present (rendered null
 // when nil) — the client relies on a stable key set. Trackpoints is the
 // one exception: omitempty drops it on list responses, which never load
 // the per-point stream.
-type sessionDTO struct {
+type activityDTO struct {
 	ID                  string          `json:"id"`
-	GarminActivityID    string          `json:"garmin_activity_id"`
+	ActivityType        ActivityType    `json:"activity_type"`
+	IngestSource        IngestSource    `json:"ingest_source"`
+	SourceActivityID    string          `json:"source_activity_id"`
 	Name                *string         `json:"name"`
 	StartTime           time.Time       `json:"start_time"`
 	DistanceMeters      float64         `json:"distance_meters"`
 	DurationSeconds     int             `json:"duration_seconds"`
-	AvgPaceSecPerKm     float64         `json:"avg_pace_sec_per_km"`
+	AvgPaceSecPerKm     *float64        `json:"avg_pace_sec_per_km"`
 	BestPaceSecPerKm    *float64        `json:"best_pace_sec_per_km"`
 	AvgHeartRateBpm     *int            `json:"avg_heart_rate_bpm"`
 	MaxHeartRateBpm     *int            `json:"max_heart_rate_bpm"`
@@ -86,41 +93,44 @@ type sessionDTO struct {
 	Trackpoints         []trackpointDTO `json:"trackpoints,omitempty"`
 }
 
-func toSessionDTO(s Session, withTrackpoints bool) sessionDTO {
-	dto := sessionDTO{
-		ID:                  s.ID,
-		GarminActivityID:    s.GarminActivityID,
-		Name:                s.Name,
-		StartTime:           s.StartTime,
-		DistanceMeters:      s.DistanceMeters,
-		DurationSeconds:     s.DurationSeconds,
-		AvgPaceSecPerKm:     s.AvgPaceSecPerKm,
-		BestPaceSecPerKm:    s.BestPaceSecPerKm,
-		AvgHeartRateBpm:     s.AvgHeartRateBpm,
-		MaxHeartRateBpm:     s.MaxHeartRateBpm,
-		TotalCalories:       s.TotalCalories,
-		ElevationGainMeters: s.ElevationGainMeters,
-		CreatedAt:           s.CreatedAt,
+func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
+	dto := activityDTO{
+		ID:                  a.ID,
+		ActivityType:        a.ActivityType,
+		IngestSource:        a.IngestSource,
+		SourceActivityID:    a.SourceActivityID,
+		Name:                a.Name,
+		StartTime:           a.StartTime,
+		DistanceMeters:      a.DistanceMeters,
+		DurationSeconds:     a.DurationSeconds,
+		AvgPaceSecPerKm:     a.AvgPaceSecPerKm,
+		BestPaceSecPerKm:    a.BestPaceSecPerKm,
+		AvgHeartRateBpm:     a.AvgHeartRateBpm,
+		MaxHeartRateBpm:     a.MaxHeartRateBpm,
+		TotalCalories:       a.TotalCalories,
+		ElevationGainMeters: a.ElevationGainMeters,
+		CreatedAt:           a.CreatedAt,
 	}
 	if withTrackpoints {
-		dto.Trackpoints = make([]trackpointDTO, 0, len(s.Trackpoints))
-		for _, tp := range s.Trackpoints {
+		dto.Trackpoints = make([]trackpointDTO, 0, len(a.Trackpoints))
+		for _, tp := range a.Trackpoints {
 			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO(tp))
 		}
 	}
 	return dto
 }
 
-// listResponse is the GET /sessions payload: a page of sessions plus the
-// keyset cursor for the next page. NextBefore is null when this is the
-// last page (fewer than limit returned).
+// listResponse is the GET /activities payload: a page of activities
+// plus the keyset cursor for the next page. NextBefore is null when this
+// is the last page (fewer than limit returned).
 type listResponse struct {
-	Sessions   []sessionDTO `json:"sessions"`
-	NextBefore *string      `json:"next_before"`
+	Activities []activityDTO `json:"activities"`
+	NextBefore *string       `json:"next_before"`
 }
 
-// metricsResponse and its sub-shapes mirror the SOW JSON for the dashboard
-// tiles. Nullable rollup fields stay present-as-null (no omitempty).
+// metricsResponse and its sub-shapes mirror the SOW JSON for the running
+// dashboard tiles. Nullable rollup fields stay present-as-null (no
+// omitempty).
 type periodStatDTO struct {
 	DistanceMeters float64 `json:"distance_meters"`
 	RunCount       int     `json:"run_count"`
@@ -141,11 +151,12 @@ type metricsResponse struct {
 
 // --- handlers ------------------------------------------------------
 
-// importSession parses a multipart-uploaded Garmin TCX file, validates it
-// is a non-empty run, summarizes it, and persists the session + archived
-// file. Failure modes carry machine-readable codes (see ErrorWithCode) so
-// the import client can show a precise reason.
-func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
+// uploadTCX is the manual-upload entry point. It accepts a multipart
+// form with a "file" field carrying a Garmin TCX export, runs the
+// shared IngestTCX seam with source=ManualTCX, and returns the created
+// activity as JSON. Failure modes carry machine-readable codes (see
+// ErrorWithCode) so the import client can show a precise reason.
+func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
@@ -157,14 +168,11 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 	// so a malicious huge upload can't exhaust memory.
 	r.Body = http.MaxBytesReader(w, r.Body, maxTCXBytes)
 	if err := r.ParseMultipartForm(maxTCXBytes); err != nil {
-		// MaxBytesReader signals an overflow via *http.MaxBytesError.
 		var mbErr *http.MaxBytesError
 		if errors.As(err, &mbErr) {
 			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "tcx file exceeds 10 MB limit", "file_too_large")
 			return
 		}
-		// Anything else (not multipart, malformed form) is an unsupported
-		// upload — we require a multipart form with a file field.
 		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "expected a multipart upload with a file field", "unsupported_media_type")
 		return
 	}
@@ -176,74 +184,48 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		// A read overflow here also surfaces as MaxBytesError (the cap
-		// applies to the whole body, parts included).
+	rid := requestid.FromContext(r.Context())
+	a, err := IngestTCX(r.Context(), h.repo, userID, IngestManualTCX, file)
+	switch {
+	case err == nil:
+		log.Printf("activity import: request_id=%s user_id=%s source=%s source_activity_id=%s activity_type=%s outcome=imported",
+			rid, userID, a.IngestSource, a.SourceActivityID, a.ActivityType)
+		httpresp.Created(w, "imported activity", toActivityDTO(a, true))
+	case errors.Is(err, ErrDuplicate):
+		// IngestTCX returns the existing live row alongside ErrDuplicate
+		// when the lookup succeeds; a.ID is empty if it didn't (rare —
+		// race with a concurrent delete). Surface what we have.
+		log.Printf("activity import: request_id=%s user_id=%s existing_activity_id=%s outcome=duplicate", rid, userID, a.ID)
+		httpresp.ErrorWithCodeData(w, http.StatusConflict, "an activity for this source upload already exists", "duplicate_activity", map[string]any{
+			"existing_activity_id": a.ID,
+		})
+	case errors.Is(err, ErrStorage):
+		log.Printf("activity import: request_id=%s user_id=%s outcome=storage_failed err=%v", rid, userID, err)
+		httpresp.ErrorWithCode(w, http.StatusInternalServerError, "failed to archive tcx file", "storage_failed")
+	default:
+		var verr *ValidationError
+		if errors.As(err, &verr) {
+			log.Printf("activity import: request_id=%s user_id=%s outcome=invalid slug=%s", rid, userID, verr.Slug)
+			httpresp.ErrorWithCode(w, http.StatusBadRequest, verr.Msg, verr.Slug)
+			return
+		}
+		// MaxBytesReader can also fire from inside IngestTCX's io.ReadAll.
 		var mbErr *http.MaxBytesError
 		if errors.As(err, &mbErr) {
 			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "tcx file exceeds 10 MB limit", "file_too_large")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "read uploaded tcx", err)
-		return
-	}
-
-	rid := requestid.FromContext(r.Context())
-
-	parsed, err := parseTCX(data)
-	if err != nil {
-		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", rid, userID, "", SlugParseFailed)
-		httpresp.ErrorWithCode(w, http.StatusBadRequest, err.Error(), SlugParseFailed)
-		return
-	}
-
-	if err := validate(parsed); err != nil {
-		var verr *ValidationError
-		if errors.As(err, &verr) {
-			log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", rid, userID, parsed.ActivityID, verr.Slug)
-			httpresp.ErrorWithCode(w, http.StatusBadRequest, verr.Msg, verr.Slug)
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "validate tcx", err)
-		return
-	}
-
-	s := summarize(parsed)
-	s.UserID = userID
-
-	switch err := h.repo.Create(r.Context(), &s, data); {
-	case err == nil:
-		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=imported", rid, userID, s.GarminActivityID)
-		httpresp.Created(w, "imported running session", toSessionDTO(s, true))
-	case errors.Is(err, ErrDuplicate):
-		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=duplicate", rid, userID, s.GarminActivityID)
-		existingID := ""
-		if existing, lookupErr := h.repo.GetByGarminActivityID(r.Context(), userID, s.GarminActivityID); lookupErr == nil {
-			existingID = existing.ID
-		}
-		httpresp.ErrorWithCodeData(w, http.StatusConflict, "a session for this activity already exists", "duplicate_run", map[string]any{
-			"existing_session_id": existingID,
-		})
-	case errors.Is(err, ErrStorage):
-		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=storage_failed err=%v", rid, userID, s.GarminActivityID, err)
-		httpresp.ErrorWithCode(w, http.StatusInternalServerError, "failed to archive tcx file", "storage_failed")
-	default:
-		httpresp.ServerError(w, r.Context(), "create running session", err)
+		httpresp.ServerError(w, r.Context(), "ingest tcx", err)
 	}
 }
 
-func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
 
-	// Two mutually exclusive query patterns share this endpoint:
-	//   - cursor (limit, before): newest-first page, returns next_before
-	//   - range  (since, until):  half-open window [since, until), no cursor
-	// The calendar's month-view uses range; the run list uses cursor.
 	hasSince := r.URL.Query().Get("since") != ""
 	hasUntil := r.URL.Query().Get("until") != ""
 	hasBefore := r.URL.Query().Get("before") != ""
@@ -264,16 +246,16 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 			httpresp.Error(w, http.StatusBadRequest, "until must be an RFC3339 timestamp")
 			return
 		}
-		sessions, err := h.repo.ListInRange(r.Context(), userID, since, until)
+		activities, err := h.repo.ListInRange(r.Context(), userID, since, until)
 		if err != nil {
-			httpresp.ServerError(w, r.Context(), "list running sessions in range", err)
+			httpresp.ServerError(w, r.Context(), "list activities in range", err)
 			return
 		}
-		out := make([]sessionDTO, 0, len(sessions))
-		for _, s := range sessions {
-			out = append(out, toSessionDTO(s, false))
+		out := make([]activityDTO, 0, len(activities))
+		for _, a := range activities {
+			out = append(out, toActivityDTO(a, false))
 		}
-		httpresp.OK(w, "listed running sessions", listResponse{Sessions: out, NextBefore: nil})
+		httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nil})
 		return
 	}
 
@@ -300,32 +282,26 @@ func (h *Handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		before = &t
 	}
 
-	sessions, err := h.repo.List(r.Context(), userID, limit, before)
+	activities, err := h.repo.List(r.Context(), userID, limit, before)
 	if err != nil {
-		httpresp.ServerError(w, r.Context(), "list running sessions", err)
+		httpresp.ServerError(w, r.Context(), "list activities", err)
 		return
 	}
 
-	out := make([]sessionDTO, 0, len(sessions))
-	for _, s := range sessions {
-		out = append(out, toSessionDTO(s, false))
+	out := make([]activityDTO, 0, len(activities))
+	for _, a := range activities {
+		out = append(out, toActivityDTO(a, false))
 	}
 
-	// next_before is the cursor for the next page: the start_time of the
-	// last returned session, but only when we filled the page (more rows
-	// may exist). A short page means we reached the end → null cursor.
 	var nextBefore *string
-	if len(sessions) == limit && len(sessions) > 0 {
-		cursor := sessions[len(sessions)-1].StartTime.Format(time.RFC3339)
+	if len(activities) == limit && len(activities) > 0 {
+		cursor := activities[len(activities)-1].StartTime.Format(time.RFC3339)
 		nextBefore = &cursor
 	}
 
-	httpresp.OK(w, "listed running sessions", listResponse{Sessions: out, NextBefore: nextBefore})
+	httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nextBefore})
 }
 
-// parseOptionalTimeParam returns nil when the param is absent or empty,
-// the parsed RFC3339 time when present, or an error when present but
-// malformed. Keeps the listSessions branches readable.
 func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
 	raw := r.URL.Query().Get(name)
 	if raw == "" {
@@ -338,38 +314,38 @@ func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
 	return &t, nil
 }
 
-func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		httpresp.Error(w, http.StatusBadRequest, "session id is required")
+	activityID := chi.URLParam(r, "id")
+	if activityID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
 		return
 	}
-	s, err := h.repo.Get(r.Context(), userID, id)
+	a, err := h.repo.Get(r.Context(), userID, activityID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			httpresp.ErrorWithCode(w, http.StatusNotFound, "running session not found", "not_found")
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "get running session", err)
+		httpresp.ServerError(w, r.Context(), "get activity", err)
 		return
 	}
-	httpresp.OK(w, "fetched running session", toSessionDTO(*s, true))
+	httpresp.OK(w, "fetched activity", toActivityDTO(*a, true))
 }
 
-func (h *Handler) renameSession(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		httpresp.Error(w, http.StatusBadRequest, "session id is required")
+	activityID := chi.URLParam(r, "id")
+	if activityID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
 		return
 	}
 	var req struct {
@@ -388,41 +364,41 @@ func (h *Handler) renameSession(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "name is too long")
 		return
 	}
-	s, err := h.repo.Rename(r.Context(), userID, id, name)
+	a, err := h.repo.Rename(r.Context(), userID, activityID, name)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			httpresp.ErrorWithCode(w, http.StatusNotFound, "running session not found", "not_found")
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "rename running session", err)
+		httpresp.ServerError(w, r.Context(), "rename activity", err)
 		return
 	}
-	httpresp.OK(w, "renamed running session", toSessionDTO(*s, false))
+	httpresp.OK(w, "renamed activity", toActivityDTO(*a, false))
 }
 
-func (h *Handler) deleteSession(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		httpresp.Error(w, http.StatusBadRequest, "session id is required")
+	activityID := chi.URLParam(r, "id")
+	if activityID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
 		return
 	}
-	if err := h.repo.SoftDelete(r.Context(), userID, id); err != nil {
+	if err := h.repo.SoftDelete(r.Context(), userID, activityID); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			httpresp.ErrorWithCode(w, http.StatusNotFound, "running session not found", "not_found")
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "delete running session", err)
+		httpresp.ServerError(w, r.Context(), "delete activity", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) runningMetrics(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
@@ -440,7 +416,7 @@ func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now().UTC()
-	m, err := h.repo.Metrics(r.Context(), userID, now, loc)
+	m, err := h.repo.RunningMetrics(r.Context(), userID, now, loc)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "running metrics", err)
 		return

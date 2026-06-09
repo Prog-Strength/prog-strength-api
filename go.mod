@@ -1,6 +1,6 @@
 module github.com/jwallace145/progressive-overload-fitness-tracker
 
-go 1.25.3
+go 1.25.11
 
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.23

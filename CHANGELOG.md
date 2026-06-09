@@ -1,3 +1,10 @@
+## [0.41.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.41.0...v0.41.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* **usage:** default to hardcoded price table when env override is unset ([#17](https://github.com/Prog-Strength/prog-strength-api/issues/17)) ([69e971e](https://github.com/Prog-Strength/prog-strength-api/commit/69e971e1db44f978c2ca104eed79f9de82efda69))
+
 # [0.41.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.40.0...v0.41.0) (2026-06-09)
 
 

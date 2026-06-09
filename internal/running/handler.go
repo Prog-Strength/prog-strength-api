@@ -229,7 +229,7 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 			"existing_session_id": existingID,
 		})
 	case errors.Is(err, ErrStorage):
-		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=storage_failed", userID, s.GarminActivityID)
+		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=storage_failed err=%v", userID, s.GarminActivityID, err)
 		httpresp.ErrorWithCode(w, http.StatusInternalServerError, "failed to archive tcx file", "storage_failed")
 	default:
 		httpresp.ServerError(w, r.Context(), "create running session", err)

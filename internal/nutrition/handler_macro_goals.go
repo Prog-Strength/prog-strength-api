@@ -106,7 +106,7 @@ func (h *Handler) putMyMacroGoals(w http.ResponseWriter, r *http.Request) {
 // validateMacroGoalsRequest checks all four fields are present and
 // within the per-macro / calorie caps. Returns "" on success and an
 // HTTP-400-ready message on the first failure (first-error-wins, per
-// the CLAUDE.md convention).
+// the AGENTS.md convention).
 func validateMacroGoalsRequest(req putMacroGoalsRequest) string {
 	type field struct {
 		name string

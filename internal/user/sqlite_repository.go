@@ -6,8 +6,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 	"github.com/mattn/go-sqlite3"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 )
 
 // Compile-time check that *SQLiteRepository satisfies Repository.

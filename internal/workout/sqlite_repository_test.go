@@ -18,9 +18,9 @@ import (
 // SQL statements regardless of how many workouts / exercises / sets the
 // fixture holds:
 //
-//   1. SELECT workouts WHERE user_id = ? ...
-//   2. SELECT workout_exercises WHERE workout_id IN (?, ?, ...)
-//   3. SELECT sets WHERE workout_exercise_id IN (?, ?, ...)
+//  1. SELECT workouts WHERE user_id = ? ...
+//  2. SELECT workout_exercises WHERE workout_id IN (?, ?, ...)
+//  3. SELECT sets WHERE workout_exercise_id IN (?, ?, ...)
 //
 // Pre-batched-hydration the count was 1 + N + N*M (a query per workout
 // for the exercises, then a query per workout_exercise for the sets).

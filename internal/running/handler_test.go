@@ -14,6 +14,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 )
 
@@ -312,11 +313,11 @@ func TestListSinceUntil(t *testing.T) {
 	// we assert that only the sessions whose start_time falls inside the
 	// half-open interval [since, until) come back, regardless of position.
 	starts := []time.Time{
-		time.Date(2026, 2, 27, 7, 0, 0, 0, time.UTC), // before range
-		time.Date(2026, 3, 1, 6, 0, 0, 0, time.UTC),  // inside (lower edge, inclusive)
-		time.Date(2026, 3, 15, 8, 0, 0, 0, time.UTC), // inside
-		time.Date(2026, 3, 31, 23, 0, 0, 0, time.UTC),// inside (top of month)
-		time.Date(2026, 4, 1, 6, 0, 0, 0, time.UTC),  // after range (upper edge, exclusive)
+		time.Date(2026, 2, 27, 7, 0, 0, 0, time.UTC),  // before range
+		time.Date(2026, 3, 1, 6, 0, 0, 0, time.UTC),   // inside (lower edge, inclusive)
+		time.Date(2026, 3, 15, 8, 0, 0, 0, time.UTC),  // inside
+		time.Date(2026, 3, 31, 23, 0, 0, 0, time.UTC), // inside (top of month)
+		time.Date(2026, 4, 1, 6, 0, 0, 0, time.UTC),   // after range (upper edge, exclusive)
 	}
 	for i, st := range starts {
 		s := &Session{

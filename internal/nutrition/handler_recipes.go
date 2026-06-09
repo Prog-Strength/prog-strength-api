@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
@@ -18,12 +19,12 @@ import (
 // macros sit on the recipe itself so the frontend doesn't have to
 // re-aggregate per render.
 type recipeDTO struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	Components []recipeItemDTO    `json:"components"`
-	Macros     recipeMacrosDTO    `json:"macros"`
-	CreatedAt  string             `json:"created_at"`
-	UpdatedAt  string             `json:"updated_at"`
+	ID         string          `json:"id"`
+	Name       string          `json:"name"`
+	Components []recipeItemDTO `json:"components"`
+	Macros     recipeMacrosDTO `json:"macros"`
+	CreatedAt  string          `json:"created_at"`
+	UpdatedAt  string          `json:"updated_at"`
 }
 
 type recipeItemDTO struct {

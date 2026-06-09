@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 )
 
 // newMigratedDB opens a fresh migrated database in a temp dir with

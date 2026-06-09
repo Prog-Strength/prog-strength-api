@@ -1,0 +1,140 @@
+# golangci-lint config. See CONTRIBUTING.md for install + how to run.
+#
+# Philosophy: catch bugs and unsafe patterns; don't bikeshed style. Most
+# enabled linters target a real failure mode the test suite wouldn't
+# catch — leaked DB rows, unchecked errors, http requests missing
+# context, ineffective assignments. Formatters (gofmt, goimports) sit
+# in the formatters block so a single `golangci-lint run --fix`
+# resolves both lint and format drift.
+#
+# Requires golangci-lint v2.x. v1 cannot parse Go 1.25 generics in our
+# upstream deps (aws-sdk-go-v2). CI pins a specific v2 release; local
+# contributors should `brew upgrade golangci-lint` to v2 if older.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    # Stdlib correctness
+    - errcheck         # unchecked errors
+    - govet            # printf format strings, copy locks, etc.
+    - ineffassign      # values assigned but never used
+    - staticcheck      # rolled-up bug + simplification checks
+    - unused           # dead code
+    - unconvert        # unnecessary type conversions
+    - usestdlibvars    # prefer http.MethodGet over "GET"
+
+    # HTTP + DB hazards — the Chi/SQLite domain of this codebase
+    - bodyclose        # http.Response.Body left unclosed
+    - noctx            # http requests built without context
+    - rowserrcheck     # sql.Rows.Err() unchecked
+    - sqlclosecheck    # sql.Rows / sql.Stmt not closed
+
+    # Error handling discipline
+    - errorlint        # %w vs %v, errors.Is/As vs ==
+
+    # Security
+    - gosec            # common security issues; tuned via settings below
+
+    # Lint hygiene
+    - misspell         # spelling in comments + strings
+    - nolintlint       # malformed nolint directives
+    - whitespace       # trailing newlines, empty leading lines
+    - revive           # configurable replacement for golint
+
+  settings:
+    errcheck:
+      # Calls like `_ = w.Write(...)` make intent obvious. Type-assertion
+      # error checks are a stylistic choice — off to avoid noise.
+      check-blank: false
+      check-type-assertions: false
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment is a micro-optimization at this scale; the
+        # ordering it suggests obscures domain grouping.
+        - fieldalignment
+
+    gosec:
+      excludes:
+        # G104 ("audit errors not checked") overlaps with errcheck and
+        # routinely fires on intentional log/write discards.
+        - G104
+        # G115 ("integer overflow conversion") fires on benign int → int64
+        # conversions everywhere SQL is involved.
+        - G115
+
+    misspell:
+      locale: US
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+    staticcheck:
+      checks:
+        - all
+        # ST1000 ("at least one file in a package should have a package
+        # comment") is noisy for tiny internal packages.
+        - -ST1000
+
+  exclusions:
+    generated: lax
+    paths:
+      # Migration SQL is embedded but the directory has no Go files.
+      # Listed for intent + safety against future Go helpers there.
+      - internal/db/migrations
+    rules:
+      # Tests get a longer leash on a few categories that are routine in
+      # test files but problematic in production code.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+          - noctx
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/jwallace145/progressive-overload-fitness-tracker
+
+issues:
+  # 0 = no cap. Default is 3 per linter, which silently truncates results
+  # when introducing a new linter to an existing codebase.
+  max-issues-per-linter: 0
+  max-same-issues: 0

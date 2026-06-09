@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
@@ -22,7 +23,7 @@ import (
 // the exercise repository as well as the workout one. This is the only
 // cross-package coupling in the workout HTTP layer — the underlying
 // workout domain types and repository still have no compile-time
-// dependency on `exercise` (per CLAUDE.md: "Workout package doesn't
+// dependency on `exercise` (per AGENTS.md: "Workout package doesn't
 // import exercise package's data"); the join lives at the HTTP edge.
 type Handler struct {
 	repo         Repository

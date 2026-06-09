@@ -1,0 +1,127 @@
+# Pre-commit hooks for the Prog Strength API. See CONTRIBUTING.md for the
+# install + usage walkthrough.
+#
+# Two stages:
+#   pre-commit  → fast checks that run on every commit (formatting, hygiene,
+#                 conventional commit message, secret detection).
+#   pre-push    → slower checks that run only when publishing the branch
+#                 (golangci-lint, go vet, go test, go mod tidy drift). Push
+#                 is the latest moment to catch these locally before CI
+#                 burns runner minutes finding the same issues.
+#
+# Install both hook types after cloning:
+#   pre-commit install --install-hooks
+#   pre-commit install --hook-type commit-msg
+#   pre-commit install --hook-type pre-push
+
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_stages: [pre-commit]
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  # Generic file hygiene. Cheap, no language tooling required.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Markdown allows trailing whitespace for hard line breaks; leave
+        # those alone so doc rendering doesn't silently change.
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # 1 MB ceiling. TCX test fixtures live under internal/running/testdata
+        # and are kept small on purpose; anything bigger likely belongs in S3.
+        args: [--maxkb=1024]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+
+  # Secret scanner. Catches AWS keys, JWT signing secrets, OAuth client
+  # secrets — categories that have shown up in this repo's env wiring.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Conventional commit message enforcement. semantic-release derives the
+  # next version + CHANGELOG entry from these prefixes (see release.config.js),
+  # so a non-conforming subject silently breaks the release pipeline.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - feat
+          - fix
+          - chore
+          - docs
+          - refactor
+          - test
+          - perf
+          - build
+          - ci
+          - style
+          - revert
+
+  # Go toolchain hooks. language: system means the contributor must have
+  # the Go tools on PATH; CONTRIBUTING.md walks through the install. We
+  # do not pin via pre-commit's Go support because the repo's go.mod is
+  # already the version source of truth.
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        description: Format Go files with gofmt
+        entry: gofmt -l -w
+        language: system
+        types: [go]
+
+      - id: goimports
+        name: goimports
+        description: Organize Go imports
+        entry: goimports -w -local github.com/jwallace145/progressive-overload-fitness-tracker
+        language: system
+        types: [go]
+
+      # Heavier checks deferred to pre-push so a commit-heavy workflow
+      # stays fast. CI re-runs all of these on the PR for the same reason
+      # — the local hook is a courtesy to avoid the CI round-trip, not a
+      # substitute for it.
+      - id: go-vet
+        name: go vet
+        description: Run go vet on the module
+        entry: go vet ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: golangci-lint
+        name: golangci-lint
+        description: Run golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: go-mod-tidy
+        name: go mod tidy drift
+        description: Fail if go mod tidy would change go.mod or go.sum
+        entry: bash -c 'go mod tidy && git diff --exit-code go.mod go.sum'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: go-test
+        name: go test
+        description: Run the full test suite (no race; CI runs -race)
+        entry: go test ./...
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]

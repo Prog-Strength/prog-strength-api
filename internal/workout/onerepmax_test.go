@@ -239,7 +239,7 @@ func TestRecencyWeightedBaseline_MoreRecentWeightedMore(t *testing.T) {
 	// with different values weighted by recency should produce a result
 	// closer to the recent one than a simple average would.
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at.Add(-3 * 24 * time.Hour), MaxEstimated1RM: 220}, // recent
+		{PerformedAt: at.Add(-3 * 24 * time.Hour), MaxEstimated1RM: 220},  // recent
 		{PerformedAt: at.Add(-80 * 24 * time.Hour), MaxEstimated1RM: 180}, // old
 	}
 	got, ok := RecencyWeightedBaseline(entries, at, DefaultBaselineWindow, DefaultBaselineTau)

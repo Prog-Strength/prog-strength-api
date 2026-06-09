@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )

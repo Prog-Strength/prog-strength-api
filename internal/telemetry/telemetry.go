@@ -51,8 +51,8 @@ type AgentTurn struct {
 	// photo-meal-logging on-ramp); lets us measure vision-turn volume.
 	HadImage  bool
 	StartedAt time.Time
-	EndedAt    time.Time
-	CreatedAt  time.Time
+	EndedAt   time.Time
+	CreatedAt time.Time
 }
 
 // AgentToolCall captures a single MCP tool invocation during a turn.
@@ -78,7 +78,7 @@ type AgentToolCall struct {
 type AgentMessage struct {
 	ID         string
 	TurnID     string
-	Role       string  // "user" | "assistant"
+	Role       string // "user" | "assistant"
 	Content    *string
 	TokenCount *int
 	CreatedAt  time.Time

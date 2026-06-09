@@ -12,16 +12,16 @@ import (
 // for display ("305 lb × 3") and so that a future per-rep-range PR
 // feature is an additive change.
 type PersonalRecord struct {
-	ID          string
-	UserID      string
-	ExerciseID  string
-	WorkoutID   string
-	Weight      float64
-	Reps        int
-	Unit        user.WeightUnit
-	AchievedAt  time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID         string
+	UserID     string
+	ExerciseID string
+	WorkoutID  string
+	Weight     float64
+	Reps       int
+	Unit       user.WeightUnit
+	AchievedAt time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // PersonalRecordEvent is one entry in the append-only log of PR breaks

@@ -104,7 +104,7 @@ func TestRecomputePR_NonImprovingWorkoutsSkipped(t *testing.T) {
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	snaps := []WorkoutSnapshot{
 		snap("w1", start, "barbell-bench-press", set(1, 200)),
-		snap("w2", start.AddDate(0, 0, 7), "barbell-bench-press", set(5, 185)), // lighter
+		snap("w2", start.AddDate(0, 0, 7), "barbell-bench-press", set(5, 185)),  // lighter
 		snap("w3", start.AddDate(0, 0, 14), "barbell-bench-press", set(1, 200)), // tie
 	}
 	pr, events := RecomputePersonalRecord(snaps, "barbell-bench-press")

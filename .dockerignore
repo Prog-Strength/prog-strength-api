@@ -10,7 +10,7 @@ data/
 
 # Ignore documentation
 *.md
-CLAUDE.md
+AGENTS.md
 
 # Ignore build artifacts
 *.exe

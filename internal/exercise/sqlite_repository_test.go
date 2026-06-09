@@ -16,9 +16,9 @@ import (
 // Statement-count regression. List must issue exactly three SQL
 // statements regardless of catalog size:
 //
-//   1. SELECT exercises (with optional muscle_group/equipment joins)
-//   2. SELECT exercise_muscle_groups WHERE exercise_id IN (...)
-//   3. SELECT exercise_equipment WHERE exercise_id IN (...)
+//  1. SELECT exercises (with optional muscle_group/equipment joins)
+//  2. SELECT exercise_muscle_groups WHERE exercise_id IN (...)
+//  3. SELECT exercise_equipment WHERE exercise_id IN (...)
 //
 // Pre-batched-hydration the count was 1 + 2N (one muscle_groups and one
 // equipment query per exercise). See

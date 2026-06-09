@@ -23,7 +23,7 @@ func dayBoundsUTC(date string, loc *time.Location) (time.Time, time.Time, error)
 func loadTimezone(name string) (*time.Location, error) {
 	loc, err := time.LoadLocation(name)
 	if err != nil {
-		return nil, fmt.Errorf("invalid timezone %s: %v", name, err)
+		return nil, fmt.Errorf("invalid timezone %s: %w", name, err)
 	}
 	return loc, nil
 }

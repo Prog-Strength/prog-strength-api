@@ -65,12 +65,12 @@ func TestCreateGetUpdateDeletePantry_Roundtrip(t *testing.T) {
 
 	// Cross-user lookup returns ErrNotFound — never 200, never the
 	// other user's row.
-	if _, err := repo.GetPantryItem(ctx, "u2", p.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("cross-user get: want ErrNotFound, got %v", err)
+	if _, lookupErr := repo.GetPantryItem(ctx, "u2", p.ID); !errors.Is(lookupErr, ErrNotFound) {
+		t.Errorf("cross-user get: want ErrNotFound, got %v", lookupErr)
 	}
 
 	p.Calories = 80
-	if err := repo.UpdatePantryItem(ctx, p); err != nil {
+	if err = repo.UpdatePantryItem(ctx, p); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	got, err = repo.GetPantryItem(ctx, "u1", p.ID)
@@ -185,7 +185,7 @@ func TestMealType_ValidAcceptsFourValues(t *testing.T) {
 
 func TestMealType_ValidRejectsOthers(t *testing.T) {
 	for _, m := range []MealType{"", "brunch", "Lunch", "supper", "elevenses"} {
-		if MealType(m).Valid() {
+		if m.Valid() {
 			t.Errorf("%q should NOT be valid", m)
 		}
 	}

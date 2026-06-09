@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 	"github.com/mattn/go-sqlite3"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 )
 
 // Compile-time check that *SQLiteRepository satisfies Repository.
@@ -80,7 +81,7 @@ func (r *SQLiteRepository) Create(ctx context.Context, s *Session, tcx []byte) e
 
 	// Archive before COMMIT so a storage failure aborts the whole write.
 	if err := r.archiver.Put(ctx, s.TCXS3Key, tcx); err != nil {
-		return fmt.Errorf("%w: %v", ErrStorage, err)
+		return fmt.Errorf("%w: %w", ErrStorage, err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -122,7 +123,7 @@ func (r *SQLiteRepository) GetByGarminActivityID(ctx context.Context, userID, ga
 		WHERE user_id = ? AND garmin_activity_id = ? AND deleted_at IS NULL
 	`, userID, garminActivityID)
 	s, err := scanSession(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return s, err
@@ -203,7 +204,7 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID, sessionID string) (*
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, sessionID, userID)
 	s, err := scanSession(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

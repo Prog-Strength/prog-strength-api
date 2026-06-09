@@ -132,7 +132,9 @@ func (c *countingConn) ExecContext(ctx context.Context, query string, args []dri
 func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) {
 	cp, ok := c.Conn.(driver.ConnPrepareContext)
 	if !ok {
-		return c.Conn.Prepare(query)
+		// Explicit c.Conn rather than c.Prepare so the fallback to the
+		// non-context legacy interface is obvious to a reader.
+		return c.Conn.Prepare(query) //nolint:staticcheck // QF1008: intentional explicit selector
 	}
 	return cp.PrepareContext(ctx, query)
 }
@@ -144,7 +146,10 @@ func (c *countingConn) PrepareContext(ctx context.Context, query string) (driver
 func (c *countingConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
 	bt, ok := c.Conn.(driver.ConnBeginTx)
 	if !ok {
-		return c.Conn.Begin()
+		// Drivers that haven't implemented ConnBeginTx still expose the
+		// pre-Go-1.8 Begin; we must call it to support them. staticcheck
+		// flags this as deprecated but the fallback is the whole point.
+		return c.Conn.Begin() //nolint:staticcheck // SA1019: intentional legacy fallback
 	}
 	return bt.BeginTx(ctx, opts)
 }

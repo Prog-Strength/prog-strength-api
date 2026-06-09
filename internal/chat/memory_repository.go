@@ -220,7 +220,7 @@ func (r *MemoryRepository) activeForUserLocked(userID string) []Session {
 
 // cloneStringPtr returns a fresh *string whose value matches src.
 // Used so AppendTurn's stored rows don't share pointers with the
-// caller's input struct — defensive copy discipline per CLAUDE.md.
+// caller's input struct — defensive copy discipline per AGENTS.md.
 func cloneStringPtr(src *string) *string {
 	if src == nil {
 		return nil

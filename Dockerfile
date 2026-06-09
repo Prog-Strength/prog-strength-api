@@ -1,5 +1,10 @@
 # Build stage
-FROM golang:1.25-alpine AS builder
+# Pinned to a specific patch (not the floating 1.25-alpine tag) so a
+# docker build always picks up the Go version we've verified clean
+# against the latest govulncheck advisories. Bump in lockstep with
+# the `go` directive in go.mod; CI's setup-go reads go.mod and will
+# install the matching toolchain.
+FROM golang:1.25.11-alpine AS builder
 
 # Install build dependencies for CGo (required for go-sqlite3)
 RUN apk add --no-cache gcc musl-dev

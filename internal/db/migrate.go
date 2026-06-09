@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -17,10 +18,17 @@ var migrationsFS embed.FS
 // Migrate runs all pending migrations against the given database.
 // Migrations are applied in numeric order based on filename prefix (001_, 002_, etc.).
 // Already-applied migrations are tracked in the schema_migrations table.
+//
+// Uses context.Background() internally because Migrate runs once during
+// startup; there's no request-scoped context to thread through. The
+// *Context SQL methods are used regardless so noctx is happy and a
+// future Migrate(ctx) variant is a one-line change.
 func Migrate(db *sql.DB) error {
+	ctx := context.Background()
+
 	// Ensure schema_migrations table exists.
 	// This is safe to run multiple times (CREATE TABLE IF NOT EXISTS).
-	if err := ensureMigrationsTable(db); err != nil {
+	if err := ensureMigrationsTable(ctx, db); err != nil {
 		return fmt.Errorf("ensure migrations table: %w", err)
 	}
 
@@ -52,7 +60,7 @@ func Migrate(db *sql.DB) error {
 
 	// Apply pending migrations.
 	for _, m := range migrations {
-		applied, err := isApplied(db, m.Version)
+		applied, err := isApplied(ctx, db, m.Version)
 		if err != nil {
 			return fmt.Errorf("check if migration %d applied: %w", m.Version, err)
 		}
@@ -61,7 +69,7 @@ func Migrate(db *sql.DB) error {
 		}
 
 		log.Printf("applying migration %d: %s", m.Version, m.Filename)
-		if err := applyMigration(db, m); err != nil {
+		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply migration %d: %w", m.Version, err)
 		}
 	}
@@ -76,8 +84,8 @@ type migration struct {
 }
 
 // ensureMigrationsTable creates the schema_migrations table if it doesn't exist.
-func ensureMigrationsTable(db *sql.DB) error {
-	_, err := db.Exec(`
+func ensureMigrationsTable(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
 			applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -87,14 +95,14 @@ func ensureMigrationsTable(db *sql.DB) error {
 }
 
 // isApplied checks if a migration version has already been applied.
-func isApplied(db *sql.DB, version int) (bool, error) {
+func isApplied(ctx context.Context, db *sql.DB, version int) (bool, error) {
 	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&count)
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM schema_migrations WHERE version = ?", version).Scan(&count)
 	return count > 0, err
 }
 
 // applyMigration runs a migration file and records it in schema_migrations.
-func applyMigration(db *sql.DB, m migration) error {
+func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 	// Read migration SQL.
 	content, err := migrationsFS.ReadFile(filepath.Join("migrations", m.Filename))
 	if err != nil {
@@ -102,19 +110,19 @@ func applyMigration(db *sql.DB, m migration) error {
 	}
 
 	// Run in a transaction.
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Execute migration SQL.
-	if _, err := tx.Exec(string(content)); err != nil {
+	if _, err := tx.ExecContext(ctx, string(content)); err != nil {
 		return fmt.Errorf("exec migration: %w", err)
 	}
 
 	// Record migration as applied.
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", m.Version); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", m.Version); err != nil {
 		return fmt.Errorf("record migration: %w", err)
 	}
 

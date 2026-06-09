@@ -18,10 +18,10 @@ func TestMemoryRepository_CreateSession_RejectsBadInput(t *testing.T) {
 	repo := NewMemoryRepository()
 	ctx := context.Background()
 
-	if err := repo.CreateSession(ctx, &Session{UserID: ""}); err != ErrSessionIDRequired && err != ErrUserIDRequired {
+	if err := repo.CreateSession(ctx, &Session{UserID: ""}); !errors.Is(err, ErrSessionIDRequired) && !errors.Is(err, ErrUserIDRequired) {
 		t.Errorf("empty user+id: got %v, want a Required error", err)
 	}
-	if err := repo.CreateSession(ctx, &Session{ID: "not-a-uuid", UserID: "u1"}); err != ErrInvalidSessionID {
+	if err := repo.CreateSession(ctx, &Session{ID: "not-a-uuid", UserID: "u1"}); !errors.Is(err, ErrInvalidSessionID) {
 		t.Errorf("non-uuid: got %v, want ErrInvalidSessionID", err)
 	}
 }
@@ -33,7 +33,7 @@ func TestMemoryRepository_CreateSession_RejectsDuplicateID(t *testing.T) {
 	if err := repo.CreateSession(ctx, &Session{ID: id, UserID: "u1"}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
-	if err := repo.CreateSession(ctx, &Session{ID: id, UserID: "u2"}); err != ErrSessionIDExists {
+	if err := repo.CreateSession(ctx, &Session{ID: id, UserID: "u2"}); !errors.Is(err, ErrSessionIDExists) {
 		t.Errorf("duplicate id: got %v, want ErrSessionIDExists", err)
 	}
 }
@@ -81,7 +81,7 @@ func TestMemoryRepository_AppendTurn_RejectsEmptyContent(t *testing.T) {
 		User:      Message{Content: ""},
 		Assistant: Message{Content: "reply"},
 	})
-	if err != ErrEmptyContent {
+	if !errors.Is(err, ErrEmptyContent) {
 		t.Errorf("empty user content: got %v, want ErrEmptyContent", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestMemoryRepository_GetSession_ScopedByUser(t *testing.T) {
 	if err := repo.CreateSession(ctx, &Session{ID: id, UserID: "owner"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := repo.GetSession(ctx, "other", id); err != ErrNotFound {
+	if _, err := repo.GetSession(ctx, "other", id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("wrong-user get: got %v, want ErrNotFound (no info leak)", err)
 	}
 }
@@ -108,7 +108,7 @@ func TestMemoryRepository_SoftDelete_HidesFromReads(t *testing.T) {
 	if err := repo.SoftDeleteSession(ctx, "u1", id); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := repo.GetSession(ctx, "u1", id); err != ErrNotFound {
+	if _, err := repo.GetSession(ctx, "u1", id); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get after delete: got %v, want ErrNotFound", err)
 	}
 	list, err := repo.ListSessions(ctx, "u1")
@@ -142,7 +142,7 @@ func TestMemoryRepository_Eviction_DropsOldestOverCap(t *testing.T) {
 	}
 
 	// The first one in (oldest last_message_at) should be gone.
-	if _, err := repo.GetSession(ctx, "u1", ids[0]); err != ErrNotFound {
+	if _, err := repo.GetSession(ctx, "u1", ids[0]); !errors.Is(err, ErrNotFound) {
 		t.Errorf("expected oldest to be evicted, got %v", err)
 	}
 	// The most recent should be present.
@@ -176,7 +176,7 @@ func TestMemoryRepository_SetTitle_BumpsUpdatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get pre-title: %v", err)
 	}
-	if err := repo.SetTitle(ctx, "u1", id, "My Workouts"); err != nil {
+	if err = repo.SetTitle(ctx, "u1", id, "My Workouts"); err != nil {
 		t.Fatalf("set title: %v", err)
 	}
 	after, err := repo.GetSession(ctx, "u1", id)
@@ -208,7 +208,7 @@ func TestMemoryRepository_SessionIntentRoundTrip(t *testing.T) {
 	}
 
 	when := time.Now().UTC().Truncate(time.Second)
-	if err := repo.SetSessionIntent(ctx, s.ID, "log_nutrition", when); err != nil {
+	if err = repo.SetSessionIntent(ctx, s.ID, "log_nutrition", when); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 

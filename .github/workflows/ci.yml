@@ -1,0 +1,146 @@
+name: CI
+
+# Quality gate for every PR targeting main. Mirrors the local
+# pre-commit + pre-push hook set (see .pre-commit-config.yaml) plus a
+# couple of CI-only checks (race detector, govulncheck) that are too
+# slow to run on every push.
+#
+# CI is the LAST gate before merge → release. Pre-commit is the courtesy
+# layer that saves contributors the round-trip; CI is authoritative.
+
+on:
+  pull_request:
+    branches: [main]
+  # Re-run on pushes to main so coverage / vuln results stay current
+  # after a squash-merge.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Cancel in-flight runs when a new commit is pushed to the same PR.
+# Force-pushes are common during review; we don't want to pay for
+# stale runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: Conventional commit PR title
+    runs-on: ubuntu-latest
+    # Only relevant on pull_request — semantic-release will reject
+    # non-conforming commits on main directly via its commit-analyzer.
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Validate PR title
+        uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Must match the prefix set in .pre-commit-config.yaml and
+          # release.config.js. semantic-release maps feat→minor,
+          # fix→patch, everything else→no release.
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            perf
+            build
+            ci
+            style
+            revert
+          # Scopes are free-form — the repo uses package names
+          # ("running", "httpresp") and cross-cutting tags ("api",
+          # "deploy"). Don't enforce a closed set.
+          requireScope: false
+          # Allow lowercase only; semantic-release is case-sensitive on
+          # the type prefix.
+          subjectPattern: ^[a-z].+$
+          subjectPatternError: |
+            PR title subject must start with a lowercase letter to match
+            the project's conventional commit style.
+
+  lint:
+    name: Lint + format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Read the toolchain version from go.mod so a Go bump here is a
+          # one-line change and CI follows automatically.
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          # Pin a specific v2 release. The matching .golangci.yml lives
+          # at the repo root. Bump intentionally; do not float to latest.
+          # golangci-lint-action v7 is required for golangci-lint v2;
+          # v6 hard-errors on a v2.x version string at the prepare step.
+          # v2.12.2 ships built with Go 1.25 — anything older (e.g. the
+          # v2.1.x line) refuses to lint a module whose go.mod targets
+          # 1.25.3 with: "the Go language version (go1.24) used to
+          # build golangci-lint is lower than the targeted Go version".
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: go mod tidy drift
+        run: |
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go.mod / go.sum drift detected. Run 'go mod tidy' locally and commit."
+            exit 1
+          fi
+
+  test:
+    name: Test (race + cover)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test -race -cover
+        # -race catches data races invisible to the standard suite.
+        # -cover prints per-package coverage in the run log; a separate
+        # coverage threshold can be enforced later by piping into a
+        # tool, but the visibility is the first step.
+        run: go test -race -cover ./...
+
+  vulnerabilities:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Scan for known vulnerabilities
+        # Reports CVEs that the imports actually reach (call-graph
+        # filtered). False positives are rare; treat any output as a
+        # blocker until acknowledged or patched.
+        run: govulncheck ./...

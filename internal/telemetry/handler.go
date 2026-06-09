@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 )
@@ -30,7 +31,7 @@ type IntentSink interface {
 // deploy's network boundary is the auth boundary.
 type Handler struct {
 	repo       Repository
-	intentSink IntentSink // may be nil
+	intentSink IntentSink       // may be nil
 	now        func() time.Time // injectable for tests
 }
 
@@ -59,19 +60,19 @@ func (h *Handler) Mount(r chi.Router) {
 // Timestamps are RFC3339 strings so the wire format stays
 // language-neutral (the FastAPI agent service is the primary caller).
 type turnRequest struct {
-	ID                  string  `json:"id"`
-	UserID              string  `json:"user_id"`
-	SessionID           string  `json:"session_id"`
-	Model               string  `json:"model"`
-	RoutedTier          string  `json:"routed_tier"`
-	RouterModel         string  `json:"router_model"`
-	RouterLatencyMs     int     `json:"router_latency_ms"`
-	InputTokens         int     `json:"input_tokens"`
-	OutputTokens        int     `json:"output_tokens"`
-	CacheCreationTokens int     `json:"cache_creation_tokens"`
-	CacheReadTokens     int     `json:"cache_read_tokens"`
-	TotalLatencyMs      int     `json:"total_latency_ms"`
-	TimeToFirstTokenMs  int     `json:"time_to_first_token_ms"`
+	ID                       string  `json:"id"`
+	UserID                   string  `json:"user_id"`
+	SessionID                string  `json:"session_id"`
+	Model                    string  `json:"model"`
+	RoutedTier               string  `json:"routed_tier"`
+	RouterModel              string  `json:"router_model"`
+	RouterLatencyMs          int     `json:"router_latency_ms"`
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationTokens      int     `json:"cache_creation_tokens"`
+	CacheReadTokens          int     `json:"cache_read_tokens"`
+	TotalLatencyMs           int     `json:"total_latency_ms"`
+	TimeToFirstTokenMs       int     `json:"time_to_first_token_ms"`
 	CompletionReason         string  `json:"completion_reason"`
 	Error                    *string `json:"error"`
 	StartedAt                string  `json:"started_at"`
@@ -112,19 +113,19 @@ func (h *Handler) turn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	t := AgentTurn{
-		ID:                  turnID,
-		UserID:              req.UserID,
-		SessionID:           req.SessionID,
-		Model:               req.Model,
-		RoutedTier:          req.RoutedTier,
-		RouterModel:         req.RouterModel,
-		RouterLatencyMs:     req.RouterLatencyMs,
-		InputTokens:         req.InputTokens,
-		OutputTokens:        req.OutputTokens,
-		CacheCreationTokens: req.CacheCreationTokens,
-		CacheReadTokens:     req.CacheReadTokens,
-		TotalLatencyMs:      req.TotalLatencyMs,
-		TimeToFirstTokenMs:  req.TimeToFirstTokenMs,
+		ID:                       turnID,
+		UserID:                   req.UserID,
+		SessionID:                req.SessionID,
+		Model:                    req.Model,
+		RoutedTier:               req.RoutedTier,
+		RouterModel:              req.RouterModel,
+		RouterLatencyMs:          req.RouterLatencyMs,
+		InputTokens:              req.InputTokens,
+		OutputTokens:             req.OutputTokens,
+		CacheCreationTokens:      req.CacheCreationTokens,
+		CacheReadTokens:          req.CacheReadTokens,
+		TotalLatencyMs:           req.TotalLatencyMs,
+		TimeToFirstTokenMs:       req.TimeToFirstTokenMs,
 		CompletionReason:         req.CompletionReason,
 		Error:                    req.Error,
 		StartedAt:                startedAt,

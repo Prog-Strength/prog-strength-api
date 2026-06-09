@@ -1,0 +1,204 @@
+# golangci-lint config. See CONTRIBUTING.md for install + how to run.
+#
+# Philosophy: catch bugs and unsafe patterns; don't bikeshed style. Most
+# enabled linters target a real failure mode the test suite wouldn't
+# catch — leaked DB rows, unchecked errors, http requests missing
+# context, ineffective assignments. Formatters (gofmt, goimports) sit
+# in the formatters block so a single `golangci-lint run --fix`
+# resolves both lint and format drift.
+#
+# Requires golangci-lint v2.x. v1 cannot parse Go 1.25 generics in our
+# upstream deps (aws-sdk-go-v2). CI pins a specific v2 release; local
+# contributors should `brew upgrade golangci-lint` to v2 if older.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    # Stdlib correctness
+    - errcheck         # unchecked errors
+    - govet            # printf format strings, copy locks, etc.
+    - ineffassign      # values assigned but never used
+    - staticcheck      # rolled-up bug + simplification checks
+    - unused           # dead code
+    - unconvert        # unnecessary type conversions
+    - usestdlibvars    # prefer http.MethodGet over "GET"
+
+    # HTTP + DB hazards — the Chi/SQLite domain of this codebase
+    - bodyclose        # http.Response.Body left unclosed
+    - noctx            # http requests built without context
+    - rowserrcheck     # sql.Rows.Err() unchecked
+    - sqlclosecheck    # sql.Rows / sql.Stmt not closed
+
+    # Error handling discipline
+    - errorlint        # %w vs %v, errors.Is/As vs ==
+
+    # Security
+    - gosec            # common security issues; tuned via settings below
+
+    # Lint hygiene
+    - misspell         # spelling in comments + strings
+    - nolintlint       # malformed nolint directives
+    - whitespace       # trailing newlines, empty leading lines
+    - revive           # configurable replacement for golint
+
+  settings:
+    errcheck:
+      # Calls like `_ = w.Write(...)` make intent obvious. Type-assertion
+      # error checks are a stylistic choice — off to avoid noise.
+      check-blank: false
+      check-type-assertions: false
+      exclude-functions:
+        - (net/http.ResponseWriter).Write
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        # Cleanup calls inside defer / cleanup paths. Errors here are
+        # rarely actionable (e.g. closing an already-failed Rows) and
+        # the project's idiomatic pattern matches the stdlib examples
+        # — `defer rows.Close()`, `defer tx.Rollback()`, etc. Listing
+        # explicit method receivers so we don't accidentally swallow
+        # an unrelated Close that should be checked.
+        - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
+        - (*database/sql.Tx).Rollback
+        - (*database/sql.DB).Close
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*net/http.Response).Body.Close
+
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment is a micro-optimization at this scale; the
+        # ordering it suggests obscures domain grouping.
+        - fieldalignment
+
+    gosec:
+      excludes:
+        # G104 ("audit errors not checked") overlaps with errcheck and
+        # routinely fires on intentional log/write discards.
+        - G104
+        # G115 ("integer overflow conversion") fires on benign int → int64
+        # conversions everywhere SQL is involved.
+        - G115
+        # G124 ("cookie missing Secure/HttpOnly/SameSite") fires on the
+        # cleanup cookies that clear state (`MaxAge: -1`) where security
+        # attrs are irrelevant, and also on cookies that DO set those
+        # attrs — gosec doesn't track conditional struct construction
+        # well. Auth cookies are reviewed-by-hand in internal/auth/.
+        - G124
+        # G202 / G701 (SQL injection via concat / taint analysis) fire
+        # on safe filter-clause joins (`strings.Join(clauses, " AND ")`)
+        # and on `WHERE col IN (`+placeholders(N)+`)` patterns where the
+        # only concatenated string is the placeholder count and values
+        # flow through args. gosec can't see that boundary. Real concat
+        # of user input would still trigger G201 which we keep enabled.
+        - G202
+        - G701
+        # G706 ("log injection via taint analysis") fires on log lines
+        # that interpolate env var values (e.g. TCX_BUCKET_NAME). Env
+        # is operator-controlled, not user input.
+        - G706
+        # G710 ("open redirect via taint analysis") fires on Google
+        # OAuth's return_to flow even though the URL is validated against
+        # an allowlist (Handler.isAllowedReturnTo). gosec can't follow
+        # the validation across the function boundary.
+        - G710
+        # G120 ("unbounded form parsing") fires on ParseMultipartForm
+        # even though the import handler explicitly wraps the body in
+        # http.MaxBytesReader BEFORE parsing. False positive here.
+        - G120
+
+    misspell:
+      locale: US
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+    staticcheck:
+      checks:
+        - all
+        # ST1000 ("at least one file in a package should have a package
+        # comment") is noisy for tiny internal packages.
+        - -ST1000
+
+  exclusions:
+    generated: lax
+    paths:
+      # Migration SQL is embedded but the directory has no Go files.
+      # Listed for intent + safety against future Go helpers there.
+      - internal/db/migrations
+    rules:
+      # Tests get a longer leash on a few categories that are routine in
+      # test files but problematic in production code.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+          - noctx
+          # `httptest.NewRequest("GET", ...)` with a method literal is
+          # idiomatic in test setup; the http.Method* constants add
+          # noise without catching real bugs in tests.
+          - usestdlibvars
+
+      # httpresp.ServerError's signature is (w, ctx, op, err) for
+      # historical reasons — w-first matches every other helper in
+      # the package. Switching to ctx-first would touch every call site
+      # in the codebase. Suppressed here; flagged as a possible cleanup
+      # in AGENTS.md.
+      - path: internal/httpresp/response\.go
+        text: "context-as-argument"
+        linters:
+          - revive
+
+      # Test helpers conventionally take *testing.T as the first
+      # parameter (t.Helper, t.Cleanup, etc.). revive's strict reading
+      # of "ctx must be first" conflicts with that convention; allow
+      # ctx as second-or-later in tests.
+      - path: _test\.go
+        text: "context-as-argument"
+        linters:
+          - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/jwallace145/progressive-overload-fitness-tracker
+
+issues:
+  # 0 = no cap. Default is 3 per linter, which silently truncates results
+  # when introducing a new linter to an existing codebase.
+  max-issues-per-linter: 0
+  max-same-issues: 0

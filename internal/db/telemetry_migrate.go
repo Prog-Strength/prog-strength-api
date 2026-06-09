@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"fmt"
@@ -21,7 +22,8 @@ var telemetryMigrationsFS embed.FS
 // Kept as a parallel function rather than a refactor of Migrate so
 // the existing app-db migration path is untouched.
 func MigrateTelemetry(db *sql.DB) error {
-	if err := ensureMigrationsTable(db); err != nil {
+	ctx := context.Background()
+	if err := ensureMigrationsTable(ctx, db); err != nil {
 		return fmt.Errorf("ensure telemetry migrations table: %w", err)
 	}
 
@@ -50,7 +52,7 @@ func MigrateTelemetry(db *sql.DB) error {
 	})
 
 	for _, m := range migrations {
-		applied, err := isApplied(db, m.Version)
+		applied, err := isApplied(ctx, db, m.Version)
 		if err != nil {
 			return fmt.Errorf("check if telemetry migration %d applied: %w", m.Version, err)
 		}
@@ -59,7 +61,7 @@ func MigrateTelemetry(db *sql.DB) error {
 		}
 
 		log.Printf("applying telemetry migration %d: %s", m.Version, m.Filename)
-		if err := applyTelemetryMigration(db, m); err != nil {
+		if err := applyTelemetryMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply telemetry migration %d: %w", m.Version, err)
 		}
 	}
@@ -71,23 +73,23 @@ func MigrateTelemetry(db *sql.DB) error {
 // applyTelemetryMigration is the telemetry-fs sibling of applyMigration.
 // Tiny code duplication — the two could be unified by parameterizing
 // the embed.FS, but the existing app-db function stays untouched.
-func applyTelemetryMigration(db *sql.DB, m migration) error {
+func applyTelemetryMigration(ctx context.Context, db *sql.DB, m migration) error {
 	content, err := telemetryMigrationsFS.ReadFile(filepath.Join("telemetry_migrations", m.Filename))
 	if err != nil {
 		return fmt.Errorf("read migration file: %w", err)
 	}
 
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(string(content)); err != nil {
+	if _, err := tx.ExecContext(ctx, string(content)); err != nil {
 		return fmt.Errorf("exec migration: %w", err)
 	}
 
-	if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", m.Version); err != nil {
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations (version) VALUES (?)", m.Version); err != nil {
 		return fmt.Errorf("record migration: %w", err)
 	}
 

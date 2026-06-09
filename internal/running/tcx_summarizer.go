@@ -84,17 +84,17 @@ func avgHeartRate(tps []parsedTrackpoint) *int {
 }
 
 func maxHeartRate(tps []parsedTrackpoint) *int {
-	var max *int
+	var hi *int
 	for _, tp := range tps {
 		if tp.HeartRateBpm == nil {
 			continue
 		}
-		if max == nil || *tp.HeartRateBpm > *max {
+		if hi == nil || *tp.HeartRateBpm > *hi {
 			v := *tp.HeartRateBpm
-			max = &v
+			hi = &v
 		}
 	}
-	return max
+	return hi
 }
 
 // elevationGain sums only the positive consecutive altitude deltas (total
@@ -103,12 +103,12 @@ func maxHeartRate(tps []parsedTrackpoint) *int {
 func elevationGain(tps []parsedTrackpoint) *float64 {
 	var prev *float64
 	gain := 0.0
-	any := false
+	seen := false
 	for _, tp := range tps {
 		if tp.AltitudeMeters == nil {
 			continue
 		}
-		any = true
+		seen = true
 		if prev != nil {
 			if d := *tp.AltitudeMeters - *prev; d > 0 {
 				gain += d
@@ -116,7 +116,7 @@ func elevationGain(tps []parsedTrackpoint) *float64 {
 		}
 		prev = tp.AltitudeMeters
 	}
-	if !any {
+	if !seen {
 		return nil
 	}
 	return &gain
@@ -127,7 +127,7 @@ func elevationGain(tps []parsedTrackpoint) *float64 {
 // the left edge, then the window's pace is its elapsed time over exactly
 // 1 km. Anchoring on distance (not sample count) makes the result robust
 // to GPS jitter: a single noisy sample (e.g. a 50 m teleport in 1 s) is
-// diluted across a full kilometre, so it can't poison the minimum the way
+// diluted across a full kilometer, so it can't poison the minimum the way
 // an instantaneous per-sample pace would. Returns nil when run is < 1 km.
 func bestPace(tps []parsedTrackpoint) *float64 {
 	if len(tps) == 0 || tps[len(tps)-1].DistanceMeters-tps[0].DistanceMeters < 1000 {
@@ -163,7 +163,7 @@ func bestPace(tps []parsedTrackpoint) *float64 {
 // downsample reduces the raw track to ~maxTrackpoints evenly strided
 // points, always keeping the first and last so the chart's endpoints are
 // exact. Per-kept-point pace is computed between consecutive KEPT points
-// (not raw neighbours), matching what the chart actually draws.
+// (not raw neighbors), matching what the chart actually draws.
 func downsample(raw []parsedTrackpoint, first parsedTrackpoint) []Trackpoint {
 	// summarize only calls this on a validated (non-empty) track, but guard
 	// anyway so the index math below can't panic on a degenerate input.

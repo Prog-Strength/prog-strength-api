@@ -172,20 +172,18 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var workouts []Workout
 	for rows.Next() {
 		var w Workout
-		if err := rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
-			rows.Close()
+		if err = rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
 			return nil, err
 		}
 		workouts = append(workouts, w)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close()
 
 	if len(workouts) == 0 {
 		return workouts, nil
@@ -289,7 +287,8 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	for i := range w.Exercises {
 		we := &w.Exercises[i]
 
-		result, err := tx.ExecContext(ctx, `
+		var weResult sql.Result
+		weResult, err = tx.ExecContext(ctx, `
 			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, superset_group, notes)
 			VALUES (?, ?, ?, ?, ?)
 		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
@@ -297,18 +296,18 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 			return err
 		}
 
-		workoutExerciseID, err := result.LastInsertId()
+		var workoutExerciseID int64
+		workoutExerciseID, err = weResult.LastInsertId()
 		if err != nil {
 			return err
 		}
 
 		for j := range we.Sets {
 			set := &we.Sets[j]
-			_, err := tx.ExecContext(ctx, `
+			if _, err = tx.ExecContext(ctx, `
 				INSERT INTO sets (workout_exercise_id, reps, weight, unit, set_order)
 				VALUES (?, ?, ?, ?, ?)
-			`, workoutExerciseID, set.Reps, set.Weight, set.Unit, j)
-			if err != nil {
+			`, workoutExerciseID, set.Reps, set.Weight, set.Unit, j); err != nil {
 				return err
 			}
 		}
@@ -318,12 +317,12 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	// replacement on the workout side, so the history rows have to be
 	// regenerated from the new shape; delete-then-insert is simpler than
 	// trying to compute a diff.
-	if _, err := tx.ExecContext(ctx,
+	if _, err = tx.ExecContext(ctx,
 		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, w.ID); err != nil {
 		return err
 	}
 	now := r.now().UTC()
-	if err := r.writeOneRepMaxHistoryTx(ctx, tx, *w, now); err != nil {
+	if err = r.writeOneRepMaxHistoryTx(ctx, tx, *w, now); err != nil {
 		return err
 	}
 
@@ -363,7 +362,7 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 		`SELECT user_id FROM workouts WHERE id = ? AND deleted_at IS NULL`,
 		workoutID).Scan(&userID)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		return err
@@ -456,6 +455,7 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	type stagedRow struct {
 		we        WorkoutExercise
 		weID      int64
@@ -464,20 +464,17 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 	var staged []stagedRow
 	for rows.Next() {
 		var row stagedRow
-		if err := rows.Scan(
+		if err = rows.Scan(
 			&row.weID, &row.workoutID,
 			&row.we.ExerciseID, &row.we.Order, &row.we.SupersetGroup, &row.we.Notes,
 		); err != nil {
-			rows.Close()
 			return nil, err
 		}
 		staged = append(staged, row)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close()
 
 	byWorkout := make(map[string][]WorkoutExercise, len(workoutIDs))
 	if len(staged) == 0 {
@@ -500,23 +497,21 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 	if err != nil {
 		return nil, err
 	}
+	defer setRows.Close()
 	setsByWE := make(map[int64][]Set, len(staged))
 	for setRows.Next() {
 		var weID int64
 		var s Set
 		var unit string
-		if err := setRows.Scan(&weID, &s.Reps, &s.Weight, &unit); err != nil {
-			setRows.Close()
+		if err = setRows.Scan(&weID, &s.Reps, &s.Weight, &unit); err != nil {
 			return nil, err
 		}
 		s.Unit = user.WeightUnit(unit)
 		setsByWE[weID] = append(setsByWE[weID], s)
 	}
-	if err := setRows.Err(); err != nil {
-		setRows.Close()
+	if err = setRows.Err(); err != nil {
 		return nil, err
 	}
-	setRows.Close()
 
 	// Step 3: assemble. Slice append preserves the SQL ORDER BY
 	// (workout_id, exercise_order), so each workout's bucket lands in
@@ -687,12 +682,12 @@ func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Wo
 	var workouts []Workout
 	for rows.Next() {
 		var w Workout
-		if err := rows.Scan(&w.ID, &w.UserID, &w.PerformedAt); err != nil {
+		if err = rows.Scan(&w.ID, &w.UserID, &w.PerformedAt); err != nil {
 			return nil, err
 		}
 		workouts = append(workouts, w)
 	}
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 

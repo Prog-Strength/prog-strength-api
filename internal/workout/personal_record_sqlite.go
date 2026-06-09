@@ -346,18 +346,17 @@ func (r *SQLiteRepository) BackfillPersonalRecords(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	type pair struct{ userID, exerciseID string }
 	var pairs []pair
 	for rows.Next() {
 		var p pair
-		if err := rows.Scan(&p.userID, &p.exerciseID); err != nil {
-			rows.Close()
+		if err = rows.Scan(&p.userID, &p.exerciseID); err != nil {
 			return err
 		}
 		pairs = append(pairs, p)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err = rows.Err(); err != nil {
 		return err
 	}
 	if len(pairs) == 0 {

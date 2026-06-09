@@ -12,9 +12,10 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/oauth2"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"golang.org/x/oauth2"
 )
 
 // Cookie names. authTokenCookie is set on a successful login so that browser

@@ -3,6 +3,7 @@ package nutrition
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -59,7 +60,7 @@ func (r *SQLiteRepository) GetPantryItem(ctx context.Context, userID, itemID str
 	`, itemID, userID)
 
 	p, err := scanPantry(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return p, err
@@ -234,7 +235,7 @@ func (r *SQLiteRepository) GetNutritionLogEntry(ctx context.Context, userID, ent
 	`, entryID, userID)
 
 	e, err := scanLogEntry(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return e, err
@@ -478,7 +479,7 @@ func (r *SQLiteRepository) GetRecipe(ctx context.Context, userID, recipeID strin
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, recipeID, userID)
 	rec, err := scanRecipe(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {

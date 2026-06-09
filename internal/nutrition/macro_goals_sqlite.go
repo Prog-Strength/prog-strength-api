@@ -18,8 +18,8 @@ func (r *SQLiteRepository) GetMacroGoals(
 	userID string,
 ) (MacroGoals, error) {
 	var (
-		g                     MacroGoals
-		createdAt, updatedAt  time.Time
+		g                    MacroGoals
+		createdAt, updatedAt time.Time
 	)
 	err := r.db.QueryRowContext(ctx, `
 		SELECT user_id, protein_g, carbs_g, fat_g, calories,

@@ -1,3 +1,10 @@
+# [0.40.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.39.0...v0.40.0) (2026-06-09)
+
+
+### Features
+
+* **activity:** generalize running domain into sport-agnostic activity ingest ([#15](https://github.com/Prog-Strength/prog-strength-api/issues/15)) ([ddad7a3](https://github.com/Prog-Strength/prog-strength-api/commit/ddad7a34649f0f68ed0bbad1410a7e6de397747d))
+
 # [0.39.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.2...v0.39.0) (2026-06-09)
 
 

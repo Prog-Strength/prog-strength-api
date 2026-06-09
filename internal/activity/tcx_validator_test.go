@@ -1,12 +1,12 @@
-package running
+package activity
 
 import (
 	"errors"
 	"testing"
 )
 
-// parseAndValidate mirrors what the handler will do: parse, mapping a
-// parse failure to a SlugParseFailed ValidationError, then validate.
+// parseAndValidate mirrors what IngestTCX does: parse, mapping a parse
+// failure to a SlugParseFailed ValidationError, then validate.
 func parseAndValidate(data []byte) error {
 	p, err := parseTCX(data)
 	if err != nil {
@@ -23,7 +23,9 @@ func TestValidate(t *testing.T) {
 	}{
 		{"running 5k is valid", "typical_5k.tcx", ""},
 		{"intervals is valid", "intervals.tcx", ""},
-		{"biking is rejected", "biking.tcx", SlugNotRunning},
+		// Biking is no longer rejected — the validator accepts any sport;
+		// classification happens later via normalizeActivityType.
+		{"biking is now valid", "biking.tcx", ""},
 		{"zero-distance is empty", "empty.tcx", SlugEmpty},
 		{"malformed is parse failure", "malformed.tcx", SlugParseFailed},
 	}

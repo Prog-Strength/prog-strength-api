@@ -1,4 +1,4 @@
-package running
+package activity
 
 import (
 	"context"
@@ -16,11 +16,12 @@ import (
 // Compile-time check that *SQLiteRepository satisfies Repository.
 var _ Repository = (*SQLiteRepository)(nil)
 
-// sessionColumns is the canonical select list, kept in one place so the
+// activityColumns is the canonical select list, kept in one place so the
 // scan order can't drift between queries.
-const sessionColumns = `
-	id, user_id, garmin_activity_id, start_time, name,
-	distance_meters, duration_seconds, avg_pace_sec_per_km, best_pace_sec_per_km,
+const activityColumns = `
+	id, user_id, activity_type, ingest_source, source_activity_id,
+	start_time, name, distance_meters, duration_seconds,
+	avg_pace_sec_per_km, best_pace_sec_per_km,
 	avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
 	tcx_s3_key, created_at, deleted_at`
 
@@ -34,22 +35,31 @@ func NewSQLiteRepository(db *sql.DB, archiver Archiver) *SQLiteRepository {
 	return &SQLiteRepository{db: db, archiver: archiver, now: time.Now}
 }
 
-// Create inserts the session + its trackpoints in one transaction and
+// Create inserts the activity + its trackpoints in one transaction and
 // archives the TCX file. The ordering matters for consistency:
 //
-//	BEGIN → INSERT session (+ trackpoints) → archive Put → COMMIT
+//	BEGIN → INSERT activity (+ trackpoints) → archive Put → COMMIT
 //
 // The row + its points go in first so a UNIQUE violation short-circuits
 // before we touch S3. The Put happens before COMMIT so a storage failure
-// rolls the whole thing back — we never persist a session whose file
+// rolls the whole thing back — we never persist an activity whose file
 // isn't in the bucket. If COMMIT itself fails after a successful Put, we
 // best-effort Delete the orphaned object.
-func (r *SQLiteRepository) Create(ctx context.Context, s *Session, tcx []byte) error {
+//
+// Pre-conditions on a: ActivityType, IngestSource, SourceActivityID,
+// StartTime, and the running-specific fields if applicable are already
+// populated by the caller (typically IngestTCX). Create generates ID and
+// stamps TCXS3Key and CreatedAt.
+func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) error {
 	now := r.now().UTC()
-	s.ID = id.New()
-	s.TCXS3Key = fmt.Sprintf("runs/%s/%s.tcx", s.UserID, s.ID)
-	s.CreatedAt = now
-	s.DeletedAt = nil
+	a.ID = id.New()
+	key, err := buildTCXKey(a.UserID, a.ActivityType, a.StartTime, a.ID)
+	if err != nil {
+		return err
+	}
+	a.TCXS3Key = key
+	a.CreatedAt = now
+	a.DeletedAt = nil
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -59,47 +69,49 @@ func (r *SQLiteRepository) Create(ctx context.Context, s *Session, tcx []byte) e
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO running_sessions (
-			id, user_id, garmin_activity_id, start_time, name,
-			distance_meters, duration_seconds, avg_pace_sec_per_km, best_pace_sec_per_km,
+		INSERT INTO activities (
+			id, user_id, activity_type, ingest_source, source_activity_id,
+			start_time, name, distance_meters, duration_seconds,
+			avg_pace_sec_per_km, best_pace_sec_per_km,
 			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
 			tcx_s3_key, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, s.ID, s.UserID, s.GarminActivityID, s.StartTime, s.Name,
-		s.DistanceMeters, s.DurationSeconds, s.AvgPaceSecPerKm, s.BestPaceSecPerKm,
-		s.AvgHeartRateBpm, s.MaxHeartRateBpm, s.TotalCalories, s.ElevationGainMeters,
-		s.TCXS3Key, s.CreatedAt); err != nil {
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, a.ID, a.UserID, a.ActivityType, a.IngestSource, a.SourceActivityID,
+		a.StartTime, a.Name, a.DistanceMeters, a.DurationSeconds,
+		a.AvgPaceSecPerKm, a.BestPaceSecPerKm,
+		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories, a.ElevationGainMeters,
+		a.TCXS3Key, a.CreatedAt); err != nil {
 		if isUniqueViolation(err) {
 			return ErrDuplicate
 		}
 		return err
 	}
 
-	if err := insertTrackpointsTx(ctx, tx, s.ID, s.Trackpoints); err != nil {
+	if err := insertTrackpointsTx(ctx, tx, a.ID, a.Trackpoints); err != nil {
 		return err
 	}
 
 	// Archive before COMMIT so a storage failure aborts the whole write.
-	if err := r.archiver.Put(ctx, s.TCXS3Key, tcx); err != nil {
+	if err := r.archiver.Put(ctx, a.TCXS3Key, tcx, ObjectMetadata{IngestSource: a.IngestSource}); err != nil {
 		return fmt.Errorf("%w: %w", ErrStorage, err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		// The object is in S3 but the row didn't land — clean up so we
 		// don't leak an orphan. Best-effort; ignore the delete error.
-		_ = r.archiver.Delete(ctx, s.TCXS3Key)
+		_ = r.archiver.Delete(ctx, a.TCXS3Key)
 		return err
 	}
 	return nil
 }
 
-func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, sessionID string, points []Trackpoint) error {
+func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, activityID string, points []Trackpoint) error {
 	if len(points) == 0 {
 		return nil
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO running_trackpoints (
-			session_id, sequence, elapsed_seconds, distance_meters,
+		INSERT INTO activity_trackpoints (
+			activity_id, sequence, elapsed_seconds, distance_meters,
 			heart_rate_bpm, pace_sec_per_km, elevation_meters
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
@@ -108,7 +120,7 @@ func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, sessionID string, poin
 	}
 	defer stmt.Close()
 	for _, p := range points {
-		if _, err := stmt.ExecContext(ctx, sessionID, p.Sequence, p.ElapsedSeconds,
+		if _, err := stmt.ExecContext(ctx, activityID, p.Sequence, p.ElapsedSeconds,
 			p.DistanceMeters, p.HeartRateBpm, p.PaceSecPerKm, p.ElevationMeters); err != nil {
 			return err
 		}
@@ -116,20 +128,20 @@ func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, sessionID string, poin
 	return nil
 }
 
-func (r *SQLiteRepository) GetByGarminActivityID(ctx context.Context, userID, garminActivityID string) (*Session, error) {
+func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID string, source IngestSource, sourceActivityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+sessionColumns+`
-		FROM running_sessions
-		WHERE user_id = ? AND garmin_activity_id = ? AND deleted_at IS NULL
-	`, userID, garminActivityID)
-	s, err := scanSession(row)
+		SELECT `+activityColumns+`
+		FROM activities
+		WHERE user_id = ? AND ingest_source = ? AND source_activity_id = ? AND deleted_at IS NULL
+	`, userID, source, sourceActivityID)
+	a, err := scanActivity(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
-	return s, err
+	return a, err
 }
 
-func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time) ([]Session, error) {
+func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time) ([]Activity, error) {
 	args := []any{userID}
 	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
 	if before != nil {
@@ -137,8 +149,8 @@ func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, b
 		args = append(args, *before)
 	}
 	q := `
-		SELECT ` + sessionColumns + `
-		FROM running_sessions
+		SELECT ` + activityColumns + `
+		FROM activities
 		WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY start_time DESC`
 	if limit > 0 {
@@ -151,18 +163,18 @@ func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, b
 	}
 	defer rows.Close()
 
-	var out []Session
+	var out []Activity
 	for rows.Next() {
-		s, err := scanSession(rows)
+		a, err := scanActivity(rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *s)
+		out = append(out, *a)
 	}
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Session, error) {
+func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Activity, error) {
 	args := []any{userID}
 	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
 	if since != nil {
@@ -170,14 +182,14 @@ func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since
 		args = append(args, *since)
 	}
 	if until != nil {
-		// Half-open interval — a session at exactly `until` belongs to
+		// Half-open interval — an activity at exactly `until` belongs to
 		// the next window (callers chain adjacent month boundaries).
 		clauses = append(clauses, "start_time < ?")
 		args = append(args, *until)
 	}
 	q := `
-		SELECT ` + sessionColumns + `
-		FROM running_sessions
+		SELECT ` + activityColumns + `
+		FROM activities
 		WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY start_time DESC`
 	rows, err := r.db.QueryContext(ctx, q, args...)
@@ -186,46 +198,46 @@ func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since
 	}
 	defer rows.Close()
 
-	var out []Session
+	var out []Activity
 	for rows.Next() {
-		s, err := scanSession(rows)
+		a, err := scanActivity(rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *s)
+		out = append(out, *a)
 	}
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) Get(ctx context.Context, userID, sessionID string) (*Session, error) {
+func (r *SQLiteRepository) Get(ctx context.Context, userID, activityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+sessionColumns+`
-		FROM running_sessions
+		SELECT `+activityColumns+`
+		FROM activities
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, sessionID, userID)
-	s, err := scanSession(row)
+	`, activityID, userID)
+	a, err := scanActivity(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	points, err := r.loadTrackpoints(ctx, sessionID)
+	points, err := r.loadTrackpoints(ctx, activityID)
 	if err != nil {
 		return nil, err
 	}
-	s.Trackpoints = points
-	return s, nil
+	a.Trackpoints = points
+	return a, nil
 }
 
-func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, sessionID string) ([]Trackpoint, error) {
+func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID string) ([]Trackpoint, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT sequence, elapsed_seconds, distance_meters,
 		       heart_rate_bpm, pace_sec_per_km, elevation_meters
-		FROM running_trackpoints
-		WHERE session_id = ?
+		FROM activity_trackpoints
+		WHERE activity_id = ?
 		ORDER BY sequence ASC
-	`, sessionID)
+	`, activityID)
 	if err != nil {
 		return nil, err
 	}
@@ -259,12 +271,12 @@ func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, sessionID string
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) Rename(ctx context.Context, userID, sessionID, name string) (*Session, error) {
+func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name string) (*Activity, error) {
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE running_sessions
+		UPDATE activities
 		SET name = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, name, sessionID, userID)
+	`, name, activityID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -275,22 +287,22 @@ func (r *SQLiteRepository) Rename(ctx context.Context, userID, sessionID, name s
 	if n == 0 {
 		return nil, ErrNotFound
 	}
-	// Re-read so the returned session reflects exactly what's persisted.
+	// Re-read so the returned activity reflects exactly what's persisted.
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+sessionColumns+`
-		FROM running_sessions
+		SELECT `+activityColumns+`
+		FROM activities
 		WHERE id = ? AND user_id = ?
-	`, sessionID, userID)
-	return scanSession(row)
+	`, activityID, userID)
+	return scanActivity(row)
 }
 
-func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, sessionID string) error {
+func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, activityID string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `
-		UPDATE running_sessions
+		UPDATE activities
 		SET deleted_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, now, sessionID, userID)
+	`, now, activityID, userID)
 	if err != nil {
 		return err
 	}
@@ -304,17 +316,20 @@ func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, sessionID str
 	return nil
 }
 
-func (r *SQLiteRepository) Metrics(ctx context.Context, userID string, now time.Time, loc *time.Location) (Metrics, error) {
-	// Pull the minimal projection for every live session and aggregate in
-	// Go. Week/month boundaries are user-local; SQLite's date() modifier
-	// only takes a fixed UTC offset and is wrong across DST, so the
-	// bucketing can't live in SQL. Personal-scale data makes the full
-	// scan cheap and the code far clearer than window SQL.
+func (r *SQLiteRepository) RunningMetrics(ctx context.Context, userID string, now time.Time, loc *time.Location) (Metrics, error) {
+	// Pull the minimal projection for every live ActivityRunning row and
+	// aggregate in Go. Week/month boundaries are user-local; SQLite's
+	// date() modifier only takes a fixed UTC offset and is wrong across
+	// DST, so the bucketing can't live in SQL. Personal-scale data makes
+	// the full scan cheap and the code far clearer than window SQL.
+	//
+	// The (user_id, activity_type, start_time DESC) WHERE deleted_at IS NULL
+	// partial index covers this query exactly.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT start_time, distance_meters, duration_seconds
-		FROM running_sessions
-		WHERE user_id = ? AND deleted_at IS NULL
-	`, userID)
+		FROM activities
+		WHERE user_id = ? AND activity_type = ? AND deleted_at IS NULL
+	`, userID, ActivityRunning)
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -334,11 +349,12 @@ func (r *SQLiteRepository) Metrics(ctx context.Context, userID string, now time.
 	return computeMetrics(data, now, loc), nil
 }
 
-// scanSession reads one running_sessions row out of a Row or Rows.
-func scanSession(s interface{ Scan(...any) error }) (*Session, error) {
+// scanActivity reads one activities row out of a Row or Rows.
+func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	var (
-		sess      Session
+		act       Activity
 		name      sql.NullString
+		avgPace   sql.NullFloat64
 		bestPace  sql.NullFloat64
 		avgHR     sql.NullInt64
 		maxHR     sql.NullInt64
@@ -347,48 +363,54 @@ func scanSession(s interface{ Scan(...any) error }) (*Session, error) {
 		deletedAt sql.NullTime
 	)
 	if err := s.Scan(
-		&sess.ID, &sess.UserID, &sess.GarminActivityID, &sess.StartTime, &name,
-		&sess.DistanceMeters, &sess.DurationSeconds, &sess.AvgPaceSecPerKm, &bestPace,
+		&act.ID, &act.UserID, &act.ActivityType, &act.IngestSource, &act.SourceActivityID,
+		&act.StartTime, &name, &act.DistanceMeters, &act.DurationSeconds,
+		&avgPace, &bestPace,
 		&avgHR, &maxHR, &calories, &elevation,
-		&sess.TCXS3Key, &sess.CreatedAt, &deletedAt,
+		&act.TCXS3Key, &act.CreatedAt, &deletedAt,
 	); err != nil {
 		return nil, err
 	}
 	if name.Valid {
 		v := name.String
-		sess.Name = &v
+		act.Name = &v
+	}
+	if avgPace.Valid {
+		v := avgPace.Float64
+		act.AvgPaceSecPerKm = &v
 	}
 	if bestPace.Valid {
 		v := bestPace.Float64
-		sess.BestPaceSecPerKm = &v
+		act.BestPaceSecPerKm = &v
 	}
 	if avgHR.Valid {
 		v := int(avgHR.Int64)
-		sess.AvgHeartRateBpm = &v
+		act.AvgHeartRateBpm = &v
 	}
 	if maxHR.Valid {
 		v := int(maxHR.Int64)
-		sess.MaxHeartRateBpm = &v
+		act.MaxHeartRateBpm = &v
 	}
 	if calories.Valid {
 		v := int(calories.Int64)
-		sess.TotalCalories = &v
+		act.TotalCalories = &v
 	}
 	if elevation.Valid {
 		v := elevation.Float64
-		sess.ElevationGainMeters = &v
+		act.ElevationGainMeters = &v
 	}
 	if deletedAt.Valid {
 		t := deletedAt.Time
-		sess.DeletedAt = &t
+		act.DeletedAt = &t
 	}
-	return &sess, nil
+	return &act, nil
 }
 
 // isUniqueViolation reports whether err is the go-sqlite3 UNIQUE
-// constraint failure raised by the (user_id, garmin_activity_id) index.
-// We check the extended code first; the string fallback covers wrapped or
-// non-driver errors carrying the same message.
+// constraint failure raised by the (user_id, ingest_source,
+// source_activity_id) index. We check the extended code first; the
+// string fallback covers wrapped or non-driver errors carrying the
+// same message.
 func isUniqueViolation(err error) bool {
 	var se sqlite3.Error
 	if errors.As(err, &se) {

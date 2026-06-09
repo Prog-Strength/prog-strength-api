@@ -1,0 +1,65 @@
+package activity
+
+import "time"
+
+// Activity is the summary of a single recorded activity (a run, walk,
+// bike, etc.), persisted to the activities table. It is derived from an
+// ingested TCX file by the parser + summarizer; the heavy per-second
+// trackpoint stream is stored separately and only loaded for the detail
+// view.
+//
+// Activity is the sport-agnostic generalization of the prior running-only
+// Session type. Running-specific summary fields (avg/best pace, HR, etc.)
+// are kept here as nullable fields rather than split into a per-sport
+// detail table; they're populated only when ActivityType is Running.
+// Walks, rides, and other sports leave them nil.
+//
+// Pointer fields are nil when either the source did not carry that signal
+// (e.g. a watch without a chest strap omits heart rate) or the metric
+// doesn't apply to the sport. A nil pointer means "unknown / not
+// applicable", deliberately distinct from a zero value.
+type Activity struct {
+	ID     string
+	UserID string
+	// ActivityType is the normalized sport. See activity_type.go.
+	ActivityType ActivityType
+	// IngestSource tags how this activity entered the system (manual TCX
+	// upload today; Garmin Connect API in the future). See ingest_source.go.
+	IngestSource IngestSource
+	// SourceActivityID is the activity identifier the source assigned to
+	// this row (the <Id> element for TCX, the Garmin Connect activity ID
+	// for the API). Combined with (user_id, ingest_source) it's the dedup
+	// key for re-ingests.
+	SourceActivityID    string
+	StartTime           time.Time
+	Name                *string
+	DistanceMeters      float64
+	DurationSeconds     int
+	AvgPaceSecPerKm     *float64
+	BestPaceSecPerKm    *float64
+	AvgHeartRateBpm     *int
+	MaxHeartRateBpm     *int
+	TotalCalories       *int
+	ElevationGainMeters *float64
+	TCXS3Key            string
+	CreatedAt           time.Time
+	// Soft delete, consistent with the rest of the repo. json:"-" lives
+	// on the API DTO, not here; this is the in-memory domain type.
+	DeletedAt *time.Time
+	// Trackpoints is populated only on the detail load path. On list
+	// responses it stays nil to avoid shipping thousands of points.
+	Trackpoints []Trackpoint
+}
+
+// Trackpoint is one downsampled sample along an activity's track. The raw
+// TCX stream is ~1 Hz (thousands of points); the summarizer reduces it
+// to ~300 points for charting. Sequence is the kept-point index, not the
+// original sample index.
+type Trackpoint struct {
+	Sequence        int
+	ElapsedSeconds  int
+	DistanceMeters  float64
+	HeartRateBpm    *int
+	PaceSecPerKm    *float64
+	ElevationMeters *float64
+}

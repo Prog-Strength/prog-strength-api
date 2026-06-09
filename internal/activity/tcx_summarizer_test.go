@@ -1,4 +1,4 @@
-package running
+package activity
 
 import (
 	"fmt"
@@ -16,39 +16,74 @@ func TestSummarize_Typical5k(t *testing.T) {
 	if err := validate(p); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	s := summarize(p)
+	a := summarize(p, ActivityRunning)
 
 	// Distance: 5000 m exactly by construction (±10 m tolerance).
-	if math.Abs(s.DistanceMeters-5000) > 10 {
-		t.Errorf("DistanceMeters = %.2f, want ~5000", s.DistanceMeters)
+	if math.Abs(a.DistanceMeters-5000) > 10 {
+		t.Errorf("DistanceMeters = %.2f, want ~5000", a.DistanceMeters)
 	}
 	// 600 points at 1 Hz => 599 s span (±1 s).
-	if s.DurationSeconds < 598 || s.DurationSeconds > 600 {
-		t.Errorf("DurationSeconds = %d, want ~599", s.DurationSeconds)
+	if a.DurationSeconds < 598 || a.DurationSeconds > 600 {
+		t.Errorf("DurationSeconds = %d, want ~599", a.DurationSeconds)
 	}
 	// HR alternates 140/160 => mean exactly 150.
-	if s.AvgHeartRateBpm == nil || *s.AvgHeartRateBpm != 150 {
-		t.Errorf("AvgHeartRateBpm = %v, want 150", s.AvgHeartRateBpm)
+	if a.AvgHeartRateBpm == nil || *a.AvgHeartRateBpm != 150 {
+		t.Errorf("AvgHeartRateBpm = %v, want 150", a.AvgHeartRateBpm)
 	}
-	if s.MaxHeartRateBpm == nil || *s.MaxHeartRateBpm != 160 {
-		t.Errorf("MaxHeartRateBpm = %v, want 160", s.MaxHeartRateBpm)
+	if a.MaxHeartRateBpm == nil || *a.MaxHeartRateBpm != 160 {
+		t.Errorf("MaxHeartRateBpm = %v, want 160", a.MaxHeartRateBpm)
 	}
 	// Calories summed from the single lap.
-	if s.TotalCalories == nil || *s.TotalCalories != 350 {
-		t.Errorf("TotalCalories = %v, want 350", s.TotalCalories)
+	if a.TotalCalories == nil || *a.TotalCalories != 350 {
+		t.Errorf("TotalCalories = %v, want 350", a.TotalCalories)
 	}
 	// Altitude climbs 100->150 (gain 50) then descends; gain ~50 m (±1).
-	if s.ElevationGainMeters == nil || math.Abs(*s.ElevationGainMeters-50) > 1 {
-		t.Errorf("ElevationGainMeters = %v, want ~50", s.ElevationGainMeters)
+	if a.ElevationGainMeters == nil || math.Abs(*a.ElevationGainMeters-50) > 1 {
+		t.Errorf("ElevationGainMeters = %v, want ~50", a.ElevationGainMeters)
 	}
-	// Avg pace = 599 s / 5 km ~= 119.8 s/km.
-	wantPace := float64(s.DurationSeconds) / (s.DistanceMeters / 1000)
-	if math.Abs(s.AvgPaceSecPerKm-wantPace) > 0.01 {
-		t.Errorf("AvgPaceSecPerKm = %.3f, want %.3f", s.AvgPaceSecPerKm, wantPace)
+	// Avg pace = 599 s / 5 km ~= 119.8 s/km. For running, AvgPaceSecPerKm
+	// is populated; for non-running it stays nil.
+	if a.AvgPaceSecPerKm == nil {
+		t.Fatal("AvgPaceSecPerKm = nil, want populated for ActivityRunning")
+	}
+	wantPace := float64(a.DurationSeconds) / (a.DistanceMeters / 1000)
+	if math.Abs(*a.AvgPaceSecPerKm-wantPace) > 0.01 {
+		t.Errorf("AvgPaceSecPerKm = %.3f, want %.3f", *a.AvgPaceSecPerKm, wantPace)
 	}
 	// StartTime is the first trackpoint's absolute time.
-	if !s.StartTime.Equal(p.Trackpoints[0].Time) {
-		t.Errorf("StartTime = %v, want %v", s.StartTime, p.Trackpoints[0].Time)
+	if !a.StartTime.Equal(p.Trackpoints[0].Time) {
+		t.Errorf("StartTime = %v, want %v", a.StartTime, p.Trackpoints[0].Time)
+	}
+	if a.ActivityType != ActivityRunning {
+		t.Errorf("ActivityType = %q, want %q", a.ActivityType, ActivityRunning)
+	}
+}
+
+// TestSummarize_NonRunningSkipsPace verifies that summarize leaves the
+// pace fields nil when the caller passes a non-running activity type:
+// pace is a running display concept and surfacing a "fastest 1km" on a
+// walk would mislead at the UI layer.
+func TestSummarize_NonRunningSkipsPace(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "biking.tcx"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	a := summarize(p, ActivityCycling)
+
+	if a.AvgPaceSecPerKm != nil {
+		t.Errorf("AvgPaceSecPerKm = %v, want nil for non-running", a.AvgPaceSecPerKm)
+	}
+	if a.BestPaceSecPerKm != nil {
+		t.Errorf("BestPaceSecPerKm = %v, want nil for non-running", a.BestPaceSecPerKm)
+	}
+	if a.DistanceMeters <= 0 {
+		t.Errorf("DistanceMeters = %v, want > 0", a.DistanceMeters)
+	}
+	if a.ActivityType != ActivityCycling {
+		t.Errorf("ActivityType = %q, want %q", a.ActivityType, ActivityCycling)
 	}
 }
 
@@ -60,16 +95,16 @@ func TestSummarize_IntervalsBestPace(t *testing.T) {
 	if err := validate(p); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	s := summarize(p)
+	a := summarize(p, ActivityRunning)
 
 	// The fixture's genuinely fastest km is 1000 m over 200 s => 200 s/km.
 	// A per-sample heuristic would instead pick the 50 m/1 s GPS teleport
 	// (~20 s/km). Asserting best is near 200 (and well above 20) proves the
 	// 1 km distance-anchored window is in use, not the instantaneous min.
-	if s.BestPaceSecPerKm == nil {
+	if a.BestPaceSecPerKm == nil {
 		t.Fatal("BestPaceSecPerKm is nil, want ~200")
 	}
-	best := *s.BestPaceSecPerKm
+	best := *a.BestPaceSecPerKm
 	if best < 190 || best > 230 {
 		t.Errorf("BestPaceSecPerKm = %.2f, want ~200 (the fast km, not GPS noise)", best)
 	}
@@ -78,7 +113,7 @@ func TestSummarize_IntervalsBestPace(t *testing.T) {
 	}
 
 	// Downsampling preserves the endpoints exactly.
-	tps := s.Trackpoints
+	tps := a.Trackpoints
 	if len(tps) == 0 {
 		t.Fatal("no downsampled trackpoints")
 	}
@@ -92,8 +127,8 @@ func TestSummarize_IntervalsBestPace(t *testing.T) {
 
 	// The peak-HR spike (195) must survive downsampling so the chart shape
 	// is preserved. The fixture's HR max is 195.
-	if s.MaxHeartRateBpm == nil || *s.MaxHeartRateBpm != 195 {
-		t.Fatalf("MaxHeartRateBpm = %v, want 195", s.MaxHeartRateBpm)
+	if a.MaxHeartRateBpm == nil || *a.MaxHeartRateBpm != 195 {
+		t.Fatalf("MaxHeartRateBpm = %v, want 195", a.MaxHeartRateBpm)
 	}
 	foundPeak := false
 	for _, tp := range tps {
@@ -108,9 +143,6 @@ func TestSummarize_IntervalsBestPace(t *testing.T) {
 }
 
 func TestSummarize_MarathonDownsampling(t *testing.T) {
-	// marathon.tcx is generated here (in TempDir) rather than committed:
-	// ~15k points is a ~2 MB file we don't want in git. The summarizer only
-	// needs the parsed bytes, so building them on the fly is equivalent.
 	data := buildMarathonTCX(15000, 42000.0)
 	p, err := parseTCX(data)
 	if err != nil {
@@ -119,43 +151,29 @@ func TestSummarize_MarathonDownsampling(t *testing.T) {
 	if err := validate(p); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	s := summarize(p)
+	a := summarize(p, ActivityRunning)
 
-	// stride = 15000/300 = 50 => 300 strided points, plus the forced final
-	// point (index 14999, not on a 50-stride boundary) => 301.
-	if n := len(s.Trackpoints); n < 290 || n > 310 {
+	if n := len(a.Trackpoints); n < 290 || n > 310 {
 		t.Errorf("downsampled count = %d, want ~300", n)
 	}
 
-	first := s.Trackpoints[0]
-	last := s.Trackpoints[len(s.Trackpoints)-1]
+	first := a.Trackpoints[0]
+	last := a.Trackpoints[len(a.Trackpoints)-1]
 	if first.DistanceMeters != p.Trackpoints[0].DistanceMeters {
 		t.Errorf("first kept distance = %.2f, want %.2f", first.DistanceMeters, p.Trackpoints[0].DistanceMeters)
 	}
 	if last.DistanceMeters != p.Trackpoints[len(p.Trackpoints)-1].DistanceMeters {
 		t.Errorf("last kept distance = %.2f, want %.2f", last.DistanceMeters, p.Trackpoints[len(p.Trackpoints)-1].DistanceMeters)
 	}
-	// Sequence is the kept-point index, contiguous from 0.
 	if first.Sequence != 0 {
 		t.Errorf("first Sequence = %d, want 0", first.Sequence)
 	}
-	if last.Sequence != len(s.Trackpoints)-1 {
-		t.Errorf("last Sequence = %d, want %d", last.Sequence, len(s.Trackpoints)-1)
+	if last.Sequence != len(a.Trackpoints)-1 {
+		t.Errorf("last Sequence = %d, want %d", last.Sequence, len(a.Trackpoints)-1)
 	}
 }
 
 func TestSummarize_PaceFilterStationaryStart(t *testing.T) {
-	// A real-world TCX often starts with the watch recording before the user
-	// actually moves: GPS-fix wandering produces tiny sub-meter distance
-	// deltas at 1 Hz, which translate to absurd minute-per-km values that
-	// dominate the chart's Y range. The filter nulls out kept-point pace
-	// when the segment's instantaneous speed is below paceFilterMinSpeedMps
-	// (0.5 m/s ≈ 53:36 min/mile), well below any deliberate walking pace.
-	//
-	// The fixture is 30 s of GPS noise at 0.1 m/s followed by 270 s of
-	// jogging at 3 m/s, all at 1 Hz so stride=1 and every raw point is
-	// kept. Kept points in the noise region must come back with nil pace;
-	// kept points in the jog region must carry a sensible pace.
 	data := buildStationaryStartTCX(30, 0.1, 270, 3.0)
 	p, err := parseTCX(data)
 	if err != nil {
@@ -164,26 +182,20 @@ func TestSummarize_PaceFilterStationaryStart(t *testing.T) {
 	if err := validate(p); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	s := summarize(p)
+	a := summarize(p, ActivityRunning)
 
-	if len(s.Trackpoints) < 100 {
-		t.Fatalf("expected stride=1 to keep ~300 points, got %d", len(s.Trackpoints))
+	if len(a.Trackpoints) < 100 {
+		t.Fatalf("expected stride=1 to keep ~300 points, got %d", len(a.Trackpoints))
 	}
 
-	// Index 0 has no prior segment — pace is nil by existing convention,
-	// not by the filter. Indices 1..29 sit inside the GPS-noise span and
-	// must come back filtered. Indices well past 30 sit in the jog region
-	// and must carry a finite pace.
 	for i := 1; i < 30; i++ {
-		if s.Trackpoints[i].PaceSecPerKm != nil {
+		if a.Trackpoints[i].PaceSecPerKm != nil {
 			t.Errorf("trackpoint %d in stationary span has pace=%.2f, want nil",
-				i, *s.Trackpoints[i].PaceSecPerKm)
+				i, *a.Trackpoints[i].PaceSecPerKm)
 		}
 	}
-	// A handful of well-into-the-jog samples — they should ALL carry a
-	// reasonable jogging pace (~333 s/km for 3 m/s).
 	for _, i := range []int{80, 150, 250} {
-		got := s.Trackpoints[i].PaceSecPerKm
+		got := a.Trackpoints[i].PaceSecPerKm
 		if got == nil {
 			t.Errorf("trackpoint %d in jog span has nil pace, want ~333 s/km", i)
 			continue
@@ -194,10 +206,6 @@ func TestSummarize_PaceFilterStationaryStart(t *testing.T) {
 	}
 }
 
-// buildStationaryStartTCX emits a deterministic Running TCX whose first
-// stationarySamples points crawl at slowMps m/s (GPS noise on a still
-// watch) and whose next runSamples points run at fastMps m/s. All at 1 Hz.
-// Used to verify the pace outlier filter without committing a fixture.
 func buildStationaryStartTCX(stationarySamples int, slowMps float64, runSamples int, fastMps float64) []byte {
 	start := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
 	total := stationarySamples + runSamples
@@ -233,9 +241,6 @@ func buildStationaryStartTCX(stationarySamples int, slowMps float64, runSamples 
 	return []byte(b.String())
 }
 
-// buildMarathonTCX emits a deterministic Running TCX with n points evenly
-// spaced over totalDist meters at 1 Hz. Kept minimal: no HR/altitude, just
-// enough to exercise stride math.
 func buildMarathonTCX(n int, totalDist float64) []byte {
 	start := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
 	step := totalDist / float64(n-1)

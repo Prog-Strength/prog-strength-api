@@ -1,4 +1,4 @@
-package running
+package activity
 
 import "time"
 

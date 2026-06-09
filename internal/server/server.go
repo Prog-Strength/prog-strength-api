@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
@@ -20,7 +21,6 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
@@ -92,17 +92,17 @@ func New(cfg config.Config) (*Server, error) {
 	// right scope (server.New has no request-lifetime ctx to thread). A
 	// configured-but-broken bucket is a startup error — fail loudly rather
 	// than silently dropping uploads.
-	var runningArchiver running.Archiver
+	var activityArchiver activity.Archiver
 	if bucket := os.Getenv("TCX_BUCKET_NAME"); bucket != "" {
-		s3Archiver, err := running.NewS3Archiver(context.Background(), bucket)
+		s3Archiver, err := activity.NewS3Archiver(context.Background(), bucket)
 		if err != nil {
 			return nil, err
 		}
-		runningArchiver = s3Archiver
-		log.Printf("running: archiving TCX uploads to s3 bucket %s", bucket)
+		activityArchiver = s3Archiver
+		log.Printf("activity: archiving TCX uploads to s3 bucket %s", bucket)
 	} else {
-		runningArchiver = running.NewMemoryArchiver()
-		log.Println("running: TCX uploads use an in-memory archiver (dev only, not durable)")
+		activityArchiver = activity.NewMemoryArchiver()
+		log.Println("activity: TCX uploads use an in-memory archiver (dev only, not durable)")
 	}
 
 	// Initialize repositories based on config.
@@ -112,7 +112,7 @@ func New(cfg config.Config) (*Server, error) {
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
 	var chatRepo chat.Repository
-	var runningRepo running.Repository
+	var activityRepo activity.Repository
 
 	if cfg.DatabaseURL != "" {
 		// SQLite mode.
@@ -136,7 +136,7 @@ func New(cfg config.Config) (*Server, error) {
 		nutritionRepo = nutrition.NewSQLiteRepository(database)
 		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
 		chatRepo = chat.NewSQLiteRepository(database)
-		runningRepo = running.NewSQLiteRepository(database, runningArchiver)
+		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -191,7 +191,7 @@ func New(cfg config.Config) (*Server, error) {
 		nutritionRepo = nutrition.NewMemoryRepository()
 		bodyweightRepo = bodyweight.NewMemoryRepository()
 		chatRepo = chat.NewMemoryRepository()
-		runningRepo = running.NewMemoryRepository(runningArchiver)
+		activityRepo = activity.NewMemoryRepository(activityArchiver)
 	}
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
@@ -231,11 +231,12 @@ func New(cfg config.Config) (*Server, error) {
 		// router group. Needs the user repository to default unit
 		// from the user's preferred WeightUnit when omitted.
 		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
-		// Running session import + CRUD + metrics. Shares the JWT-gated
-		// group; the import handler reads the user ID from context and
-		// archives the raw TCX through runningArchiver. See
-		// prog-strength-docs/sows/running-tracking-via-tcx-import.md.
-		running.NewHandler(runningRepo).Mount(r)
+		// Activity import + CRUD + running-specific metrics. Shares the
+		// JWT-gated group; the import handler reads the user ID from
+		// context and archives the raw TCX through activityArchiver.
+		// Generalized from the prior running-only domain — see migration
+		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
+		activity.NewHandler(activityRepo).Mount(r)
 		// Chat session persistence. Agent stays stateless; this
 		// surface is just CRUD for sessions + a turn-append endpoint
 		// the clients write to after each completed stream. See

@@ -1,29 +1,35 @@
-package running
+package activity
 
 import (
 	"context"
 	"sync"
 )
 
-// MemoryArchiver is the dev/test Archiver. It keeps objects in a map so
-// tests can assert what the repository wrote, and PutErr lets a test force
-// a storage failure to exercise the Create rollback path.
+// MemoryArchiver is the dev/test Archiver. It keeps objects (with their
+// metadata) in a map so tests can assert what the repository wrote, and
+// PutErr lets a test force a storage failure to exercise the Create
+// rollback path.
 type MemoryArchiver struct {
 	mu      sync.Mutex
-	objects map[string][]byte
+	objects map[string]storedObject
 	// PutErr, when non-nil, is returned from every Put without storing
 	// anything — used to simulate an S3 outage in tests.
 	PutErr error
+}
+
+type storedObject struct {
+	body []byte
+	meta ObjectMetadata
 }
 
 // Compile-time check that *MemoryArchiver satisfies Archiver.
 var _ Archiver = (*MemoryArchiver)(nil)
 
 func NewMemoryArchiver() *MemoryArchiver {
-	return &MemoryArchiver{objects: make(map[string][]byte)}
+	return &MemoryArchiver{objects: make(map[string]storedObject)}
 }
 
-func (a *MemoryArchiver) Put(ctx context.Context, key string, body []byte) error {
+func (a *MemoryArchiver) Put(ctx context.Context, key string, body []byte, meta ObjectMetadata) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.PutErr != nil {
@@ -33,7 +39,7 @@ func (a *MemoryArchiver) Put(ctx context.Context, key string, body []byte) error
 	// rewrite stored bytes.
 	stored := make([]byte, len(body))
 	copy(stored, body)
-	a.objects[key] = stored
+	a.objects[key] = storedObject{body: stored, meta: meta}
 	return nil
 }
 
@@ -49,13 +55,25 @@ func (a *MemoryArchiver) Delete(ctx context.Context, key string) error {
 func (a *MemoryArchiver) Get(key string) ([]byte, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	b, ok := a.objects[key]
+	o, ok := a.objects[key]
 	if !ok {
 		return nil, false
 	}
-	cp := make([]byte, len(b))
-	copy(cp, b)
+	cp := make([]byte, len(o.body))
+	copy(cp, o.body)
 	return cp, true
+}
+
+// Meta returns the metadata stored alongside key and whether it exists.
+// For test assertions on the ingest-source tag.
+func (a *MemoryArchiver) Meta(key string) (ObjectMetadata, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	o, ok := a.objects[key]
+	if !ok {
+		return ObjectMetadata{}, false
+	}
+	return o.meta, true
 }
 
 // Len reports how many objects are stored. For test assertions.

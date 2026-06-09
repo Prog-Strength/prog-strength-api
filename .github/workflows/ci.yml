@@ -86,10 +86,12 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           # Pin a specific v2 release. The matching .golangci.yml lives
           # at the repo root. Bump intentionally; do not float to latest.
+          # golangci-lint-action v7 is required for golangci-lint v2;
+          # v6 hard-errors on a v2.x version string at the prepare step.
           version: v2.1.6
           args: --timeout=5m
 

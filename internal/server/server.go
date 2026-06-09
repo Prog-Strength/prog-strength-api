@@ -22,6 +22,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
@@ -114,6 +115,18 @@ func New(cfg config.Config) (*Server, error) {
 	var chatRepo chat.Repository
 	var activityRepo activity.Repository
 
+	// usageLedger is non-nil only when telemetry is enabled (the ledger
+	// reads telemetry.db). The usage handler is mounted in the JWT-gated
+	// group below only when it exists. Parse the price table once here;
+	// a bad USAGE_PRICE_TABLE_JSON logs and continues with an empty table
+	// (everything prices to 0) rather than crashing boot.
+	var usageLedger *usage.Ledger
+	priceTable, err := usage.LoadPriceTable(cfg.UsagePriceTableJSON)
+	if err != nil {
+		log.Printf("usage: failed to parse USAGE_PRICE_TABLE_JSON, using empty price table: %v", err)
+		priceTable, _ = usage.LoadPriceTable("")
+	}
+
 	if cfg.DatabaseURL != "" {
 		// SQLite mode.
 		log.Printf("using SQLite database at %s", cfg.DatabaseURL)
@@ -172,6 +185,10 @@ func New(cfg config.Config) (*Server, error) {
 			}
 			telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
 			telemetry.NewHandlerWithIntentSink(telemetryRepo, chatRepo).Mount(r)
+			// Usage ledger reads the same telemetry.db handle to price
+			// per-user daily spend for GET /me/usage (mounted below in
+			// the JWT-gated group).
+			usageLedger = usage.NewLedger(telemetryDB, priceTable)
 			// Daily TTL: NULLs content/arguments_json/result_summary
 			// after 90 days. Metadata (token counts, latencies, tool
 			// names, timestamps) is kept indefinitely. Background
@@ -246,6 +263,13 @@ func New(cfg config.Config) (*Server, error) {
 		// for user-scoped frontend reads. Shares the JWT-gated group;
 		// getMe reads the user ID from context.
 		user.NewHandler(userRepo).Mount(r)
+		// Usage self route — GET /me/usage reports the authed user's
+		// daily-spend percentage against the configured cap. Only mounted
+		// when telemetry is enabled (the ledger needs telemetry.db); in
+		// in-memory mode there is no spend source so the route is absent.
+		if usageLedger != nil {
+			usage.NewHandler(usageLedger, cfg.DailyUsageCapUSD).Mount(r)
+		}
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

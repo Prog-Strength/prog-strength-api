@@ -98,6 +98,109 @@ func TestTurnHandler_HadImageDefaultsFalse(t *testing.T) {
 	}
 }
 
+func TestSpeakHandler_PersistsRowAnd204(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+	h := NewHandler(repo)
+
+	body := strings.NewReader(`{
+		"id": "sp-1",
+		"user_id": "u-1",
+		"session_id": "s-1",
+		"model": "gpt-4o-mini-tts",
+		"chars": 184,
+		"voice": "alloy",
+		"started_at": "2026-06-09T18:22:10Z",
+		"ended_at":   "2026-06-09T18:22:11Z",
+		"error": null
+	}`)
+	req := httptest.NewRequest("POST", "/internal/telemetry/speak", body)
+	w := httptest.NewRecorder()
+	h.speak(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d want 204, body=%s", w.Code, w.Body.String())
+	}
+
+	var (
+		gotUser  string
+		gotChars int64
+		gotVoice string
+	)
+	if err := repo.db.QueryRow(
+		`SELECT user_id, chars, voice FROM agent_speak_calls WHERE id = ?`, "sp-1",
+	).Scan(&gotUser, &gotChars, &gotVoice); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if gotUser != "u-1" || gotChars != 184 || gotVoice != "alloy" {
+		t.Fatalf("row mismatch: user=%q chars=%d voice=%q", gotUser, gotChars, gotVoice)
+	}
+}
+
+func TestSpeakHandler_NullSessionAccepted(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+	h := NewHandler(repo)
+
+	body := strings.NewReader(`{
+		"id": "sp-2",
+		"user_id": "u-1",
+		"session_id": null,
+		"model": "tts-1",
+		"chars": 42,
+		"voice": "verse",
+		"started_at": "2026-06-09T18:22:10Z",
+		"ended_at":   "2026-06-09T18:22:11Z",
+		"error": null
+	}`)
+	req := httptest.NewRequest("POST", "/internal/telemetry/speak", body)
+	w := httptest.NewRecorder()
+	h.speak(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d want 204, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSpeakHandler_MalformedBody400(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+	h := NewHandler(repo)
+
+	// Missing required model/voice and a bad timestamp.
+	body := strings.NewReader(`{"user_id": "u-1"}`)
+	req := httptest.NewRequest("POST", "/internal/telemetry/speak", body)
+	w := httptest.NewRecorder()
+	h.speak(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestSpeakHandler_InvalidTimestamp400(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+	h := NewHandler(repo)
+
+	body := strings.NewReader(`{
+		"id": "sp-3",
+		"user_id": "u-1",
+		"model": "tts-1",
+		"chars": 10,
+		"voice": "alloy",
+		"started_at": "not-a-time",
+		"ended_at": "2026-06-09T18:22:11Z"
+	}`)
+	req := httptest.NewRequest("POST", "/internal/telemetry/speak", body)
+	w := httptest.NewRecorder()
+	h.speak(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", w.Code)
+	}
+}
+
 type fakeIntentSink struct {
 	calls []intentSinkCall
 }

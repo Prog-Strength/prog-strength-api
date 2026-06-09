@@ -23,4 +23,10 @@ type Repository interface {
 	// InsertMessages persists zero or more agent_messages rows.
 	// Same all-or-nothing batch semantics as InsertToolCalls.
 	InsertMessages(ctx context.Context, msgs []AgentMessage) error
+
+	// InsertSpeakCall persists a single agent_speak_calls row (the TTS
+	// cost source for internal/usage). Returns ErrConflict if the row ID
+	// is already present so agent retries are idempotent by ID, matching
+	// InsertTurn.
+	InsertSpeakCall(ctx context.Context, c AgentSpeakCall) error
 }

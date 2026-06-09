@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -61,6 +62,20 @@ type Config struct {
 	// Example env: "http://localhost:3000,https://app.progstrength.fitness"
 	ReturnToAllowedOrigins []string
 
+	// DailyUsageCapUSD is the per-user daily external-API spend ceiling
+	// in dollars, applied uniformly to all users. Read from
+	// DAILY_USAGE_CAP_USD. Default 0, which internal/usage treats as
+	// "capping disabled" (GET /me/usage reports uncapped). Additive and
+	// safe to omit — the endpoint and migration ship before any caller.
+	DailyUsageCapUSD float64
+
+	// UsagePriceTableJSON is the JSON price map (Claude per-mtok rates +
+	// OpenAI TTS per-mchar rates) keyed by model id, read from
+	// USAGE_PRICE_TABLE_JSON. Parsed once at startup by
+	// usage.LoadPriceTable. Default "" yields an empty table (everything
+	// prices to 0) rather than a startup error.
+	UsagePriceTableJSON string
+
 	// BetaAllowedEmails is the closed-beta allowlist: only these email
 	// addresses receive a JWT after Google OAuth. Anyone else completes
 	// the OAuth flow (and gets a user row created — useful for
@@ -86,6 +101,8 @@ func Load() (Config, error) {
 		DevAuth:                os.Getenv("DEV_AUTH") == "true",
 		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
 		ReturnToAllowedOrigins: splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
+		DailyUsageCapUSD:       parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
+		UsagePriceTableJSON:    os.Getenv("USAGE_PRICE_TABLE_JSON"),
 		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
 	}
 
@@ -119,6 +136,21 @@ func deriveTelemetryPath(appDB string) string {
 		return appDB[:i+1] + "telemetry.db"
 	}
 	return "telemetry.db"
+}
+
+// parseFloatDefault parses a float env value, falling back to def on an
+// empty or unparseable string. Used for DAILY_USAGE_CAP_USD so a missing
+// or malformed value disables capping rather than failing startup — the
+// feature is additive and must not block boot.
+func parseFloatDefault(s string, def float64) float64 {
+	if s == "" {
+		return def
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return def
+	}
+	return v
 }
 
 // splitCSV trims and drops empty entries from a comma-separated env var.

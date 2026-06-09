@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 )
 
 // maxTCXBytes caps the multipart upload size. A typical run TCX is a few
@@ -194,9 +195,11 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rid := requestid.FromContext(r.Context())
+
 	parsed, err := parseTCX(data)
 	if err != nil {
-		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", userID, "", SlugParseFailed)
+		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", rid, userID, "", SlugParseFailed)
 		httpresp.ErrorWithCode(w, http.StatusBadRequest, err.Error(), SlugParseFailed)
 		return
 	}
@@ -204,7 +207,7 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 	if err := validate(parsed); err != nil {
 		var verr *ValidationError
 		if errors.As(err, &verr) {
-			log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", userID, parsed.ActivityID, verr.Slug)
+			log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=invalid slug=%s", rid, userID, parsed.ActivityID, verr.Slug)
 			httpresp.ErrorWithCode(w, http.StatusBadRequest, verr.Msg, verr.Slug)
 			return
 		}
@@ -217,10 +220,10 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 
 	switch err := h.repo.Create(r.Context(), &s, data); {
 	case err == nil:
-		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=imported", userID, s.GarminActivityID)
+		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=imported", rid, userID, s.GarminActivityID)
 		httpresp.Created(w, "imported running session", toSessionDTO(s, true))
 	case errors.Is(err, ErrDuplicate):
-		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=duplicate", userID, s.GarminActivityID)
+		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=duplicate", rid, userID, s.GarminActivityID)
 		existingID := ""
 		if existing, lookupErr := h.repo.GetByGarminActivityID(r.Context(), userID, s.GarminActivityID); lookupErr == nil {
 			existingID = existing.ID
@@ -229,7 +232,7 @@ func (h *Handler) importSession(w http.ResponseWriter, r *http.Request) {
 			"existing_session_id": existingID,
 		})
 	case errors.Is(err, ErrStorage):
-		log.Printf("running import: user_id=%s garmin_activity_id=%s outcome=storage_failed", userID, s.GarminActivityID)
+		log.Printf("running import: request_id=%s user_id=%s garmin_activity_id=%s outcome=storage_failed err=%v", rid, userID, s.GarminActivityID, err)
 		httpresp.ErrorWithCode(w, http.StatusInternalServerError, "failed to archive tcx file", "storage_failed")
 	default:
 		httpresp.ServerError(w, r.Context(), "create running session", err)

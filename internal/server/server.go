@@ -18,6 +18,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
@@ -31,7 +32,13 @@ type Server struct {
 func New(cfg config.Config) (*Server, error) {
 	r := chi.NewRouter()
 
-	r.Use(middleware.RequestID)
+	// requestid.Middleware replaces chi's middleware.RequestID so the id
+	// it mints is the same value echoed on the X-Request-ID response
+	// header and embedded in every httpresp envelope. chi's version only
+	// seeded context — the frontend never saw the id, and CloudWatch
+	// reverse-search by id was impossible. Format is a 32-char hex string
+	// (internal/id.New), not chi's "hostname/prefix-counter".
+	r.Use(requestid.Middleware)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	// Prometheus instrumentation runs after Recoverer so panics still

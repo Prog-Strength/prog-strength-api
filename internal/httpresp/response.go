@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/version"
 )
 
@@ -18,11 +19,18 @@ const service = "Prog Strength Backend"
 // Response is the envelope for successful API responses. Add common
 // fields here and they will flow through every handler without
 // changing call sites.
+//
+// RequestID echoes the per-request correlation id minted by the
+// requestid middleware (also exposed on the X-Request-ID response
+// header). It is omitempty so handlers exercised outside the HTTP
+// stack (background jobs, future internal call paths) don't render
+// an empty key.
 type Response struct {
-	Service string `json:"service"`
-	Version string `json:"version"`
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+	Service   string `json:"service"`
+	Version   string `json:"version"`
+	RequestID string `json:"request_id,omitempty"`
+	Message   string `json:"message"`
+	Data      any    `json:"data,omitempty"`
 }
 
 // ErrorResponse is the envelope for failed API responses. The HTTP
@@ -35,11 +43,14 @@ type Response struct {
 // precise reasons — "tcx_not_running", "file_too_large", "duplicate_run".
 // It is omitempty so every existing Error() response stays byte-identical:
 // only handlers that opt in via ErrorWithCode emit the field.
+//
+// RequestID matches Response.RequestID — see its doc for rationale.
 type ErrorResponse struct {
-	Service string `json:"service"`
-	Version string `json:"version"`
-	Error   string `json:"error"`
-	Code    string `json:"code,omitempty"`
+	Service   string `json:"service"`
+	Version   string `json:"version"`
+	RequestID string `json:"request_id,omitempty"`
+	Error     string `json:"error"`
+	Code      string `json:"code,omitempty"`
 }
 
 // OK writes a 200 response with the given message and optional data
@@ -55,19 +66,21 @@ func Created(w http.ResponseWriter, message string, data any) {
 
 func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
 	writeJSON(w, status, Response{
-		Service: service,
-		Version: version.Version,
-		Message: message,
-		Data:    data,
+		Service:   service,
+		Version:   version.Version,
+		RequestID: w.Header().Get(requestid.HeaderName),
+		Message:   message,
+		Data:      data,
 	})
 }
 
 // Error writes a JSON error response with the given status and message.
 func Error(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{
-		Service: service,
-		Version: version.Version,
-		Error:   msg,
+		Service:   service,
+		Version:   version.Version,
+		RequestID: w.Header().Get(requestid.HeaderName),
+		Error:     msg,
 	})
 }
 
@@ -76,10 +89,11 @@ func Error(w http.ResponseWriter, status int, msg string) {
 // flow) that branch on the precise failure reason rather than the prose.
 func ErrorWithCode(w http.ResponseWriter, status int, msg, code string) {
 	writeJSON(w, status, ErrorResponse{
-		Service: service,
-		Version: version.Version,
-		Error:   msg,
-		Code:    code,
+		Service:   service,
+		Version:   version.Version,
+		RequestID: w.Header().Get(requestid.HeaderName),
+		Error:     msg,
+		Code:      code,
 	})
 }
 
@@ -94,6 +108,9 @@ func ErrorWithCodeData(w http.ResponseWriter, status int, msg, code string, extr
 		"version": version.Version,
 		"error":   msg,
 		"code":    code,
+	}
+	if rid := w.Header().Get(requestid.HeaderName); rid != "" {
+		body["request_id"] = rid
 	}
 	for k, v := range extra {
 		body[k] = v

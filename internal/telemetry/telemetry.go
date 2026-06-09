@@ -72,6 +72,26 @@ type AgentToolCall struct {
 	CreatedAt     time.Time
 }
 
+// AgentSpeakCall captures one TTS (/speak) call the agent made to
+// OpenAI. It is the TTS half of the per-user daily-spend computation in
+// internal/usage; the LLM half comes from AgentTurn. SessionID is
+// nullable because /speak is sometimes called outside a chat session,
+// and Error is nullable — a non-null value means OpenAI rejected the
+// call (still recorded so a caller cannot escape the cap by always
+// failing). Chars is the character count actually sent to OpenAI, the
+// number charged against the budget.
+type AgentSpeakCall struct {
+	ID        string
+	UserID    string
+	SessionID *string
+	Model     string
+	Chars     int64
+	Voice     string
+	StartedAt time.Time
+	EndedAt   time.Time
+	Error     *string
+}
+
 // AgentMessage captures one user or assistant message. Content is
 // nullable because the TTL job NULLs it after 90 days; TokenCount and
 // other metadata stay.

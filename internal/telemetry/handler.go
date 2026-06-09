@@ -51,6 +51,7 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Post("/turns", h.turn)
 		r.Post("/tool-calls", h.toolCalls)
 		r.Post("/messages", h.messages)
+		r.Post("/speak", h.speak)
 	})
 }
 
@@ -229,6 +230,78 @@ func (h *Handler) toolCalls(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.Created(w, "recorded tool calls", map[string]int{"count": len(out)})
+}
+
+// --- speak --------------------------------------------------------------
+
+// speakRequest is the POST /internal/telemetry/speak body, mirroring the
+// AgentSpeakCall struct in JSON-tagged form. session_id and error are
+// nullable. Timestamps are RFC3339 strings (language-neutral wire shape,
+// same as turnRequest).
+type speakRequest struct {
+	ID        string  `json:"id"`
+	UserID    string  `json:"user_id"`
+	SessionID *string `json:"session_id"`
+	Model     string  `json:"model"`
+	Chars     int64   `json:"chars"`
+	Voice     string  `json:"voice"`
+	StartedAt string  `json:"started_at"`
+	EndedAt   string  `json:"ended_at"`
+	Error     *string `json:"error"`
+}
+
+func (h *Handler) speak(w http.ResponseWriter, r *http.Request) {
+	var req speakRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.UserID == "" || req.Model == "" || req.Voice == "" {
+		httpresp.Error(w, http.StatusBadRequest, "user_id, model, voice are required")
+		return
+	}
+
+	startedAt, err := time.Parse(time.RFC3339, req.StartedAt)
+	if err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid started_at: must be RFC3339")
+		return
+	}
+	endedAt, err := time.Parse(time.RFC3339, req.EndedAt)
+	if err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid ended_at: must be RFC3339")
+		return
+	}
+
+	speakID := req.ID
+	if speakID == "" {
+		speakID = id.New()
+	}
+
+	c := AgentSpeakCall{
+		ID:        speakID,
+		UserID:    req.UserID,
+		SessionID: req.SessionID,
+		Model:     req.Model,
+		Chars:     req.Chars,
+		Voice:     req.Voice,
+		StartedAt: startedAt,
+		EndedAt:   endedAt,
+		Error:     req.Error,
+	}
+
+	if err := h.repo.InsertSpeakCall(r.Context(), c); err != nil {
+		if errors.Is(err, ErrConflict) {
+			httpresp.Error(w, http.StatusConflict, "speak call already recorded")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "insert telemetry speak call", err)
+		return
+	}
+
+	// 204 No Content per the SOW contract — the agent fires this as a
+	// fire-and-forget task and reads only the status, not a body.
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- messages -----------------------------------------------------------

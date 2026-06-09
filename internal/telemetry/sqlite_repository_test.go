@@ -73,6 +73,80 @@ func TestInsertTurn_PersistsIntentFields(t *testing.T) {
 	}
 }
 
+func TestInsertSpeakCall_PersistsAndReadsBack(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+
+	sess := "s-1"
+	errMsg := "rate_limited"
+	want := AgentSpeakCall{
+		ID:        "sp-1",
+		UserID:    "u-1",
+		SessionID: &sess,
+		Model:     "gpt-4o-mini-tts",
+		Chars:     184,
+		Voice:     "alloy",
+		StartedAt: time.Now().UTC().Truncate(time.Second),
+		EndedAt:   time.Now().UTC().Truncate(time.Second),
+		Error:     &errMsg,
+	}
+	if err := repo.InsertSpeakCall(context.Background(), want); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var (
+		gotUser  string
+		gotSess  sql.NullString
+		gotModel string
+		gotChars int64
+		gotVoice string
+		gotErr   sql.NullString
+	)
+	err := repo.db.QueryRow(
+		`SELECT user_id, session_id, model, chars, voice, error
+		   FROM agent_speak_calls WHERE id = ?`, want.ID,
+	).Scan(&gotUser, &gotSess, &gotModel, &gotChars, &gotVoice, &gotErr)
+	if err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if gotUser != "u-1" || !gotSess.Valid || gotSess.String != "s-1" ||
+		gotModel != "gpt-4o-mini-tts" || gotChars != 184 || gotVoice != "alloy" ||
+		!gotErr.Valid || gotErr.String != "rate_limited" {
+		t.Fatalf("speak row mismatch: user=%q sess=%v model=%q chars=%d voice=%q err=%v",
+			gotUser, gotSess, gotModel, gotChars, gotVoice, gotErr)
+	}
+}
+
+func TestInsertSpeakCall_NullSessionAndError(t *testing.T) {
+	repo, cleanup := newTestTelemetryRepo(t)
+	defer cleanup()
+
+	want := AgentSpeakCall{
+		ID:        "sp-2",
+		UserID:    "u-1",
+		SessionID: nil,
+		Model:     "tts-1",
+		Chars:     42,
+		Voice:     "verse",
+		StartedAt: time.Now().UTC(),
+		EndedAt:   time.Now().UTC(),
+		Error:     nil,
+	}
+	if err := repo.InsertSpeakCall(context.Background(), want); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	var gotSess, gotErr sql.NullString
+	if err := repo.db.QueryRow(
+		`SELECT session_id, error FROM agent_speak_calls WHERE id = ?`, want.ID,
+	).Scan(&gotSess, &gotErr); err != nil {
+		t.Fatalf("readback: %v", err)
+	}
+	if gotSess.Valid || gotErr.Valid {
+		t.Fatalf("expected NULL session_id and error, got sess=%v err=%v", gotSess, gotErr)
+	}
+}
+
 // TestInsertTurn_HadImageDefaultsFalse confirms the Go zero value for
 // HadImage persists as 0 (the default-false path for non-image turns).
 func TestInsertTurn_HadImageDefaultsFalse(t *testing.T) {

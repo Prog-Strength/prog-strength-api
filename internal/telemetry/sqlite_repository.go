@@ -109,6 +109,25 @@ func (r *SQLiteRepository) InsertMessages(ctx context.Context, msgs []AgentMessa
 	return tx.Commit()
 }
 
+func (r *SQLiteRepository) InsertSpeakCall(ctx context.Context, c AgentSpeakCall) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO agent_speak_calls (
+			id, user_id, session_id, model, chars, voice,
+			started_at, ended_at, error
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		c.ID, c.UserID, c.SessionID, c.Model, c.Chars, c.Voice,
+		c.StartedAt, c.EndedAt, c.Error,
+	)
+	if err != nil {
+		if isUniqueConstraintErr(err) {
+			return ErrConflict
+		}
+		return err
+	}
+	return nil
+}
+
 // isUniqueConstraintErr detects mattn/go-sqlite3's "UNIQUE constraint
 // failed" error string. Not exhaustive — the driver also exports a
 // typed Error with ExtendedCode == ErrConstraintUnique — but the

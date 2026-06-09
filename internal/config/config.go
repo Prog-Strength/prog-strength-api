@@ -69,11 +69,12 @@ type Config struct {
 	// safe to omit — the endpoint and migration ship before any caller.
 	DailyUsageCapUSD float64
 
-	// UsagePriceTableJSON is the JSON price map (Claude per-mtok rates +
-	// OpenAI TTS per-mchar rates) keyed by model id, read from
-	// USAGE_PRICE_TABLE_JSON. Parsed once at startup by
-	// usage.LoadPriceTable. Default "" yields an empty table (everything
-	// prices to 0) rather than a startup error.
+	// UsagePriceTableJSON is an OPTIONAL override of the hardcoded price
+	// table in usage.DefaultPriceTable. Read from USAGE_PRICE_TABLE_JSON.
+	// Default "" yields the defaults — the env var exists as an emergency
+	// escape hatch (e.g. a sudden Anthropic price change you want to
+	// reflect before merging a code update), not as the normal path.
+	// Public rates live in source so price changes are reviewable diffs.
 	UsagePriceTableJSON string
 
 	// BetaAllowedEmails is the closed-beta allowlist: only these email

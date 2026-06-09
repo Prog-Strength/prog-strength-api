@@ -118,13 +118,15 @@ func New(cfg config.Config) (*Server, error) {
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
 	// group below only when it exists. Parse the price table once here;
-	// a bad USAGE_PRICE_TABLE_JSON logs and continues with an empty table
-	// (everything prices to 0) rather than crashing boot.
+	// the env var is an optional override of usage.DefaultPriceTable. A
+	// bad override logs and falls back to the defaults rather than the
+	// previous empty-table behavior — silently shipping zero prices is
+	// the most dangerous failure mode because it disables capping.
 	var usageLedger *usage.Ledger
 	priceTable, err := usage.LoadPriceTable(cfg.UsagePriceTableJSON)
 	if err != nil {
-		log.Printf("usage: failed to parse USAGE_PRICE_TABLE_JSON, using empty price table: %v", err)
-		priceTable, _ = usage.LoadPriceTable("")
+		log.Printf("usage: failed to parse USAGE_PRICE_TABLE_JSON, falling back to default price table: %v", err)
+		priceTable = usage.DefaultPriceTable()
 	}
 
 	if cfg.DatabaseURL != "" {

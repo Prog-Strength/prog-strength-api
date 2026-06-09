@@ -50,20 +50,69 @@ func TestLoadPriceTable_ParsesSOWExample(t *testing.T) {
 	}
 }
 
-func TestLoadPriceTable_EmptyYieldsEmptyTable(t *testing.T) {
+func TestLoadPriceTable_EmptyYieldsDefaultTable(t *testing.T) {
 	pt, err := LoadPriceTable("")
 	if err != nil {
 		t.Fatalf("load empty: %v", err)
 	}
-	if len(pt.Claude) != 0 || len(pt.OpenAITTS) != 0 {
-		t.Fatalf("expected empty table, got %+v", pt)
+	// Empty env means "use the hardcoded defaults" — the cap must work
+	// without operator config so a forgotten env var can't silently
+	// disable cost capping. Matching exact rates would make this test
+	// brittle to legitimate price updates; assert structure instead.
+	if _, ok := pt.Claude["claude-sonnet-4-6"]; !ok {
+		t.Errorf("default table missing claude-sonnet-4-6")
 	}
-	// Unknown lookups must not panic on the nil-safe maps.
-	if c := pt.ClaudeCostUSD("x", 1, 1, 1, 1); c != 0 {
-		t.Fatalf("empty table claude cost: got %v want 0", c)
+	if _, ok := pt.Claude["claude-haiku-4-5-20251001"]; !ok {
+		t.Errorf("default table missing claude-haiku-4-5-20251001")
 	}
-	if c := pt.TTSCostUSD("x", 100); c != 0 {
-		t.Fatalf("empty table tts cost: got %v want 0", c)
+	if _, ok := pt.OpenAITTS["gpt-4o-mini-tts"]; !ok {
+		t.Errorf("default table missing gpt-4o-mini-tts")
+	}
+	// Unknown model still resolves to 0 (and a warning) — same posture
+	// the cap relied on before this change.
+	if c := pt.ClaudeCostUSD("claude-unknown", 1, 1, 1, 1); c != 0 {
+		t.Errorf("default table unknown claude: got %v want 0", c)
+	}
+}
+
+func TestDefaultPriceTable_RatesArePositive(t *testing.T) {
+	pt := DefaultPriceTable()
+	// Catches an accidental zero-fill on a refactor — a zeroed rate
+	// would silently disable capping for that model. Cheap structural
+	// check; exact values are deliberately not asserted here so a
+	// legitimate price update doesn't trip the test.
+	for model, r := range pt.Claude {
+		if r.InputPerMTok <= 0 || r.OutputPerMTok <= 0 ||
+			r.CacheWritePerMTok <= 0 || r.CacheReadPerMTok <= 0 {
+			t.Errorf("claude %s has non-positive rate: %+v", model, r)
+		}
+	}
+	for model, r := range pt.OpenAITTS {
+		if r.PerMChar <= 0 {
+			t.Errorf("openai_tts %s has non-positive rate: %+v", model, r)
+		}
+	}
+}
+
+func TestDefaultPriceTable_CoversAgentModelIDs(t *testing.T) {
+	// The agent records exactly these strings to telemetry today. If
+	// the agent flips model ids (e.g. a new Sonnet variant becomes the
+	// default) and this test isn't updated alongside the price table,
+	// the cap will silently undercount that model. The same drift would
+	// surface in prod as a price_table_missing_model log line — this
+	// test catches it at PR time instead.
+	required := []string{
+		"claude-sonnet-4-6",         // CLAUDE_MODEL_COMPLEX default
+		"claude-haiku-4-5-20251001", // CLAUDE_MODEL_SIMPLE / _ROUTER default
+		"gpt-4o-mini-tts",           // OPENAI_TTS_MODEL default
+	}
+	pt := DefaultPriceTable()
+	for _, model := range required {
+		_, inClaude := pt.Claude[model]
+		_, inTTS := pt.OpenAITTS[model]
+		if !inClaude && !inTTS {
+			t.Errorf("default price table missing required model %q", model)
+		}
 	}
 }
 

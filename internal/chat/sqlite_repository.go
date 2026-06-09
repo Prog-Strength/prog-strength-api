@@ -215,7 +215,7 @@ func (r *SQLiteRepository) AppendTurn(ctx context.Context, userID, sessionID str
 	// COALESCE(MAX(position), -1) means an empty session starts at
 	// position 0.
 	var maxPos int
-	if err := tx.QueryRowContext(ctx, `
+	if err = tx.QueryRowContext(ctx, `
 		SELECT COALESCE(MAX(position), -1) FROM chat_messages WHERE session_id = ?
 	`, sessionID).Scan(&maxPos); err != nil {
 		return Session{}, nil, err

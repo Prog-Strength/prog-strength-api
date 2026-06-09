@@ -20,7 +20,7 @@ const ttlTickInterval = 24 * time.Hour
 
 // StartContentTTL launches a background goroutine that periodically
 // NULLs out aged message and tool-call content. Returns immediately;
-// the goroutine runs until ctx is cancelled.
+// the goroutine runs until ctx is canceled.
 //
 // Called once from server.New(); ctx is context.Background() today
 // since the existing startup paths (backfills, migrations) use the

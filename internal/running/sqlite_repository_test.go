@@ -372,7 +372,7 @@ func TestMetrics(t *testing.T) {
 	// A different user's run must not leak in.
 	other := newSession("u2", "other", time.Date(2026, 6, 9, 7, 0, 0, 0, loc), 99000, 9000)
 	for _, s := range []*Session{wk, prior, earlyMonth, other} {
-		if err := repo.Create(ctx, s, []byte("x")); err != nil {
+		if err = repo.Create(ctx, s, []byte("x")); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 	}

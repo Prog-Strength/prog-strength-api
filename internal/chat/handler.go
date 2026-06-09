@@ -239,7 +239,7 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.repo.SetTitle(r.Context(), userID, id, normalized); err != nil {
+	if err = h.repo.SetTitle(r.Context(), userID, id, normalized); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "chat session not found")
 			return

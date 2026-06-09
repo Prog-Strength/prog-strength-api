@@ -263,16 +263,11 @@ func (h *Handler) toRecipeDTO(r *http.Request, userID string, rec *Recipe) (reci
 		return recipeDTO{}, err
 	}
 	out := recipeDTO{
-		ID:        rec.ID,
-		Name:      rec.Name,
-		CreatedAt: rec.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt: rec.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Macros: recipeMacrosDTO{
-			Calories: macros.Calories,
-			ProteinG: macros.ProteinG,
-			FatG:     macros.FatG,
-			CarbsG:   macros.CarbsG,
-		},
+		ID:         rec.ID,
+		Name:       rec.Name,
+		CreatedAt:  rec.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:  rec.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Macros:     recipeMacrosDTO(macros),
 		Components: make([]recipeItemDTO, 0, len(rec.Components)),
 	}
 	for _, c := range rec.Components {

@@ -16,20 +16,23 @@ func TestOpen_CountsExecAndQuery(t *testing.T) {
 	defer db.Close()
 
 	ctx := context.Background()
-	if _, err := db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)`); err != nil {
+	if _, err = db.ExecContext(ctx, `CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO t (name) VALUES (?)`, "alice"); err != nil {
+	if _, err = db.ExecContext(ctx, `INSERT INTO t (name) VALUES (?)`, "alice"); err != nil {
 		t.Fatalf("insert 1: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO t (name) VALUES (?)`, "bob"); err != nil {
+	if _, err = db.ExecContext(ctx, `INSERT INTO t (name) VALUES (?)`, "bob"); err != nil {
 		t.Fatalf("insert 2: %v", err)
 	}
 	rows, err := db.QueryContext(ctx, `SELECT id, name FROM t ORDER BY id`)
 	if err != nil {
 		t.Fatalf("select: %v", err)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows err: %v", err)
+	}
+	defer rows.Close()
 
 	if got, want := counter.N(), int64(4); got != want {
 		t.Fatalf("counter.N() = %d, want %d", got, want)

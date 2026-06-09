@@ -54,7 +54,7 @@ func (r *MemoryRepository) Create(ctx context.Context, s *Session, tcx []byte) e
 	// Archive before storing so a storage failure leaves no row behind,
 	// matching the SQLite transaction ordering.
 	if err := r.archiver.Put(ctx, s.TCXS3Key, tcx); err != nil {
-		return fmt.Errorf("%w: %v", ErrStorage, err)
+		return fmt.Errorf("%w: %w", ErrStorage, err)
 	}
 
 	stored := *s

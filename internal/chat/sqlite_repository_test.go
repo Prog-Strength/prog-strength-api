@@ -93,7 +93,7 @@ func TestSQLite_Eviction_CascadeDeletesMessages(t *testing.T) {
 	}
 
 	// Oldest should be gone from chat_sessions...
-	if _, err := repo.GetSession(ctx, "u1", oldestID); err != ErrNotFound {
+	if _, err := repo.GetSession(ctx, "u1", oldestID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("oldest should be evicted, got %v", err)
 	}
 	// ...and its messages should be gone from chat_messages thanks to
@@ -188,7 +188,7 @@ func TestSQLite_SessionIntentRoundTrip(t *testing.T) {
 	}
 
 	when := time.Now().UTC().Truncate(time.Second)
-	if err := repo.SetSessionIntent(ctx, s.ID, "log_nutrition", when); err != nil {
+	if err = repo.SetSessionIntent(ctx, s.ID, "log_nutrition", when); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 

@@ -729,14 +729,7 @@ func (h *Handler) dailyMacros(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]dailyMacrosDTO, 0, len(days))
 	for _, d := range days {
-		out = append(out, dailyMacrosDTO{
-			Date:       d.Date,
-			Calories:   d.Calories,
-			ProteinG:   d.ProteinG,
-			FatG:       d.FatG,
-			CarbsG:     d.CarbsG,
-			EntryCount: d.EntryCount,
-		})
+		out = append(out, dailyMacrosDTO(d))
 	}
 	httpresp.OK(w, "daily macros", out)
 }
@@ -776,9 +769,9 @@ func parseDateRangeQuery(r *http.Request) (time.Time, time.Time, *time.Location,
 	}
 
 	if date != "" {
-		start, end, err := dayBoundsUTC(date, loc)
-		if err != nil {
-			return time.Time{}, time.Time{}, nil, err
+		start, end, dayErr := dayBoundsUTC(date, loc)
+		if dayErr != nil {
+			return time.Time{}, time.Time{}, nil, dayErr
 		}
 		return start, end, loc, nil
 	}

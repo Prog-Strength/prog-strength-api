@@ -3,6 +3,7 @@ package bodyweight
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 
@@ -46,7 +47,7 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID, entryID string) (*En
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, entryID, userID)
 	e, err := scanEntry(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return e, err

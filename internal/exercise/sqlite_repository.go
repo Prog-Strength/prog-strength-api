@@ -96,20 +96,18 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	var exercises []Exercise
 	for rows.Next() {
 		var ex Exercise
-		if err := rows.Scan(&ex.ID, &ex.Name, &ex.Description, &ex.CreatedAt, &ex.UpdatedAt, &ex.DeletedAt); err != nil {
-			rows.Close()
+		if err = rows.Scan(&ex.ID, &ex.Name, &ex.Description, &ex.CreatedAt, &ex.UpdatedAt, &ex.DeletedAt); err != nil {
 			return nil, err
 		}
 		exercises = append(exercises, ex)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	rows.Close()
 
 	if len(exercises) > 0 {
 		ids := make([]string, len(exercises))

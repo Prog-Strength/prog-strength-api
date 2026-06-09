@@ -431,7 +431,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createWorkoutRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}

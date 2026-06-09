@@ -105,14 +105,7 @@ func toSessionDTO(s Session, withTrackpoints bool) sessionDTO {
 	if withTrackpoints {
 		dto.Trackpoints = make([]trackpointDTO, 0, len(s.Trackpoints))
 		for _, tp := range s.Trackpoints {
-			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO{
-				Sequence:        tp.Sequence,
-				ElapsedSeconds:  tp.ElapsedSeconds,
-				DistanceMeters:  tp.DistanceMeters,
-				HeartRateBpm:    tp.HeartRateBpm,
-				PaceSecPerKm:    tp.PaceSecPerKm,
-				ElevationMeters: tp.ElevationMeters,
-			})
+			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO(tp))
 		}
 	}
 	return dto

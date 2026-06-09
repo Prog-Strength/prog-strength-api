@@ -1,3 +1,10 @@
+# [0.39.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.2...v0.39.0) (2026-06-09)
+
+
+### Features
+
+* **api:** per-request id for response correlation + storage_failed log fix ([#13](https://github.com/Prog-Strength/prog-strength-api/issues/13)) ([e19fd78](https://github.com/Prog-Strength/prog-strength-api/commit/e19fd7858402ea8ae2b8b7130ff4a8f7d28db633))
+
 ## [0.38.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.38.1...v0.38.2) (2026-06-07)
 
 

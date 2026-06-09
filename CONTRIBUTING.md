@@ -188,7 +188,7 @@ Every PR runs four parallel jobs:
 | Job | What it does | Maps to |
 |-----|--------------|---------|
 | `pr-title` | Validates the PR title is a conventional commit | `conventional-pre-commit` on `commit-msg` |
-| `lint` | `go build`, `go vet`, `golangci-lint v2.1.6`, `go mod tidy` drift | `pre-push` Go hooks |
+| `lint` | `go build`, `go vet`, `golangci-lint v2.12.2`, `go mod tidy` drift | `pre-push` Go hooks |
 | `test` | `go test -race -cover ./...` (race detector is CI-only) | `pre-push` `go test` (extended) |
 | `vulnerabilities` | `govulncheck ./...` against the module's reachable import graph | CI-only |
 

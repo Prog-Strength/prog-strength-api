@@ -92,7 +92,11 @@ jobs:
           # at the repo root. Bump intentionally; do not float to latest.
           # golangci-lint-action v7 is required for golangci-lint v2;
           # v6 hard-errors on a v2.x version string at the prepare step.
-          version: v2.1.6
+          # v2.12.2 ships built with Go 1.25 — anything older (e.g. the
+          # v2.1.x line) refuses to lint a module whose go.mod targets
+          # 1.25.3 with: "the Go language version (go1.24) used to
+          # build golangci-lint is lower than the targeted Go version".
+          version: v2.12.2
           args: --timeout=5m
 
       - name: go mod tidy drift

@@ -45,16 +45,59 @@ type priceTableJSON struct {
 	} `json:"openai_tts"`
 }
 
-// LoadPriceTable parses the USAGE_PRICE_TABLE_JSON env value. An empty
-// string yields an empty (non-nil) table with no error so a missing env
-// var degrades to "everything costs 0" rather than failing startup.
-func LoadPriceTable(jsonStr string) (PriceTable, error) {
-	pt := PriceTable{
-		Claude:    map[string]ClaudeRates{},
-		OpenAITTS: map[string]TTSRates{},
+// DefaultPriceTable returns the price map shipped in source. These rates
+// are public reference data (anthropic.com/pricing, openai.com/api/pricing)
+// — they live here, not in a secret, so a price change is a reviewable
+// diff in git history rather than an opaque secret rotation. Keys are the
+// exact model strings the agent records to agent_turns.model /
+// agent_speak_calls.model; keep them in sync when the agent's model
+// config changes.
+//
+// Last verified: 2026-06-09. Update the table and bump this date when
+// the pricing pages change.
+func DefaultPriceTable() PriceTable {
+	return PriceTable{
+		Claude: map[string]ClaudeRates{
+			// Sonnet 4.6 — anthropic.com/pricing
+			"claude-sonnet-4-6": {
+				InputPerMTok:      3.00,
+				OutputPerMTok:     15.00,
+				CacheWritePerMTok: 3.75, // 5-minute cache; 1-hour rate is higher
+				CacheReadPerMTok:  0.30,
+			},
+			// Haiku 4.5 — anthropic.com/pricing
+			"claude-haiku-4-5-20251001": {
+				InputPerMTok:      1.00,
+				OutputPerMTok:     5.00,
+				CacheWritePerMTok: 1.25,
+				CacheReadPerMTok:  0.10,
+			},
+		},
+		OpenAITTS: map[string]TTSRates{
+			// gpt-4o-mini-tts — openai.com/api/pricing. OpenAI bills this
+			// model by audio tokens, not characters; $12/Mchar is a
+			// midpoint estimate from their ~$0.015/min published rate
+			// at typical English speaking pace. Overshoots real cost by
+			// ~20% in the worst case — safe direction for a cap.
+			"gpt-4o-mini-tts": {PerMChar: 12.00},
+			// tts-1 — documented rate. Listed so an OPENAI_TTS_MODEL
+			// override doesn't silently fall through to 0 and bypass
+			// the cap.
+			"tts-1": {PerMChar: 15.00},
+		},
 	}
+}
+
+// LoadPriceTable returns the effective price table for the API. When
+// jsonStr is empty, returns DefaultPriceTable so the cap works
+// out-of-the-box with no env config. When jsonStr is non-empty, parses
+// it as a full override — the env wholly replaces the default rather
+// than merging, so an emergency override has predictable semantics.
+// Invalid JSON is an error; callers can choose to log and fall back to
+// the default.
+func LoadPriceTable(jsonStr string) (PriceTable, error) {
 	if jsonStr == "" {
-		return pt, nil
+		return DefaultPriceTable(), nil
 	}
 
 	var raw priceTableJSON
@@ -62,6 +105,10 @@ func LoadPriceTable(jsonStr string) (PriceTable, error) {
 		return PriceTable{}, err
 	}
 
+	pt := PriceTable{
+		Claude:    map[string]ClaudeRates{},
+		OpenAITTS: map[string]TTSRates{},
+	}
 	for model, r := range raw.Claude {
 		pt.Claude[model] = ClaudeRates{
 			InputPerMTok:      r.InputUSDPerMTok,

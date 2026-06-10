@@ -42,21 +42,25 @@ type ActivityBestEffort struct {
 	DurationSeconds float64
 }
 
-// bestEfforts runs a distance-anchored two-pointer sweep over the raw
-// trackpoint stream for each target distance, returning the minimum-time
-// window that covers each distance. Results come back in targets order
-// (shortest first); a target whose distance exceeds the activity's total
-// cumulative distance is omitted entirely.
+// bestEfforts runs a distance-anchored sweep over the raw trackpoint
+// stream for each target distance, returning the minimum-time window that
+// covers each distance. Results come back in targets order (shortest
+// first); a target whose distance exceeds the activity's total cumulative
+// distance is omitted entirely.
 //
 // The sweep operates on the raw (un-downsampled) trackpoints — the ~300
 // point chart downsample strides 50–150 m apart on a typical run, far too
 // coarse for honest 1-mile-window math. summarize hands us the raw slice
 // it already has in memory.
 //
-// For each window covering >= T meters the right edge is linearly
-// interpolated to the exact crossing of T, removing the systematic bias
-// that "first window to meet-or-exceed T" introduces (samples are 5–15 m
-// apart, so a target of exactly 5000 m almost never lands on a boundary).
+// Algorithm: anchor the window's LEFT edge on each sample in turn and find
+// the exact crossing of left.dist + T, linearly interpolating the right
+// edge between the bracketing samples. As the left anchor advances the
+// crossing distance advances monotonically, so a single right pointer
+// brackets it across the whole sweep — O(n) per target, no left anchor
+// skipped. Interpolating the right edge removes the systematic bias that
+// "first window to meet-or-exceed T" introduces (samples are 5–15 m apart,
+// so a target of exactly 5000 m almost never lands on a boundary).
 //
 // Accepted limitations, documented per SOW non-goals:
 //   - Paused/stopped time is treated as elapsed: a 30 s traffic-light stop
@@ -68,10 +72,11 @@ type ActivityBestEffort struct {
 //     bias (well under a second at typical ~1 Hz rates). Symmetrizing is a
 //     clean follow-up; the residual is imperceptible for v1.
 func bestEfforts(tps []parsedTrackpoint, targets []StandardDistance) []ActivityBestEffort {
-	if len(tps) < 2 {
+	n := len(tps)
+	if n < 2 {
 		return nil
 	}
-	total := tps[len(tps)-1].DistanceMeters - tps[0].DistanceMeters
+	total := tps[n-1].DistanceMeters - tps[0].DistanceMeters
 
 	out := make([]ActivityBestEffort, 0, len(targets))
 	for _, target := range targets {
@@ -82,30 +87,35 @@ func bestEfforts(tps []parsedTrackpoint, targets []StandardDistance) []ActivityB
 		}
 
 		best := math.Inf(1)
-		left := 0
-		for right := 1; right < len(tps); right++ {
-			// Tighten the left edge while [left+1, right] still covers T.
-			for left+1 < right && tps[right].DistanceMeters-tps[left+1].DistanceMeters >= T {
-				left++
+		// right brackets the crossing of the current left anchor: the
+		// smallest index with tps[right].dist >= left.dist + T. It only ever
+		// advances, so the inner loop is amortized O(1) across the sweep.
+		right := 1
+		for left := 0; left < n; left++ {
+			targetEnd := tps[left].DistanceMeters + T
+			// Once the anchor is so far along that even the final sample
+			// can't cover T, no later anchor can either — stop.
+			if targetEnd > tps[n-1].DistanceMeters {
+				break
 			}
-			span := tps[right].DistanceMeters - tps[left].DistanceMeters
-			if span < T {
-				continue // right hasn't extended far enough yet.
+			if right <= left {
+				right = left + 1
+			}
+			for right < n && tps[right].DistanceMeters < targetEnd {
+				right++
+			}
+			if right >= n {
+				break
 			}
 
-			// The crossing of tps[left].dist + T falls inside the right-most
-			// segment [prev, right]: the loop guarantees [left, right-1]
-			// spans < T, so the target distance is reached only between
-			// prev = max(left, right-1) and right.
+			// The crossing falls in segment [right-1, right]. Interpolate the
+			// exact time at targetEnd; guard the zero-distance segment a
+			// non-strict-monotonic GPS glitch can produce.
 			prev := right - 1
-			if left > prev {
-				prev = left
-			}
 			segD := tps[right].DistanceMeters - tps[prev].DistanceMeters
 			if segD <= 0 {
-				continue // degenerate (non-strict monotonic) zero-distance segment.
+				continue
 			}
-			targetEnd := tps[left].DistanceMeters + T
 			ratio := (targetEnd - tps[prev].DistanceMeters) / segD
 			endT := tps[prev].Time.Add(time.Duration(ratio * float64(tps[right].Time.Sub(tps[prev].Time))))
 			windowS := endT.Sub(tps[left].Time).Seconds()

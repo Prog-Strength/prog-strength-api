@@ -189,6 +189,35 @@ func TestBestEfforts_MonotonicNonStrict(t *testing.T) {
 	}
 }
 
+// TestBestEfforts_SparseAnchorsFindsTrueMinimum is a regression test for a
+// bug where advancing the left pointer too aggressively skipped valid
+// left-anchored windows. With sparse samples around the target boundary, an
+// earlier anchor's interpolated right edge can yield a strictly faster
+// window than any sample-aligned one — the sweep must not miss it.
+//
+// dist {0, 600, 1300, 1310, 2310}, time {0, 600, 700, 701, 900}, T = 1000:
+// the window anchored at sample 1 (dist 600, t 600) crossing 1600 m
+// (interpolated to t ≈ 758.7) gives ≈ 158.7 s, beating every other window.
+func TestBestEfforts_SparseAnchorsFindsTrueMinimum(t *testing.T) {
+	base := time.Date(2026, 5, 1, 7, 0, 0, 0, time.UTC)
+	dists := []float64{0, 600, 1300, 1310, 2310}
+	elapsed := []float64{0, 600, 700, 701, 900}
+	tps := synthTrace(base, dists, elapsed)
+
+	// Target exactly 1000 m via a synthetic single-distance sweep.
+	target := StandardDistance{Key: "1000m", Meters: 1000}
+	efforts := bestEfforts(tps, []StandardDistance{target})
+	got, ok := effortByKey(efforts, "1000m")
+	if !ok {
+		t.Fatal("missing 1000m effort")
+	}
+	// Brute-force right-edge-interpolated minimum is ≈ 158.71 s.
+	want := 158.7085
+	if math.Abs(got-want) > 0.1 {
+		t.Errorf("1000m window = %.4f, want ~%.4f (must not skip the sample-1 anchor)", got, want)
+	}
+}
+
 // TestSummarize_NonRunningHasNoBestEfforts: a walk produces no best efforts.
 func TestSummarize_NonRunningHasNoBestEfforts(t *testing.T) {
 	base := time.Date(2026, 5, 1, 7, 0, 0, 0, time.UTC)

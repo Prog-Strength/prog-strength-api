@@ -3,6 +3,35 @@ package workout
 import (
 	"sort"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+)
+
+// baselineModelRecencyWeighted is the discriminator the UI uses to label
+// what a normalized value of 1.0 ("100%") means. It names the baseline
+// math (RecencyWeightedBaseline at `now`). If we ever swap the model
+// this value — and the UI's label — change together.
+const baselineModelRecencyWeighted = "recency_weighted_current"
+
+// Progression aggregate / per-exercise tuning constants. See
+// prog-strength-docs/sows/progress-page-modernization.md § Algorithms.
+const (
+	// minSessionsThreshold is the minimum number of in-window sessions an
+	// exercise needs before we fit a per-exercise trend. Below it the
+	// dots still render but slope/trendline are null and the exercise is
+	// excluded from the aggregate.
+	minSessionsThreshold = 3
+
+	// progressingSlopeThreshold is the noise floor (percentage points per
+	// month) a lift's slope must clear to count as "progressing." The
+	// frontend's stat-card tone logic uses the same constant so the two
+	// agree on what "progressing" means.
+	progressingSlopeThreshold = 0.25
+
+	// monthHours is the number of hours in an average month (30.4375
+	// days), used to scale the per-exercise regression X-axis to months
+	// so slope_per_month is the regression slope itself.
+	monthHours = 24 * 30.4375
 )
 
 // MuscleGroupProgression is the response body for GET
@@ -19,9 +48,19 @@ import (
 // into a fraction of the lifter's current capability on that exercise
 // — a number that means the same thing across every exercise.
 type MuscleGroupProgression struct {
-	MuscleGroup string    `json:"muscle_group"`
-	Since       time.Time `json:"since"`
-	Until       time.Time `json:"until"`
+	// Filter echoes the requested filter (movement pattern or single
+	// muscle group) plus the resolved set of muscle groups behind it so
+	// the UI can render a "Showing chest, shoulders, triceps" caption
+	// without duplicating the rollup.
+	Filter ProgressionFilterResponse `json:"filter"`
+
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+
+	// BaselineModel is the discriminator the UI uses to label what a
+	// normalized value of 1.0 means. Always "recency_weighted_current"
+	// today; see baselineModelRecencyWeighted.
+	BaselineModel string `json:"baseline_model"`
 
 	// ExerciseBaselines lists, for each exercise that contributed at
 	// least one point, the current recency-weighted 1RM baseline used
@@ -30,17 +69,68 @@ type MuscleGroupProgression struct {
 	ExerciseBaselines []ExerciseBaseline `json:"exercise_baselines"`
 
 	// Points is one entry per (workout, exercise) pair where the
-	// exercise targets this muscle group and a baseline could be
-	// computed. Sorted by performed_at ascending so charts render
-	// left-to-right without re-sorting client-side.
+	// exercise targets this filter and a baseline could be computed.
+	// Sorted by performed_at ascending so charts render left-to-right
+	// without re-sorting client-side.
 	Points []MuscleGroupProgressionPoint `json:"points"`
 
-	// Trendline is the single least-squares regression through every
-	// normalized point. Nil when fewer than 2 points exist or when
-	// all points share the same X (regression is undefined). The
-	// endpoints are evaluated at since and until so the frontend can
-	// plot the line with two coordinates without re-deriving the math.
-	Trendline *Trendline `json:"trendline,omitempty"`
+	// PerExerciseTrends carries one entry per exercise that contributed
+	// at least one point, each with its in-window session count and (when
+	// it clears minSessionsThreshold and isn't degenerate) a per-month
+	// slope and trendline. Replaces the old single cross-exercise
+	// trendline, which mixed exercises on different baselines.
+	PerExerciseTrends []PerExerciseTrend `json:"per_exercise_trends"`
+
+	// Aggregate rolls the per-exercise trends up into the page's headline
+	// stat cards.
+	Aggregate ProgressionAggregate `json:"aggregate"`
+}
+
+// ProgressionFilterResponse is the `filter` block of the response.
+// Exactly one of MovementPattern / MuscleGroup is populated (the other
+// is omitted via omitempty); MuscleGroupsIncluded is always the resolved
+// list.
+type ProgressionFilterResponse struct {
+	MovementPattern      string   `json:"movement_pattern,omitempty"`
+	MuscleGroup          string   `json:"muscle_group,omitempty"`
+	MuscleGroupsIncluded []string `json:"muscle_groups_included"`
+}
+
+// ProgressionFilter is the filter descriptor passed into
+// ComputeMuscleGroupProgression. The handler builds it after resolving
+// the request's movement_pattern or muscle_group param; the compute
+// function only reads it to populate the response `filter` block, so it
+// stays a pure function of its inputs.
+type ProgressionFilter struct {
+	// MovementPattern is set (and MuscleGroup empty) on the pattern path;
+	// MuscleGroup is set (and MovementPattern empty) on the legacy
+	// single-muscle path.
+	MovementPattern string
+	MuscleGroup     string
+	// MuscleGroups is the resolved set of muscle groups echoed as
+	// muscle_groups_included.
+	MuscleGroups []exercise.MuscleGroup
+}
+
+// PerExerciseTrend is one exercise's in-window trend. SlopePerMonth and
+// Trendline are nil when SessionCount < minSessionsThreshold or the
+// regression is degenerate (all points share the same X) — the renderer
+// treats those as "not enough data" rather than fitting a line through
+// two points.
+type PerExerciseTrend struct {
+	ExerciseID    string     `json:"exercise_id"`
+	SessionCount  int        `json:"session_count"`
+	SlopePerMonth *float64   `json:"slope_per_month"`
+	Trendline     *Trendline `json:"trendline"`
+}
+
+// ProgressionAggregate is the response's headline rollup. Median is nil
+// when no exercise clears the session threshold.
+type ProgressionAggregate struct {
+	LiftsTracked         int      `json:"lifts_tracked"`
+	LiftsProgressing     int      `json:"lifts_progressing"`
+	MedianSlopePerMonth  *float64 `json:"median_slope_per_month"`
+	MinSessionsThreshold int      `json:"min_sessions_threshold"`
 }
 
 // ExerciseBaseline is the per-exercise context the frontend needs to
@@ -97,7 +187,8 @@ type ExerciseHistory struct {
 }
 
 // ComputeMuscleGroupProgression turns per-exercise 1RM history into
-// the normalized, charted progression for a muscle group.
+// the normalized, charted progression for a filter (a movement pattern
+// or a single muscle group).
 //
 // Algorithm:
 //
@@ -116,25 +207,49 @@ type ExerciseHistory struct {
 //  3. For each entry inside [since, until], emit one point with
 //     normalized_max = max_estimated_1rm / baseline.
 //
-//  4. Sort points by performed_at ascending and fit one trendline
-//     through them all. Single trendline is the right answer: every
-//     point is on the same normalized axis, so the regression is
-//     valid across exercises.
+//  4. Fit a per-exercise least-squares trend on that exercise's own
+//     normalized points (X scaled to months since `since`), so each
+//     line stays on a single comparable baseline. Exercises with fewer
+//     than minSessionsThreshold in-window sessions still emit points +
+//     baselines (so the dots render) but get null slope/trendline and
+//     are excluded from the aggregate.
+//
+//  5. Roll the per-exercise slopes up into the aggregate (lifts tracked,
+//     lifts progressing, median slope).
 //
 // Pure function: no IO, no time.Now lookups. Caller supplies `now`
 // so tests can pin the baseline calculation deterministically.
 func ComputeMuscleGroupProgression(
-	muscleGroup string,
+	filter ProgressionFilter,
 	histories []ExerciseHistory,
 	since, until, now time.Time,
 ) MuscleGroupProgression {
+	included := make([]string, 0, len(filter.MuscleGroups))
+	for _, mg := range filter.MuscleGroups {
+		included = append(included, string(mg))
+	}
+
 	result := MuscleGroupProgression{
-		MuscleGroup:       muscleGroup,
+		Filter: ProgressionFilterResponse{
+			MovementPattern:      filter.MovementPattern,
+			MuscleGroup:          filter.MuscleGroup,
+			MuscleGroupsIncluded: included,
+		},
 		Since:             since,
 		Until:             until,
+		BaselineModel:     baselineModelRecencyWeighted,
 		ExerciseBaselines: []ExerciseBaseline{},
 		Points:            []MuscleGroupProgressionPoint{},
+		PerExerciseTrends: []PerExerciseTrend{},
 	}
+
+	// Per-exercise points collected in the order exercises contributed,
+	// so trends can be fit on each exercise's own series independently.
+	type exerciseSeries struct {
+		exerciseID string
+		points     []MuscleGroupProgressionPoint
+	}
+	var series []exerciseSeries
 
 	for _, h := range histories {
 		baseline, ok := RecencyWeightedBaseline(
@@ -156,12 +271,12 @@ func ComputeMuscleGroupProgression(
 			}
 		}
 
-		contributed := false
+		var exPoints []MuscleGroupProgressionPoint
 		for _, e := range h.Entries {
 			if e.PerformedAt.Before(since) || e.PerformedAt.After(until) {
 				continue
 			}
-			result.Points = append(result.Points, MuscleGroupProgressionPoint{
+			p := MuscleGroupProgressionPoint{
 				WorkoutID:       e.WorkoutID,
 				ExerciseID:      e.ExerciseID,
 				ExerciseName:    h.ExerciseName,
@@ -172,17 +287,19 @@ func ComputeMuscleGroupProgression(
 				MinEstimated1RM: round1(e.MinEstimated1RM),
 				SetCount:        e.SetCount,
 				Unit:            string(e.Unit),
-			})
-			contributed = true
+			}
+			result.Points = append(result.Points, p)
+			exPoints = append(exPoints, p)
 		}
 
-		if contributed {
+		if len(exPoints) > 0 {
 			result.ExerciseBaselines = append(result.ExerciseBaselines, ExerciseBaseline{
 				ExerciseID:   h.ExerciseID,
 				ExerciseName: h.ExerciseName,
 				Baseline:     round1(baseline),
 				Unit:         baselineUnit,
 			})
+			series = append(series, exerciseSeries{exerciseID: h.ExerciseID, points: exPoints})
 		}
 	}
 
@@ -193,46 +310,65 @@ func ComputeMuscleGroupProgression(
 		return result.ExerciseBaselines[i].ExerciseName < result.ExerciseBaselines[j].ExerciseName
 	})
 
-	if len(result.Points) >= 2 {
-		result.Trendline = normalizedRegressionLine(result.Points, since, until)
+	// Per-exercise trends + aggregate. One pass over the per-exercise
+	// series: fit the slope, build the trend entry, and (for exercises
+	// that clear the session threshold) accumulate the aggregate.
+	var qualifyingSlopes []float64
+	liftsProgressing := 0
+	for _, s := range series {
+		trend := PerExerciseTrend{
+			ExerciseID:   s.exerciseID,
+			SessionCount: len(s.points),
+		}
+		if len(s.points) >= minSessionsThreshold {
+			if slope, line, ok := perExerciseSlope(s.points, since, until); ok {
+				slopePerMonth := round1(slope * 100)
+				trend.SlopePerMonth = &slopePerMonth
+				trend.Trendline = line
+				qualifyingSlopes = append(qualifyingSlopes, slopePerMonth)
+				if slopePerMonth > progressingSlopeThreshold {
+					liftsProgressing++
+				}
+			}
+		}
+		result.PerExerciseTrends = append(result.PerExerciseTrends, trend)
+	}
+
+	result.Aggregate = ProgressionAggregate{
+		LiftsTracked:         len(qualifyingSlopes),
+		LiftsProgressing:     liftsProgressing,
+		MedianSlopePerMonth:  medianOrNil(qualifyingSlopes),
+		MinSessionsThreshold: minSessionsThreshold,
 	}
 
 	return result
 }
 
-// normalizedRegressionLine fits a least-squares line through the
-// NormalizedMax field across every point, regardless of which exercise
-// the point came from. Returns nil when the X-variance is zero so we
-// don't render a degenerate line.
+// perExerciseSlope fits a least-squares line through one exercise's
+// normalized points with X scaled to months elapsed since `since`, so
+// the returned slope is the regression slope in normalized units per
+// month (the caller multiplies by 100 for percentage points). The
+// trendline endpoints are evaluated at since/until.
 //
-// Mirrors the math in progression.go's regressionLine but doesn't
-// share code — duplicating ~20 lines is cheaper than introducing a
-// generic over ProgressionPoint vs MuscleGroupProgressionPoint, and
-// keeps each function readable in isolation.
-func normalizedRegressionLine(
+// Returns ok=false (and a nil trendline) when n < 2 or the X-variance
+// is zero (all points share the same instant) — a degenerate fit the
+// caller renders as "not enough data."
+func perExerciseSlope(
 	points []MuscleGroupProgressionPoint,
 	since, until time.Time,
-) *Trendline {
+) (slope float64, line *Trendline, ok bool) {
 	n := len(points)
 	if n < 2 {
-		return nil
+		return 0, nil, false
 	}
 
-	firstX := points[0].PerformedAt.UnixMilli()
-	allSameX := true
-	for i := 1; i < n; i++ {
-		if points[i].PerformedAt.UnixMilli() != firstX {
-			allSameX = false
-			break
-		}
-	}
-	if allSameX {
-		return nil
+	monthsSince := func(t time.Time) float64 {
+		return t.Sub(since).Hours() / monthHours
 	}
 
 	var sumX, sumY, sumXY, sumXX float64
 	for _, p := range points {
-		x := float64(p.PerformedAt.UnixMilli())
+		x := monthsSince(p.PerformedAt)
 		y := p.NormalizedMax
 		sumX += x
 		sumY += y
@@ -240,20 +376,39 @@ func normalizedRegressionLine(
 		sumXX += x * x
 	}
 	denom := float64(n)*sumXX - sumX*sumX
-	if denom <= 0 {
-		return nil
+	if denom == 0 {
+		return 0, nil, false
 	}
-	slope := (float64(n)*sumXY - sumX*sumY) / denom
+	slope = (float64(n)*sumXY - sumX*sumY) / denom
 	intercept := (sumY - slope*sumX) / float64(n)
 
-	startX := float64(since.UnixMilli())
-	endX := float64(until.UnixMilli())
-	return &Trendline{
+	line = &Trendline{
 		StartAt:    since,
-		StartValue: round3(slope*startX + intercept),
+		StartValue: round3(slope*monthsSince(since) + intercept),
 		EndAt:      until,
-		EndValue:   round3(slope*endX + intercept),
+		EndValue:   round3(slope*monthsSince(until) + intercept),
 	}
+	return slope, line, true
+}
+
+// medianOrNil returns a pointer to the median of vs, or nil when vs is
+// empty. The median (not the mean) keeps one rocketing or tanking
+// exercise from capturing the headline.
+func medianOrNil(vs []float64) *float64 {
+	n := len(vs)
+	if n == 0 {
+		return nil
+	}
+	sorted := make([]float64, n)
+	copy(sorted, vs)
+	sort.Float64s(sorted)
+	var m float64
+	if n%2 == 1 {
+		m = sorted[n/2]
+	} else {
+		m = round1((sorted[n/2-1] + sorted[n/2]) / 2)
+	}
+	return &m
 }
 
 // round3 keeps normalized values readable in JSON ("0.927") without

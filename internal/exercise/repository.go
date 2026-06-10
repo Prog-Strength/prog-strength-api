@@ -23,6 +23,14 @@ type ListOptions struct {
 	// Matches if the exercise lists it among its MuscleGroups.
 	MuscleGroup MuscleGroup
 
+	// MuscleGroups filters to exercises that target ANY of these muscle
+	// groups (OR semantics). Used by the movement-pattern rollup, which
+	// resolves e.g. "push" to {chest, shoulders, triceps} and wants every
+	// exercise touching any of them. When non-empty it takes precedence
+	// over the single MuscleGroup field. An exercise matching more than
+	// one of the groups is returned once, not duplicated.
+	MuscleGroups []MuscleGroup
+
 	// Equipment filters to exercises that require this equipment.
 	// Matches if the exercise lists it among its Equipment.
 	Equipment Equipment

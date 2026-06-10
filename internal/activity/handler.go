@@ -53,6 +53,26 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Patch("/{id}", h.rename)
 		r.Delete("/{id}", h.delete)
 	})
+
+	// Running best efforts (running PRs). The data lives in the activity
+	// repository, so the handler that already owns it hosts the /running
+	// surface rather than spinning up a separate package.
+	r.Route("/running", func(r chi.Router) {
+		r.Get("/best-efforts", h.runningBestEfforts)
+		r.Get("/best-efforts/{distance_key}/history", h.runningBestEffortHistory)
+	})
+}
+
+// standardDistanceByKey returns the StandardDistance for a key and whether
+// it's a known standard distance. The StandardDistances slice is the single
+// source of truth shared with the summarizer, repository, and DB CHECK.
+func standardDistanceByKey(key string) (StandardDistance, bool) {
+	for _, d := range StandardDistances {
+		if d.Key == key {
+			return d, true
+		}
+	}
+	return StandardDistance{}, false
 }
 
 // --- DTOs ----------------------------------------------------------
@@ -439,4 +459,129 @@ func (h *Handler) runningMetrics(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	httpresp.OK(w, "running metrics", resp)
+}
+
+// --- Running best efforts -----------------------------------------------
+
+// bestEffortDTO is one entry in the GET /running/best-efforts response:
+// the user's current best at a standard distance plus the activity that
+// set it. pace_sec_per_km is derived at request time (not stored).
+type bestEffortDTO struct {
+	DistanceKey       string    `json:"distance_key"`
+	DistanceLabel     string    `json:"distance_label"`
+	DistanceMeters    float64   `json:"distance_meters"`
+	DurationSeconds   float64   `json:"duration_seconds"`
+	PaceSecPerKm      float64   `json:"pace_sec_per_km"`
+	ActivityID        string    `json:"activity_id"`
+	ActivityStartTime time.Time `json:"activity_start_time"`
+}
+
+// bestEffortsResponse wraps the bests list. best_efforts is always a
+// non-nil slice so it serializes as [] (not null) for users with no runs.
+type bestEffortsResponse struct {
+	BestEfforts []bestEffortDTO `json:"best_efforts"`
+}
+
+// bestEffortHistoryPointDTO is one point in a single distance's
+// progression series (every activity that achieved a best effort at the
+// distance).
+type bestEffortHistoryPointDTO struct {
+	ActivityID        string    `json:"activity_id"`
+	ActivityStartTime time.Time `json:"activity_start_time"`
+	DurationSeconds   float64   `json:"duration_seconds"`
+}
+
+// bestEffortHistoryResponse is the GET
+// /running/best-efforts/{distance_key}/history payload.
+type bestEffortHistoryResponse struct {
+	DistanceKey    string                      `json:"distance_key"`
+	DistanceLabel  string                      `json:"distance_label"`
+	DistanceMeters float64                     `json:"distance_meters"`
+	Points         []bestEffortHistoryPointDTO `json:"points"`
+}
+
+// runningBestEfforts handles GET /running/best-efforts: the user's current
+// best across each standard distance, sorted in StandardDistances order.
+// Distances never covered are omitted; pace is derived from duration and
+// the distance's meters.
+func (h *Handler) runningBestEfforts(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	efforts, err := h.repo.GetUserRunningBestEfforts(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get running best efforts", err)
+		return
+	}
+
+	// Index the repo rows by distance_key, then emit in StandardDistances
+	// order so the response is consistently sorted shortest-first without
+	// the client re-sorting.
+	byKey := make(map[string]RunningBestEffort, len(efforts))
+	for _, e := range efforts {
+		byKey[e.DistanceKey] = e
+	}
+
+	out := make([]bestEffortDTO, 0, len(efforts))
+	for _, d := range StandardDistances {
+		e, ok := byKey[d.Key]
+		if !ok {
+			continue
+		}
+		out = append(out, bestEffortDTO{
+			DistanceKey:       d.Key,
+			DistanceLabel:     d.DisplayName,
+			DistanceMeters:    d.Meters,
+			DurationSeconds:   e.DurationSeconds,
+			PaceSecPerKm:      e.DurationSeconds / (d.Meters / 1000),
+			ActivityID:        e.ActivityID,
+			ActivityStartTime: e.ActivityStartTime,
+		})
+	}
+
+	httpresp.OK(w, "listed running best efforts", bestEffortsResponse{BestEfforts: out})
+}
+
+// runningBestEffortHistory handles GET
+// /running/best-efforts/{distance_key}/history: every activity that
+// achieved a best effort at the distance, ascending by start time. An
+// unknown distance_key is a 404 with code unknown_distance_key.
+func (h *Handler) runningBestEffortHistory(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	distanceKey := chi.URLParam(r, "distance_key")
+	d, ok := standardDistanceByKey(distanceKey)
+	if !ok {
+		httpresp.ErrorWithCode(w, http.StatusNotFound, "unknown distance key", "unknown_distance_key")
+		return
+	}
+
+	points, err := h.repo.GetRunningBestEffortHistory(r.Context(), userID, distanceKey)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get running best effort history", err)
+		return
+	}
+
+	pts := make([]bestEffortHistoryPointDTO, 0, len(points))
+	for _, p := range points {
+		pts = append(pts, bestEffortHistoryPointDTO{
+			ActivityID:        p.ActivityID,
+			ActivityStartTime: p.ActivityStartTime,
+			DurationSeconds:   p.DurationSeconds,
+		})
+	}
+
+	httpresp.OK(w, "listed running best effort history", bestEffortHistoryResponse{
+		DistanceKey:    d.Key,
+		DistanceLabel:  d.DisplayName,
+		DistanceMeters: d.Meters,
+		Points:         pts,
+	})
 }

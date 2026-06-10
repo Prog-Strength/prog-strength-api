@@ -50,18 +50,20 @@ func (a *MemoryArchiver) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// Get returns the stored bytes for key and whether it exists. For test
-// assertions; returns a copy so callers can't mutate internal state.
-func (a *MemoryArchiver) Get(key string) ([]byte, bool) {
+// Get returns a copy of the stored bytes for key, or ErrNotFound when no
+// object is stored. Satisfies the Archiver interface (used by the
+// best-efforts backfill); the copy keeps callers from mutating internal
+// state.
+func (a *MemoryArchiver) Get(ctx context.Context, key string) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	o, ok := a.objects[key]
 	if !ok {
-		return nil, false
+		return nil, ErrNotFound
 	}
 	cp := make([]byte, len(o.body))
 	copy(cp, o.body)
-	return cp, true
+	return cp, nil
 }
 
 // Meta returns the metadata stored alongside key and whether it exists.

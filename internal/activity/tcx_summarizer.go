@@ -61,6 +61,10 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 			a.AvgPaceSecPerKm = &avg
 		}
 		a.BestPaceSecPerKm = bestPace(tps)
+		// Per-distance best efforts (running PRs): the fastest window of
+		// each standard distance found anywhere inside this activity. Empty
+		// for runs too short to cover even the 1-mile target.
+		a.BestEfforts = bestEfforts(tps, StandardDistances)
 	}
 
 	if p.hasCalories {

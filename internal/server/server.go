@@ -172,6 +172,13 @@ func New(cfg config.Config) (*Server, error) {
 			return nil, err
 		}
 
+		// Backfill running best efforts from each live running activity's
+		// archived TCX. Gated on activity_best_efforts being empty, so it
+		// runs once after migration 016 ships and is a no-op thereafter.
+		if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityBestEfforts(context.Background()); err != nil {
+			return nil, err
+		}
+
 		// Telemetry uses its own SQLite file so high-volume agent
 		// writes don't share locks or Litestream backups with the
 		// application data. Same migration pattern as app.db, just

@@ -216,14 +216,20 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // progression handles GET /workouts/progression — the muscle-group
 // view that powers the Progress page.
 //
-// Query params:
-//   - muscle_group (required): one of the catalog muscle group enum
-//     values. The handler resolves it to the set of exercises that
-//     target the group and aggregates across all of them.
+// Query params (exactly one of movement_pattern / muscle_group required):
+//   - movement_pattern: one of push | pull | legs | core | all. The
+//     handler resolves it to its constituent muscle groups (see
+//     exercise.MovementPatternMuscleGroups) and aggregates across every
+//     exercise targeting any of them.
+//   - muscle_group: one of the catalog muscle group enum values. The
+//     handler resolves it to the set of exercises that target the group
+//     and aggregates across all of them.
 //   - since (optional, RFC3339): start of the date range; defaults to
 //     `until - 90 days` when omitted.
 //   - until (optional, RFC3339): end of the date range; defaults to
 //     now when omitted.
+//
+// Neither param → 400 missing_filter; both → 400 conflicting_filters.
 //
 // Additional filter params (exercise_id, equipment, etc.) will be
 // added to this endpoint over time. The intent is one progression
@@ -246,15 +252,48 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
+	movementPatternRaw := q.Get("movement_pattern")
 	muscleGroupRaw := q.Get("muscle_group")
-	if muscleGroupRaw == "" {
-		httpresp.Error(w, http.StatusBadRequest, "muscle_group is required")
+
+	// Exactly one of movement_pattern / muscle_group is required.
+	switch {
+	case movementPatternRaw == "" && muscleGroupRaw == "":
+		httpresp.ErrorWithCode(w, http.StatusBadRequest,
+			"movement_pattern or muscle_group is required", "missing_filter")
+		return
+	case movementPatternRaw != "" && muscleGroupRaw != "":
+		httpresp.ErrorWithCode(w, http.StatusBadRequest,
+			"specify either movement_pattern or muscle_group, not both", "conflicting_filters")
 		return
 	}
-	mg := exercise.MuscleGroup(muscleGroupRaw)
-	if !mg.Valid() {
-		httpresp.Error(w, http.StatusBadRequest, "invalid muscle_group")
-		return
+
+	// Resolve the filter to (a) the ProgressionFilter descriptor echoed
+	// in the response and (b) the ListOptions used to pull exercises.
+	var filter ProgressionFilter
+	var listOpts exercise.ListOptions
+	if movementPatternRaw != "" {
+		mp := exercise.MovementPattern(movementPatternRaw)
+		if !mp.Valid() {
+			httpresp.Error(w, http.StatusBadRequest, "invalid movement_pattern")
+			return
+		}
+		groups := mp.MuscleGroups()
+		filter = ProgressionFilter{
+			MovementPattern: movementPatternRaw,
+			MuscleGroups:    groups,
+		}
+		listOpts = exercise.ListOptions{MuscleGroups: groups}
+	} else {
+		mg := exercise.MuscleGroup(muscleGroupRaw)
+		if !mg.Valid() {
+			httpresp.Error(w, http.StatusBadRequest, "invalid muscle_group")
+			return
+		}
+		filter = ProgressionFilter{
+			MuscleGroup:  muscleGroupRaw,
+			MuscleGroups: []exercise.MuscleGroup{mg},
+		}
+		listOpts = exercise.ListOptions{MuscleGroup: mg}
 	}
 
 	// `until` defaults to now; `since` defaults to until - 90 days.
@@ -285,8 +324,8 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve the muscle group to its set of catalog exercises.
-	exercises, err := h.exerciseRepo.List(r.Context(), exercise.ListOptions{MuscleGroup: mg})
+	// Resolve the filter to its set of catalog exercises.
+	exercises, err := h.exerciseRepo.List(r.Context(), listOpts)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list exercises by muscle group", err)
 		return
@@ -317,7 +356,7 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	result := ComputeMuscleGroupProgression(muscleGroupRaw, histories, since, until, now)
+	result := ComputeMuscleGroupProgression(filter, histories, since, until, now)
 	httpresp.OK(w, "computed progression", result)
 }
 

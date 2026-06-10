@@ -66,7 +66,17 @@ func (r *SQLiteRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 
 	conditions = append(conditions, "e.deleted_at IS NULL")
 
-	if opts.MuscleGroup != "" {
+	// MuscleGroups (slice, OR semantics) takes precedence over the single
+	// MuscleGroup field. The SELECT DISTINCT at the top of the query keeps
+	// an exercise matching several of the requested groups from being
+	// returned more than once via the join.
+	if len(opts.MuscleGroups) > 0 {
+		joins = append(joins, "JOIN exercise_muscle_groups emg ON e.id = emg.exercise_id")
+		conditions = append(conditions, "emg.muscle_group IN ("+placeholders(len(opts.MuscleGroups))+")")
+		for _, mg := range opts.MuscleGroups {
+			args = append(args, string(mg))
+		}
+	} else if opts.MuscleGroup != "" {
 		joins = append(joins, "JOIN exercise_muscle_groups emg ON e.id = emg.exercise_id")
 		conditions = append(conditions, "emg.muscle_group = ?")
 		args = append(args, string(opts.MuscleGroup))

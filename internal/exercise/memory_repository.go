@@ -51,7 +51,11 @@ func (r *MemoryRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 		if ex.DeletedAt != nil {
 			continue
 		}
-		if opts.MuscleGroup != "" && !containsMuscleGroup(ex.MuscleGroups, opts.MuscleGroup) {
+		if len(opts.MuscleGroups) > 0 {
+			if !containsAnyMuscleGroup(ex.MuscleGroups, opts.MuscleGroups) {
+				continue
+			}
+		} else if opts.MuscleGroup != "" && !containsMuscleGroup(ex.MuscleGroups, opts.MuscleGroup) {
 			continue
 		}
 		if opts.Equipment != "" && !containsEquipment(ex.Equipment, opts.Equipment) {
@@ -70,6 +74,18 @@ func (r *MemoryRepository) List(ctx context.Context, opts ListOptions) ([]Exerci
 func containsMuscleGroup(haystack []MuscleGroup, needle MuscleGroup) bool {
 	for _, m := range haystack {
 		if m == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// containsAnyMuscleGroup reports whether haystack shares at least one
+// muscle group with needles (OR semantics for the movement-pattern
+// rollup).
+func containsAnyMuscleGroup(haystack, needles []MuscleGroup) bool {
+	for _, n := range needles {
+		if containsMuscleGroup(haystack, n) {
 			return true
 		}
 	}

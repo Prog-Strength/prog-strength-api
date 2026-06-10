@@ -1,3 +1,10 @@
+## [0.44.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.44.0...v0.44.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* **deploy:** thread AVATAR_BUCKET_NAME through release + manual-deploy ([#21](https://github.com/Prog-Strength/prog-strength-api/issues/21)) ([dd3730f](https://github.com/Prog-Strength/prog-strength-api/commit/dd3730fdebc8f2bfe06e0739ea9ac8a7cde9f57c))
+
 # [0.44.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.43.0...v0.44.0) (2026-06-10)
 
 

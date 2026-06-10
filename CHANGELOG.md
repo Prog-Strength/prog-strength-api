@@ -1,3 +1,10 @@
+# [0.44.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.43.0...v0.44.0) (2026-06-10)
+
+
+### Features
+
+* **workout:** per-exercise trends + movement-pattern filter for progression ([#20](https://github.com/Prog-Strength/prog-strength-api/issues/20)) ([cf0e4e2](https://github.com/Prog-Strength/prog-strength-api/commit/cf0e4e255370d1a8a0959dc5a8735ca80dc36580))
+
 # [0.43.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.42.0...v0.43.0) (2026-06-10)
 
 

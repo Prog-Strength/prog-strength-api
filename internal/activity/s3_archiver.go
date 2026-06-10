@@ -3,6 +3,7 @@ package activity
 import (
 	"bytes"
 	"context"
+	"io"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -32,6 +33,10 @@ type ObjectMetadata struct {
 type Archiver interface {
 	Put(ctx context.Context, key string, body []byte, meta ObjectMetadata) error
 	Delete(ctx context.Context, key string) error
+	// Get fetches the raw object bytes for key. Used by the best-efforts
+	// backfill to re-parse archived TCX files at migration time. Returns a
+	// non-nil error when the object is missing or the fetch fails.
+	Get(ctx context.Context, key string) ([]byte, error)
 }
 
 // S3Archiver archives TCX files to an S3 bucket via aws-sdk-go-v2.
@@ -72,6 +77,18 @@ func (a *S3Archiver) Put(ctx context.Context, key string, body []byte, meta Obje
 		Metadata:    metadata,
 	})
 	return err
+}
+
+func (a *S3Archiver) Get(ctx context.Context, key string) ([]byte, error) {
+	out, err := a.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: &a.bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
 }
 
 func (a *S3Archiver) Delete(ctx context.Context, key string) error {

@@ -65,6 +65,7 @@ func (r *MemoryRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 
 	stored := *a
 	stored.Trackpoints = append([]Trackpoint(nil), a.Trackpoints...)
+	stored.BestEfforts = append([]ActivityBestEffort(nil), a.BestEfforts...)
 	r.activities[a.ID] = &stored
 	return nil
 }
@@ -196,4 +197,74 @@ func (r *MemoryRepository) RunningMetrics(ctx context.Context, userID string, no
 		})
 	}
 	return computeMetrics(rows, now, loc), nil
+}
+
+// GetUserRunningBestEfforts mirrors the SQLite per-distance MIN with the
+// earliest-start tie-break. Computes the current best at each distance
+// across the user's live running activities.
+func (r *MemoryRepository) GetUserRunningBestEfforts(ctx context.Context, userID string) ([]RunningBestEffort, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// best[distanceKey] holds the current winner; a new candidate wins when
+	// it's strictly faster, or equal and earlier-started.
+	best := make(map[string]RunningBestEffort)
+	for _, a := range r.activities {
+		if a.UserID != userID || a.DeletedAt != nil || a.ActivityType != ActivityRunning {
+			continue
+		}
+		for _, e := range a.BestEfforts {
+			cand := RunningBestEffort{
+				DistanceKey:       e.DistanceKey,
+				DurationSeconds:   e.DurationSeconds,
+				ActivityID:        a.ID,
+				ActivityStartTime: a.StartTime,
+			}
+			cur, ok := best[e.DistanceKey]
+			if !ok ||
+				cand.DurationSeconds < cur.DurationSeconds ||
+				(cand.DurationSeconds == cur.DurationSeconds && cand.ActivityStartTime.Before(cur.ActivityStartTime)) {
+				best[e.DistanceKey] = cand
+			}
+		}
+	}
+
+	// Emit in StandardDistances order so the result is stable, matching the
+	// handler's expected ordering.
+	var out []RunningBestEffort
+	for _, d := range StandardDistances {
+		if b, ok := best[d.Key]; ok {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+// GetRunningBestEffortHistory mirrors the SQLite history query: every
+// best-effort row at distanceKey for the user's live running activities,
+// ascending by start_time.
+func (r *MemoryRepository) GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []BestEffortPoint
+	for _, a := range r.activities {
+		if a.UserID != userID || a.DeletedAt != nil || a.ActivityType != ActivityRunning {
+			continue
+		}
+		for _, e := range a.BestEfforts {
+			if e.DistanceKey != distanceKey {
+				continue
+			}
+			out = append(out, BestEffortPoint{
+				ActivityID:        a.ID,
+				ActivityStartTime: a.StartTime,
+				DurationSeconds:   e.DurationSeconds,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ActivityStartTime.Before(out[j].ActivityStartTime)
+	})
+	return out, nil
 }

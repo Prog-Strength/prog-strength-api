@@ -111,9 +111,9 @@ func TestCreate_InsertsActivityTrackpointsAndArchives(t *testing.T) {
 	}
 
 	// Archiver received the exact bytes under the right key.
-	got, ok := arch.Get(a.TCXS3Key)
-	if !ok {
-		t.Fatalf("archiver missing key %q", a.TCXS3Key)
+	got, err := arch.Get(context.Background(), a.TCXS3Key)
+	if err != nil {
+		t.Fatalf("archiver missing key %q: %v", a.TCXS3Key, err)
 	}
 	if string(got) != string(tcx) {
 		t.Fatalf("archived bytes = %q, want %q", got, tcx)
@@ -419,5 +419,162 @@ func TestRunningMetrics(t *testing.T) {
 	}
 	if m.RecentAvgPaceSecPerKm == nil || *m.RecentAvgPaceSecPerKm != 300 {
 		t.Fatalf("recent pace wrong: %v", m.RecentAvgPaceSecPerKm)
+	}
+}
+
+// --- Running best efforts ----------------------------------------------
+
+// newActivityWithEfforts builds a running activity carrying the given
+// best-effort rows, for the persistence + read-query tests.
+func newActivityWithEfforts(userID, source string, start time.Time, efforts []ActivityBestEffort) *Activity {
+	a := newActivity(userID, IngestManualTCX, source, start, 10000, 3000)
+	a.BestEfforts = efforts
+	return a
+}
+
+// TestCreate_PersistsBestEfforts asserts the best-effort rows written in
+// Create's transaction land in activity_best_efforts.
+func TestCreate_PersistsBestEfforts(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivityWithEfforts("u1", "g1", mustTime(t, "2026-06-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "1mi", DurationSeconds: 386.2},
+		{DistanceKey: "5k", DurationSeconds: 1184.7},
+	})
+	if err := repo.Create(ctx, a, []byte("<x/>")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var count int
+	if err := repo.db.QueryRow(`SELECT COUNT(*) FROM activity_best_efforts WHERE activity_id = ?`, a.ID).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("want 2 best-effort rows, got %d", count)
+	}
+}
+
+// TestGetUserRunningBestEfforts_PerDistanceMin asserts the read query
+// returns the fastest window per distance with the correct activity, that
+// duration ties resolve to the earliest start_time, and that a walk's best
+// efforts never appear in the running query.
+func TestGetUserRunningBestEfforts_PerDistanceMin(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	// Two running activities. The later one has the faster 5K; the earlier
+	// one has the faster 1mi.
+	early := newActivityWithEfforts("u1", "g-early", mustTime(t, "2026-04-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "1mi", DurationSeconds: 380},
+		{DistanceKey: "5k", DurationSeconds: 1300},
+	})
+	if err := repo.Create(ctx, early, []byte("<x/>")); err != nil {
+		t.Fatalf("Create early: %v", err)
+	}
+	late := newActivityWithEfforts("u1", "g-late", mustTime(t, "2026-05-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "1mi", DurationSeconds: 400},
+		{DistanceKey: "5k", DurationSeconds: 1184.7},
+	})
+	if err := repo.Create(ctx, late, []byte("<x/>")); err != nil {
+		t.Fatalf("Create late: %v", err)
+	}
+
+	// A walk that would, if counted, hold the fastest 5K. It must be excluded.
+	walk := newActivity("u1", IngestManualTCX, "g-walk", mustTime(t, "2026-05-10T07:00:00Z"), 10000, 3000)
+	walk.ActivityType = ActivityWalking
+	walk.BestEfforts = []ActivityBestEffort{{DistanceKey: "5k", DurationSeconds: 100}}
+	if err := repo.Create(ctx, walk, []byte("<x/>")); err != nil {
+		t.Fatalf("Create walk: %v", err)
+	}
+
+	bests, err := repo.GetUserRunningBestEfforts(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetUserRunningBestEfforts: %v", err)
+	}
+	byKey := map[string]RunningBestEffort{}
+	for _, b := range bests {
+		byKey[b.DistanceKey] = b
+	}
+
+	if got := byKey["1mi"]; got.DurationSeconds != 380 || got.ActivityID != early.ID {
+		t.Errorf("1mi best = %+v, want 380 from %s", got, early.ID)
+	}
+	if got := byKey["5k"]; got.DurationSeconds != 1184.7 || got.ActivityID != late.ID {
+		t.Errorf("5k best = %+v, want 1184.7 from %s (not the walk)", got, late.ID)
+	}
+}
+
+// TestGetUserRunningBestEfforts_TieBreakEarliest asserts that two
+// activities tied on duration at a distance resolve to the earliest start.
+func TestGetUserRunningBestEfforts_TieBreakEarliest(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	first := newActivityWithEfforts("u1", "g-first", mustTime(t, "2026-03-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1200},
+	})
+	if err := repo.Create(ctx, first, []byte("<x/>")); err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	second := newActivityWithEfforts("u1", "g-second", mustTime(t, "2026-03-15T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1200},
+	})
+	if err := repo.Create(ctx, second, []byte("<x/>")); err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+
+	bests, err := repo.GetUserRunningBestEfforts(ctx, "u1")
+	if err != nil {
+		t.Fatalf("GetUserRunningBestEfforts: %v", err)
+	}
+	if len(bests) != 1 {
+		t.Fatalf("want 1 best, got %d", len(bests))
+	}
+	if bests[0].ActivityID != first.ID {
+		t.Errorf("tie winner = %s, want the earliest-start %s", bests[0].ActivityID, first.ID)
+	}
+}
+
+// TestGetRunningBestEffortHistory_Ascending asserts the history query
+// returns every point at a distance ordered by start_time ascending.
+func TestGetRunningBestEffortHistory_Ascending(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	mid := newActivityWithEfforts("u1", "g-mid", mustTime(t, "2026-02-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1312.7},
+	})
+	earliest := newActivityWithEfforts("u1", "g-earliest", mustTime(t, "2026-01-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1340.2},
+	})
+	latest := newActivityWithEfforts("u1", "g-latest", mustTime(t, "2026-03-01T07:00:00Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1184.7},
+	})
+	// Insert out of order to prove the query sorts.
+	for _, a := range []*Activity{mid, earliest, latest} {
+		if err := repo.Create(ctx, a, []byte("<x/>")); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	pts, err := repo.GetRunningBestEffortHistory(ctx, "u1", "5k")
+	if err != nil {
+		t.Fatalf("GetRunningBestEffortHistory: %v", err)
+	}
+	if len(pts) != 3 {
+		t.Fatalf("want 3 points, got %d", len(pts))
+	}
+	for i := 1; i < len(pts); i++ {
+		if pts[i].ActivityStartTime.Before(pts[i-1].ActivityStartTime) {
+			t.Errorf("points not ascending by start_time: %+v", pts)
+		}
+	}
+	if pts[0].ActivityID != earliest.ID || pts[2].ActivityID != latest.ID {
+		t.Errorf("order wrong: first=%s last=%s", pts[0].ActivityID, pts[2].ActivityID)
 	}
 }

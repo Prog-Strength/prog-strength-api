@@ -49,6 +49,11 @@ type Activity struct {
 	// Trackpoints is populated only on the detail load path. On list
 	// responses it stays nil to avoid shipping thousands of points.
 	Trackpoints []Trackpoint
+	// BestEfforts holds the fastest window of each standard distance found
+	// inside this activity (1mi/2mi/5k/…). Populated only for running
+	// activities by the summarizer; empty for walks/rides and for runs too
+	// short to cover even the 1-mile target. See best_efforts.go.
+	BestEfforts []ActivityBestEffort
 }
 
 // Trackpoint is one downsampled sample along an activity's track. The raw

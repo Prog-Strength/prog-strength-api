@@ -27,8 +27,8 @@ func TestMemory_CreateAndGet(t *testing.T) {
 	if !strings.HasPrefix(a.TCXS3Key, wantPrefix) || !strings.HasSuffix(a.TCXS3Key, ".tcx") {
 		t.Fatalf("TCXS3Key = %q, want prefix %q and .tcx suffix", a.TCXS3Key, wantPrefix)
 	}
-	if _, ok := arch.Get(a.TCXS3Key); !ok {
-		t.Fatal("archiver missing object")
+	if _, err := arch.Get(context.Background(), a.TCXS3Key); err != nil {
+		t.Fatalf("archiver missing object: %v", err)
 	}
 	// Metadata stamp survived the round-trip.
 	meta, ok := arch.Meta(a.TCXS3Key)

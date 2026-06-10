@@ -1,3 +1,10 @@
+# [0.43.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.42.0...v0.43.0) (2026-06-10)
+
+
+### Features
+
+* **profile:** editable display_name + height_cm + avatar via resolved /me ([#19](https://github.com/Prog-Strength/prog-strength-api/issues/19)) ([4dc3e59](https://github.com/Prog-Strength/prog-strength-api/commit/4dc3e591a74ba192aa236a06532716ac9cb60acf)), closes [#18](https://github.com/Prog-Strength/prog-strength-api/issues/18) [#18](https://github.com/Prog-Strength/prog-strength-api/issues/18)
+
 # [0.42.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.41.1...v0.42.0) (2026-06-10)
 
 

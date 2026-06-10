@@ -91,6 +91,10 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 		return err
 	}
 
+	if err := insertBestEffortsTx(ctx, tx, a.ID, a.BestEfforts); err != nil {
+		return err
+	}
+
 	// Archive before COMMIT so a storage failure aborts the whole write.
 	if err := r.archiver.Put(ctx, a.TCXS3Key, tcx, ObjectMetadata{IngestSource: a.IngestSource}); err != nil {
 		return fmt.Errorf("%w: %w", ErrStorage, err)
@@ -126,6 +130,94 @@ func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, activityID string, poi
 		}
 	}
 	return nil
+}
+
+// insertBestEffortsTx writes one activity_best_efforts row per computed
+// best effort, inside the caller's Create transaction so they roll back
+// with everything else on a dedup violation or storage failure.
+func insertBestEffortsTx(ctx context.Context, tx *sql.Tx, activityID string, efforts []ActivityBestEffort) error {
+	if len(efforts) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds)
+		VALUES (?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, e := range efforts {
+		if _, err := stmt.ExecContext(ctx, activityID, e.DistanceKey, e.DurationSeconds); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetUserRunningBestEfforts returns the per-distance current best for the
+// user. ROW_NUMBER partitions by distance_key ordered by duration asc then
+// start_time asc, so rn=1 is the fastest window at each distance with the
+// earliest activity winning duration ties.
+func (r *SQLiteRepository) GetUserRunningBestEfforts(ctx context.Context, userID string) ([]RunningBestEffort, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT distance_key, duration_seconds, activity_id, start_time
+		FROM (
+			SELECT
+				e.distance_key,
+				e.duration_seconds,
+				e.activity_id,
+				a.start_time,
+				ROW_NUMBER() OVER (
+					PARTITION BY e.distance_key
+					ORDER BY e.duration_seconds ASC, a.start_time ASC
+				) AS rn
+			FROM activity_best_efforts e
+			JOIN activities a ON a.id = e.activity_id
+			WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.activity_type = ?
+		)
+		WHERE rn = 1
+	`, userID, ActivityRunning)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RunningBestEffort
+	for rows.Next() {
+		var b RunningBestEffort
+		if err := rows.Scan(&b.DistanceKey, &b.DurationSeconds, &b.ActivityID, &b.ActivityStartTime); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// GetRunningBestEffortHistory returns every best-effort row at distanceKey
+// for the user's live running activities, ascending by start_time.
+func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT e.activity_id, a.start_time, e.duration_seconds
+		FROM activity_best_efforts e
+		JOIN activities a ON a.id = e.activity_id
+		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.activity_type = ? AND e.distance_key = ?
+		ORDER BY a.start_time ASC
+	`, userID, ActivityRunning, distanceKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []BestEffortPoint
+	for rows.Next() {
+		var p BestEffortPoint
+		if err := rows.Scan(&p.ActivityID, &p.ActivityStartTime, &p.DurationSeconds); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID string, source IngestSource, sourceActivityID string) (*Activity, error) {

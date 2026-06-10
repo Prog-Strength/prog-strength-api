@@ -481,3 +481,163 @@ func TestRunningMetricsHandlerMissingTimezone(t *testing.T) {
 		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }
+
+// --- running best efforts ----------------------------------------------
+
+type bestEffortsEnvelope struct {
+	Message string              `json:"message"`
+	Data    bestEffortsResponse `json:"data"`
+}
+
+type bestEffortHistoryEnvelope struct {
+	Message string                    `json:"message"`
+	Data    bestEffortHistoryResponse `json:"data"`
+}
+
+// seedRunWithEfforts inserts a running activity carrying the given best
+// efforts directly through the repo's Create path.
+func seedRunWithEfforts(t *testing.T, repo *MemoryRepository, source string, start time.Time, efforts []ActivityBestEffort) *Activity {
+	t.Helper()
+	avg := 300.0
+	a := &Activity{
+		UserID:           testUserID,
+		ActivityType:     ActivityRunning,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: source,
+		StartTime:        start,
+		DistanceMeters:   10000,
+		DurationSeconds:  3000,
+		AvgPaceSecPerKm:  &avg,
+		BestEfforts:      efforts,
+	}
+	if err := repo.Create(context.Background(), a, []byte("<x/>")); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	return a
+}
+
+func TestRunningBestEfforts_HappyPath(t *testing.T) {
+	h, _, repo := newTestHandler()
+
+	at := func(s string) time.Time {
+		tt, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tt
+	}
+	seedRunWithEfforts(t, repo, "r1", at("2026-04-18T06:45:00Z"), []ActivityBestEffort{
+		{DistanceKey: "1mi", DurationSeconds: 332.4},
+		{DistanceKey: "5k", DurationSeconds: 1184.7},
+	})
+	seedRunWithEfforts(t, repo, "r2", at("2026-05-22T07:12:11Z"), []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1300}, // slower 5K, must not win
+	})
+
+	req := httptest.NewRequest("GET", "/running/best-efforts", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningBestEfforts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env bestEffortsEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.BestEfforts) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(env.Data.BestEfforts))
+	}
+	// Sorted shortest-first: 1mi then 5k.
+	if env.Data.BestEfforts[0].DistanceKey != "1mi" || env.Data.BestEfforts[1].DistanceKey != "5k" {
+		t.Errorf("order wrong: %+v", env.Data.BestEfforts)
+	}
+
+	mi := env.Data.BestEfforts[0]
+	if mi.DistanceLabel != "1 Mile" || mi.DistanceMeters != 1609.344 {
+		t.Errorf("1mi label/meters wrong: %+v", mi)
+	}
+	// pace_sec_per_km = duration / (meters/1000).
+	wantPace := 332.4 / (1609.344 / 1000)
+	if d := mi.PaceSecPerKm - wantPace; d > 0.001 || d < -0.001 {
+		t.Errorf("pace_sec_per_km = %.4f, want %.4f", mi.PaceSecPerKm, wantPace)
+	}
+
+	fiveK := env.Data.BestEfforts[1]
+	if fiveK.DurationSeconds != 1184.7 {
+		t.Errorf("5k duration = %.2f, want 1184.7 (the faster run)", fiveK.DurationSeconds)
+	}
+}
+
+func TestRunningBestEfforts_Empty(t *testing.T) {
+	h, _, _ := newTestHandler()
+
+	req := httptest.NewRequest("GET", "/running/best-efforts", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningBestEfforts(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	// best_efforts must serialize as [] (not null).
+	if !strings.Contains(w.Body.String(), `"best_efforts":[]`) {
+		t.Errorf("empty body should contain \"best_efforts\":[], got %s", w.Body.String())
+	}
+}
+
+func TestRunningBestEffortHistory_HappyPath(t *testing.T) {
+	h, _, repo := newTestHandler()
+
+	at := func(s string) time.Time {
+		tt, _ := time.Parse(time.RFC3339, s)
+		return tt
+	}
+	seedRunWithEfforts(t, repo, "r1", at("2026-02-18T07:08:00Z"), []ActivityBestEffort{{DistanceKey: "5k", DurationSeconds: 1312.7}})
+	seedRunWithEfforts(t, repo, "r2", at("2026-01-12T07:02:00Z"), []ActivityBestEffort{{DistanceKey: "5k", DurationSeconds: 1340.2}})
+
+	req := httptest.NewRequest("GET", "/running/best-efforts/5k/history", nil)
+	req = withParam(req, "distance_key", "5k")
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningBestEffortHistory(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env bestEffortHistoryEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.DistanceKey != "5k" || env.Data.DistanceLabel != "5K" || env.Data.DistanceMeters != 5000 {
+		t.Errorf("history meta wrong: %+v", env.Data)
+	}
+	if len(env.Data.Points) != 2 {
+		t.Fatalf("want 2 points, got %d", len(env.Data.Points))
+	}
+	if env.Data.Points[0].ActivityStartTime.After(env.Data.Points[1].ActivityStartTime) {
+		t.Errorf("points not ascending: %+v", env.Data.Points)
+	}
+}
+
+func TestRunningBestEffortHistory_UnknownDistanceKey(t *testing.T) {
+	h, _, _ := newTestHandler()
+
+	req := httptest.NewRequest("GET", "/running/best-efforts/15k/history", nil)
+	req = withParam(req, "distance_key", "15k")
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningBestEffortHistory(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	var env codeEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != "unknown_distance_key" {
+		t.Errorf("code = %q, want unknown_distance_key", env.Code)
+	}
+}

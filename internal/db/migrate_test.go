@@ -238,6 +238,55 @@ func TestActivities_TrackpointCascade(t *testing.T) {
 	}
 }
 
+// TestMigrate016_ActivityBestEfforts verifies migration 016 layers cleanly
+// on the fully-migrated schema: the table + index exist, the distance_key
+// CHECK rejects an out-of-set value, and the FK cascade clears best-effort
+// rows on a hard activity delete.
+func TestMigrate016_ActivityBestEfforts(t *testing.T) {
+	t.Parallel()
+	db := newMigratedDB(t)
+
+	seedUser(t, db, "u1")
+	seedActivity(t, db, "s1", "u1", "src-1")
+
+	// The table exists and accepts a valid distance_key.
+	if _, err := db.Exec(`
+		INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds)
+		VALUES ('s1', '5k', 1184.7)
+	`); err != nil {
+		t.Fatalf("insert valid best effort: %v", err)
+	}
+
+	// The supporting index exists.
+	var idxName string
+	if err := db.QueryRow(`
+		SELECT name FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_activity_best_efforts_distance'
+	`).Scan(&idxName); err != nil {
+		t.Fatalf("expected idx_activity_best_efforts_distance to exist: %v", err)
+	}
+
+	// An out-of-set distance_key violates the CHECK.
+	if _, err := db.Exec(`
+		INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds)
+		VALUES ('s1', '15k', 3600)
+	`); err == nil {
+		t.Error("invalid distance_key should fail the CHECK, got nil error")
+	}
+
+	// FK cascade: a hard delete of the activity removes its best-effort rows.
+	if _, err := db.Exec(`DELETE FROM activities WHERE id = 's1'`); err != nil {
+		t.Fatalf("delete activity: %v", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM activity_best_efforts WHERE activity_id = 's1'`).Scan(&count); err != nil {
+		t.Fatalf("count best efforts after delete: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("want best efforts cascaded to 0, got %d", count)
+	}
+}
+
 // TestMigrate013_UsersDistanceUnitDefault verifies the new users column:
 // rows inserted without distance_unit backfill to 'mi', and an out-of-set
 // value is rejected by the CHECK.

@@ -1,3 +1,10 @@
+# [0.42.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.41.1...v0.42.0) (2026-06-10)
+
+
+### Features
+
+* **activity:** running best efforts — /running/best-efforts, history endpoints, backfill ([#18](https://github.com/Prog-Strength/prog-strength-api/issues/18)) ([4c9a8f3](https://github.com/Prog-Strength/prog-strength-api/commit/4c9a8f3087c33adeaf169b4e52f091937b80bf26))
+
 ## [0.41.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.41.0...v0.41.1) (2026-06-09)
 
 

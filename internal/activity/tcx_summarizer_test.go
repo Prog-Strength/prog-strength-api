@@ -206,6 +206,117 @@ func TestSummarize_PaceFilterStationaryStart(t *testing.T) {
 	}
 }
 
+// TestSummarize_BestEffortsEmbeddedFast5K pins the new BestEfforts field
+// on a running activity with a fast 5K embedded inside a longer slower run.
+// The 5K entry must reflect the embedded fast pace, and a too-long-for-the-
+// activity distance (marathon) must be absent.
+func TestSummarize_BestEffortsEmbeddedFast5K(t *testing.T) {
+	// 8 km run at ~3.0 m/s with a 5 km block at ~4.2 m/s starting 1.5 km in.
+	data := buildEmbeddedFast5KTCX()
+	p, err := parseTCX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	a := summarize(p, ActivityRunning)
+
+	byKey := map[string]float64{}
+	for _, e := range a.BestEfforts {
+		byKey[e.DistanceKey] = e.DurationSeconds
+	}
+
+	// 1mi, 2mi, 5k present (total is 8 km); 10k/half/marathon absent.
+	for _, k := range []string{"1mi", "2mi", "5k"} {
+		if _, ok := byKey[k]; !ok {
+			t.Errorf("expected a %q best effort", k)
+		}
+	}
+	for _, k := range []string{"10k", "half_marathon", "marathon"} {
+		if _, ok := byKey[k]; ok {
+			t.Errorf("did not expect a %q best effort on an 8 km run", k)
+		}
+	}
+
+	// The 5K reflects the embedded ~4.2 m/s window (~1190 s), not the
+	// ~3.0 m/s overall average (~1667 s).
+	got5k, ok := byKey["5k"]
+	if !ok {
+		t.Fatal("missing 5k best effort")
+	}
+	want5kFast := 5000.0 / 4.2
+	if math.Abs(got5k-want5kFast) > 30 {
+		t.Errorf("5k best effort = %.1f, want ~%.1f (the embedded fast window)", got5k, want5kFast)
+	}
+}
+
+// TestSummarize_WalkHasNoBestEfforts asserts a walk activity yields no best
+// efforts even when its trace is long enough to cover standard distances.
+func TestSummarize_WalkHasNoBestEfforts(t *testing.T) {
+	data := buildEmbeddedFast5KTCX()
+	p, err := parseTCX(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	a := summarize(p, ActivityWalking)
+	if len(a.BestEfforts) != 0 {
+		t.Errorf("walk produced %d best efforts, want 0", len(a.BestEfforts))
+	}
+}
+
+// buildEmbeddedFast5KTCX builds an 8 km run at 1 Hz: ~3.0 m/s baseline with
+// a 5 km block at ~4.2 m/s starting at 1500 m.
+func buildEmbeddedFast5KTCX() []byte {
+	start := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
+	const (
+		total     = 8000.0
+		fastStart = 1500.0
+		fastEnd   = 6500.0
+		slowMps   = 3.0
+		fastMps   = 4.2
+	)
+
+	var dists []float64
+	var elapsedSecs []int
+	d := 0.0
+	tSec := 0.0
+	for d <= total {
+		dists = append(dists, d)
+		elapsedSecs = append(elapsedSecs, int(tSec))
+		speed := slowMps
+		if d >= fastStart && d < fastEnd {
+			speed = fastMps
+		}
+		tSec += 1.0
+		d += speed
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
+	b.WriteString(`<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">` + "\n")
+	b.WriteString("  <Activities>\n")
+	b.WriteString(`    <Activity Sport="Running">` + "\n")
+	b.WriteString("      <Id>embedded-fast-5k-001</Id>\n")
+	b.WriteString(`      <Lap StartTime="2026-01-02T08:00:00Z">` + "\n")
+	fmt.Fprintf(&b, "        <TotalTimeSeconds>%d</TotalTimeSeconds>\n", elapsedSecs[len(elapsedSecs)-1])
+	fmt.Fprintf(&b, "        <DistanceMeters>%.2f</DistanceMeters>\n", dists[len(dists)-1])
+	b.WriteString("        <Track>\n")
+	for i := range dists {
+		ts := start.Add(time.Duration(elapsedSecs[i]) * time.Second).Format(time.RFC3339)
+		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters></Trackpoint>\n", ts, dists[i])
+	}
+	b.WriteString("        </Track>\n")
+	b.WriteString("      </Lap>\n")
+	b.WriteString("    </Activity>\n")
+	b.WriteString("  </Activities>\n")
+	b.WriteString("</TrainingCenterDatabase>\n")
+	return []byte(b.String())
+}
+
 func buildStationaryStartTCX(stationarySamples int, slowMps float64, runSamples int, fastMps float64) []byte {
 	start := time.Date(2026, 1, 2, 8, 0, 0, 0, time.UTC)
 	total := stationarySamples + runSamples

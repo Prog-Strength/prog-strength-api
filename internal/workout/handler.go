@@ -52,6 +52,7 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Delete("/{id}", h.delete)
 	})
 	r.Get("/personal-records", h.personalRecords)
+	r.Get("/personal-records/{exercise_id}/history", h.exerciseOneRMHistory)
 
 	// Per-user headline-exercise customization for the Personal
 	// Records page. See prog-strength-docs/sows/custom-headline-lifts.md.
@@ -778,4 +779,91 @@ func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpresp.OK(w, "listed personal records", out)
+}
+
+// --- Per-exercise 1RM history ------------------------------------------
+
+// exerciseOneRMHistoryPointDTO is one point in the per-exercise estimated
+// 1RM time series: the max estimated 1RM across that workout's sets on the
+// exercise, at the workout's performed_at.
+type exerciseOneRMHistoryPointDTO struct {
+	WorkoutID    string    `json:"workout_id"`
+	PerformedAt  time.Time `json:"performed_at"`
+	Estimated1RM float64   `json:"estimated_1rm"`
+}
+
+// exerciseOneRMHistoryResponse is the GET
+// /personal-records/{exercise_id}/history payload — one point per workout
+// the exercise was performed in, ascending by performed_at.
+type exerciseOneRMHistoryResponse struct {
+	ExerciseID   string                         `json:"exercise_id"`
+	ExerciseName string                         `json:"exercise_name"`
+	Unit         *string                        `json:"unit"`
+	Points       []exerciseOneRMHistoryPointDTO `json:"points"`
+}
+
+// exerciseOneRMHistory handles GET /personal-records/{exercise_id}/history.
+//
+// Returns the per-workout estimated 1RM series for a single exercise,
+// derived from exercise_one_rep_max_history — the per-exercise slice that
+// feeds the personal-records page's progression chart, separate from the
+// muscle-group rollup. One point per workout (max estimated 1RM across that
+// workout's sets), ascending by performed_at. The unit mirrors the most
+// recent entry; it's null when the user has no history for the exercise.
+//
+// A slug not in the exercise catalog is a 404 with code
+// unknown_exercise_id, matching the personalRecords catalog-lookup pattern.
+func (h *Handler) exerciseOneRMHistory(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	exerciseID := chi.URLParam(r, "exercise_id")
+	if exerciseID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "exercise id is required")
+		return
+	}
+
+	ex, err := h.exerciseRepo.GetByID(r.Context(), exerciseID)
+	if err != nil {
+		if errors.Is(err, exercise.ErrNotFound) {
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "unknown exercise", "unknown_exercise_id")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get exercise", err)
+		return
+	}
+
+	// Full series, no date bounds. ListOneRepMaxHistory returns one row per
+	// (workout, exercise) carrying max_estimated_1rm, ordered DESC by
+	// performed_at; we emit ascending so a line chart consumes it directly.
+	entries, err := h.repo.ListOneRepMaxHistory(r.Context(), userID, exerciseID, nil, nil)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "list one rep max history", err)
+		return
+	}
+
+	resp := exerciseOneRMHistoryResponse{
+		ExerciseID:   ex.ID,
+		ExerciseName: ex.Name,
+		Points:       make([]exerciseOneRMHistoryPointDTO, 0, len(entries)),
+	}
+	// entries are DESC by performed_at; the unit mirrors the most recent
+	// entry (the first one), matching the personalRecords convention.
+	if len(entries) > 0 {
+		u := string(entries[0].Unit)
+		resp.Unit = &u
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		resp.Points = append(resp.Points, exerciseOneRMHistoryPointDTO{
+			WorkoutID:    e.WorkoutID,
+			PerformedAt:  e.PerformedAt,
+			Estimated1RM: round1(e.MaxEstimated1RM),
+		})
+	}
+
+	httpresp.OK(w, "listed exercise one rep max history", resp)
 }

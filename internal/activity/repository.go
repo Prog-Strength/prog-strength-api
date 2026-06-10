@@ -61,6 +61,38 @@ type Repository interface {
 	// computed in loc (the user's IANA timezone) since a calendar
 	// week/month is a local-time concept.
 	RunningMetrics(ctx context.Context, userID string, now time.Time, loc *time.Location) (Metrics, error)
+
+	// GetUserRunningBestEfforts returns the user's current best across each
+	// standard distance: one row per distance_key the user has ever
+	// achieved, carrying the MIN(duration_seconds) and the activity that
+	// produced it. Only live (deleted_at IS NULL) ActivityRunning rows
+	// contribute. Distances the user has never covered are absent. On a
+	// duration tie the earliest activity wins (preserves the original
+	// date's claim, mirroring the lift-PR tie semantics).
+	GetUserRunningBestEfforts(ctx context.Context, userID string) ([]RunningBestEffort, error)
+
+	// GetRunningBestEffortHistory returns every best-effort row at the given
+	// distance_key across the user's live running activities, ordered by
+	// activity start_time ascending. The full series (not just record
+	// breakers) so the progression chart shows real density.
+	GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error)
+}
+
+// RunningBestEffort is one row of the per-user current-bests query: the
+// user's fastest time at a distance plus the activity that set it.
+type RunningBestEffort struct {
+	DistanceKey       string
+	DurationSeconds   float64
+	ActivityID        string
+	ActivityStartTime time.Time
+}
+
+// BestEffortPoint is one point in a single distance's progression series:
+// the time achieved by one activity and that activity's start time.
+type BestEffortPoint struct {
+	ActivityID        string
+	ActivityStartTime time.Time
+	DurationSeconds   float64
 }
 
 // PeriodStat is a distance + activity-count rollup over some window of

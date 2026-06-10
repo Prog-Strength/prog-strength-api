@@ -106,6 +106,23 @@ func New(cfg config.Config) (*Server, error) {
 		log.Println("activity: TCX uploads use an in-memory archiver (dev only, not durable)")
 	}
 
+	// Avatar store. When AVATAR_BUCKET_NAME is set we presign/put to S3 (prod);
+	// otherwise the store is nil and the user handler nil-guards: GET/PATCH /me
+	// still serve name/height/oauth-fallback, while POST/DELETE /me/avatar
+	// return a clear 503. Same one-time AWS init scope as the TCX archiver; a
+	// configured-but-broken bucket is a loud startup error.
+	var avatarStore user.AvatarStore
+	if cfg.AvatarBucketName != "" {
+		s3AvatarStore, err := user.NewS3AvatarStore(context.Background(), cfg.AvatarBucketName)
+		if err != nil {
+			return nil, err
+		}
+		avatarStore = s3AvatarStore
+		log.Printf("user: storing avatars in s3 bucket %s", cfg.AvatarBucketName)
+	} else {
+		log.Println("user: avatar storage disabled (AVATAR_BUCKET_NAME unset); /me/avatar returns 503")
+	}
+
 	// Initialize repositories based on config.
 	var exerciseRepo exercise.Repository
 	var workoutRepo workout.Repository
@@ -271,7 +288,7 @@ func New(cfg config.Config) (*Server, error) {
 		// User self route — exposes the authed user (incl. weight_unit)
 		// for user-scoped frontend reads. Shares the JWT-gated group;
 		// getMe reads the user ID from context.
-		user.NewHandler(userRepo).Mount(r)
+		user.NewHandler(userRepo, avatarStore).Mount(r)
 		// Usage self route — GET /me/usage reports the authed user's
 		// daily-spend percentage against the configured cap. Only mounted
 		// when telemetry is enabled (the ledger needs telemetry.db); in

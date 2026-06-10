@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -173,7 +174,7 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.findOrCreateUser(r.Context(), gu.Email, gu.Name)
+	u, err := h.findOrCreateUser(r.Context(), gu.Email, gu.Name, gu.Picture)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "find or create user", err)
 		return
@@ -241,7 +242,7 @@ func (h *Handler) devToken(w http.ResponseWriter, r *http.Request) {
 		displayName = req.Email
 	}
 
-	u, err := h.findOrCreateUser(r.Context(), req.Email, displayName)
+	u, err := h.findOrCreateUser(r.Context(), req.Email, displayName, "")
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "find or create user", err)
 		return
@@ -251,11 +252,25 @@ func (h *Handler) devToken(w http.ResponseWriter, r *http.Request) {
 
 // findOrCreateUser looks up a user by email; if absent, creates one with a
 // sensible default weight unit. The user's DisplayName comes from Google
-// (or the dev-token request); they can change it later via a user-update
-// endpoint that doesn't exist yet.
-func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName string) (*user.User, error) {
+// (or the dev-token request); they can change it later via PATCH /me.
+//
+// avatarURL is the OAuth provider's avatar URL (Google's `picture` claim, or
+// "" for the dev-token path). On create it's stored as the avatar fallback.
+// On an existing user it's opportunistically refreshed when non-empty and
+// changed, so accounts created before this column existed self-heal on their
+// next login.
+func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName, avatarURL string) (*user.User, error) {
 	existing, err := h.users.GetByEmail(ctx, email)
 	if err == nil {
+		if avatarURL != "" && (existing.OAuthAvatarURL == nil || *existing.OAuthAvatarURL != avatarURL) {
+			existing.OAuthAvatarURL = &avatarURL
+			// Best-effort refresh: the user's identity is already fully
+			// resolved, so a transient failure writing the avatar URL must
+			// not turn an otherwise-valid login into a 500. Log and continue.
+			if updErr := h.users.Update(ctx, existing); updErr != nil {
+				log.Printf("oauth avatar refresh for %s failed: %v", existing.ID, updErr)
+			}
+		}
 		return existing, nil
 	}
 	if !errors.Is(err, user.ErrNotFound) {
@@ -268,6 +283,9 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName strin
 		// distance_unit mirrors weight_unit: new accounts default to the
 		// US-centric unit (miles), matching the migration's backfill.
 		DistanceUnit: user.DistanceUnitMiles,
+	}
+	if avatarURL != "" {
+		newUser.OAuthAvatarURL = &avatarURL
 	}
 	if err := h.users.Create(ctx, newUser); err != nil {
 		return nil, err

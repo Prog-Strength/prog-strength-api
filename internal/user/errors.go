@@ -8,6 +8,8 @@ import (
 var (
 	ErrEmailRequired       = errors.New("user: email is required")
 	ErrDisplayNameRequired = errors.New("user: display name is required")
+	ErrDisplayNameTooLong  = fmt.Errorf("user: display name exceeds %d characters", 60)
+	ErrHeightOutOfRange    = fmt.Errorf("user: height must be between %g and %g cm", 50.0, 250.0)
 	ErrNotFound            = errors.New("user: not found")
 	ErrEmailExists         = errors.New("user: email already exists")
 )

@@ -34,6 +34,9 @@ func newGoogleConfig(clientID, clientSecret, redirectURL string) *oauth2.Config 
 type googleUser struct {
 	Email string `json:"email"`
 	Name  string `json:"name"`
+	// Picture is the OAuth avatar URL. Returned under the userinfo.profile
+	// scope the client already requests; stored as the GET /me avatar fallback.
+	Picture string `json:"picture"`
 }
 
 // fetchGoogleUser exchanges an OAuth authorization code for an access token

@@ -86,6 +86,12 @@ type Config struct {
 	// Comparison is case-insensitive. Empty disables the gate entirely
 	// — every authenticated user gets a token (pre-beta / local dev).
 	BetaAllowedEmails []string
+
+	// AvatarBucketName is the S3 bucket for user-uploaded avatars, read from
+	// AVATAR_BUCKET_NAME. Empty (the default) means avatar storage is
+	// unconfigured: GET/PATCH /me still work, but POST/DELETE /me/avatar
+	// return 503. Mirrors TCX_BUCKET_NAME; additive, no new required vars.
+	AvatarBucketName string
 }
 
 // Load reads configuration from environment variables.
@@ -105,6 +111,7 @@ func Load() (Config, error) {
 		DailyUsageCapUSD:       parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
 		UsagePriceTableJSON:    os.Getenv("USAGE_PRICE_TABLE_JSON"),
 		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
+		AvatarBucketName:       os.Getenv("AVATAR_BUCKET_NAME"),
 	}
 
 	// Default telemetry path next to app.db when the user set the app

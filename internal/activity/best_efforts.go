@@ -28,12 +28,6 @@ var StandardDistances = []StandardDistance{
 	{Key: "marathon", Meters: 42195, DisplayName: "Marathon"},
 }
 
-// bestEffortsVersion is bumped when the sweep algorithm changes in a way
-// that requires existing rows to be recomputed. It's not stored per-row
-// today (see SOW Open Question #1) — it's the constant a future
-// "force recompute" backfill branch tests against.
-const bestEffortsVersion = 1
-
 // ActivityBestEffort is one (distance, fastest-window-time) result of the
 // sweep over a single activity. Hung off Activity.BestEfforts by the
 // summarizer and written to activity_best_efforts by the repository.

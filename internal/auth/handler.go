@@ -267,8 +267,8 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName, avat
 			// Best-effort refresh: the user's identity is already fully
 			// resolved, so a transient failure writing the avatar URL must
 			// not turn an otherwise-valid login into a 500. Log and continue.
-			if err := h.users.Update(ctx, existing); err != nil {
-				log.Printf("oauth avatar refresh for %s failed: %v", existing.ID, err)
+			if updErr := h.users.Update(ctx, existing); updErr != nil {
+				log.Printf("oauth avatar refresh for %s failed: %v", existing.ID, updErr)
 			}
 		}
 		return existing, nil

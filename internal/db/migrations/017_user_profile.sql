@@ -1,4 +1,4 @@
--- migrations/016_user_profile.sql
+-- migrations/017_user_profile.sql
 -- User Profile & Preferences: make the profile user-editable.
 --
 -- Three new nullable columns on users, all additive (no backfill — existing

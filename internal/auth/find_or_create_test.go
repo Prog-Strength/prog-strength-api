@@ -77,8 +77,8 @@ func TestFindOrCreate_EmptyPictureLeavesNil(t *testing.T) {
 	}
 
 	// Existing user with a stored avatar; an empty picture must not clear it.
-	if _, err := h.findOrCreateUser(ctx, "keep@example.com", "K", "https://pic.example/keep.png"); err != nil {
-		t.Fatalf("seed: %v", err)
+	if _, seedErr := h.findOrCreateUser(ctx, "keep@example.com", "K", "https://pic.example/keep.png"); seedErr != nil {
+		t.Fatalf("seed: %v", seedErr)
 	}
 	got, err := h.findOrCreateUser(ctx, "keep@example.com", "K", "")
 	if err != nil {

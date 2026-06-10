@@ -38,28 +38,28 @@ func (r *SQLiteRepository) BackfillActivityBestEfforts(ctx context.Context) erro
 		s3Key  string
 		userID string
 	}
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, tcx_s3_key, user_id
-		FROM activities
-		WHERE activity_type = ? AND deleted_at IS NULL
-	`, ActivityRunning)
-	if err != nil {
-		return err
-	}
 	var targets []target
-	for rows.Next() {
-		var t target
-		if err := rows.Scan(&t.id, &t.s3Key, &t.userID); err != nil {
-			rows.Close()
+	if err := func() error {
+		rows, err := r.db.QueryContext(ctx, `
+			SELECT id, tcx_s3_key, user_id
+			FROM activities
+			WHERE activity_type = ? AND deleted_at IS NULL
+		`, ActivityRunning)
+		if err != nil {
 			return err
 		}
-		targets = append(targets, t)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+		defer rows.Close()
+		for rows.Next() {
+			var t target
+			if err := rows.Scan(&t.id, &t.s3Key, &t.userID); err != nil {
+				return err
+			}
+			targets = append(targets, t)
+		}
+		return rows.Err()
+	}(); err != nil {
 		return err
 	}
-	rows.Close()
 
 	if len(targets) == 0 {
 		return nil

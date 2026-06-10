@@ -226,8 +226,8 @@ func (h *Handler) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := AvatarKey(userID, ext)
-	if err := h.store.Put(r.Context(), key, contentType, body); err != nil {
-		httpresp.ServerError(w, r.Context(), "put avatar", err)
+	if putErr := h.store.Put(r.Context(), key, contentType, body); putErr != nil {
+		httpresp.ServerError(w, r.Context(), "put avatar", putErr)
 		return
 	}
 

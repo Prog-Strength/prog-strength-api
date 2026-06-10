@@ -571,11 +571,7 @@ func (h *Handler) runningBestEffortHistory(w http.ResponseWriter, r *http.Reques
 
 	pts := make([]bestEffortHistoryPointDTO, 0, len(points))
 	for _, p := range points {
-		pts = append(pts, bestEffortHistoryPointDTO{
-			ActivityID:        p.ActivityID,
-			ActivityStartTime: p.ActivityStartTime,
-			DurationSeconds:   p.DurationSeconds,
-		})
+		pts = append(pts, bestEffortHistoryPointDTO(p))
 	}
 
 	httpresp.OK(w, "listed running best effort history", bestEffortHistoryResponse{

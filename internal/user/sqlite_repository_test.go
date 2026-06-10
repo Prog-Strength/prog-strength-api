@@ -129,8 +129,8 @@ func TestSQLite_UpdateProfileColumns(t *testing.T) {
 
 	// Clear avatar_key (NULL round-trip through Update).
 	got.AvatarKey = nil
-	if err := repo.Update(ctx, got); err != nil {
-		t.Fatalf("Update clear: %v", err)
+	if clearErr := repo.Update(ctx, got); clearErr != nil {
+		t.Fatalf("Update clear: %v", clearErr)
 	}
 	cleared, err := repo.GetByID(ctx, u.ID)
 	if err != nil {

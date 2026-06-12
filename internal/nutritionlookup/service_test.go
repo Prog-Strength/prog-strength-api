@@ -72,7 +72,7 @@ func TestServiceScalesQuantityInCode(t *testing.T) {
 		hits:       []Candidate{fsCandidate("Chick-n-Mini", Macros{Calories: 90, ProteinG: 4.75, FatG: 3.25, CarbsG: 10.25})},
 	}
 	usda := &fakeProvider{source: "usda", configured: true}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "chick fil a chicken mini", 10, 5)
 	if err != nil {
@@ -109,7 +109,7 @@ func TestServiceMergesFatSecretFirstThenUSDA(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "chicken minis", 1, 5)
 	if err != nil {
@@ -131,7 +131,7 @@ func TestServiceFallsBackToUSDAWhenFatSecretEmpty(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "scrambled eggs", 2, 5)
 	if err != nil {
@@ -149,7 +149,7 @@ func TestServiceSurvivesOneProviderErroring(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if err != nil {
@@ -163,7 +163,7 @@ func TestServiceSurvivesOneProviderErroring(t *testing.T) {
 func TestServiceAllProvidersFailingReturnsErrFailed(t *testing.T) {
 	fs := &fakeProvider{source: "fatsecret", configured: true, err: errors.New("token endpoint 500")}
 	usda := &fakeProvider{source: "usda", configured: true, err: errors.New("search 500")}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	_, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if !errors.Is(err, ErrFailed) {
@@ -177,7 +177,7 @@ func TestServiceAllProvidersFailingReturnsErrFailed(t *testing.T) {
 func TestServiceNoProvidersConfiguredReturnsErrUnavailable(t *testing.T) {
 	fs := &fakeProvider{source: "fatsecret"}
 	usda := &fakeProvider{source: "usda"}
-	svc := NewService(NewMemoryRepository(), fs, usda)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
 
 	_, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if !errors.Is(err, ErrUnavailable) {
@@ -194,7 +194,7 @@ func TestServiceCacheHitSkipsProviders(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{newCandidate("Chick-n-Minis (4 Count)", "Chick-fil-A", "4 minis", Macros{Calories: 360, ProteinG: 19, FatG: 13, CarbsG: 41}, "fatsecret", "12345")},
 	}
-	svc := NewService(NewMemoryRepository(), fs)
+	svc := NewService(NewMemoryRepository(), testLogger(), fs)
 
 	first, err := svc.Lookup(context.Background(), "Chicken Minis", 1, 5)
 	if err != nil {
@@ -250,7 +250,7 @@ func TestServiceStaleRowTriggersRePull(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{fsCandidate("Fresh Minis", Macros{Calories: 360, ProteinG: 19, FatG: 13, CarbsG: 41})},
 	}
-	svc := NewService(repo, fs)
+	svc := NewService(repo, testLogger(), fs)
 
 	result, err := svc.Lookup(context.Background(), "chicken minis", 1, 5)
 	if err != nil {
@@ -281,7 +281,7 @@ func TestServiceProviderFailurePlusStaleRowServesStale(t *testing.T) {
 	seedCacheRow(t, repo, "chicken minis", "Old Cached Minis", time.Now().UTC().Add(-8*24*time.Hour))
 
 	fs := &fakeProvider{source: "fatsecret", configured: true, err: errors.New("token endpoint 500")}
-	svc := NewService(repo, fs)
+	svc := NewService(repo, testLogger(), fs)
 
 	result, err := svc.Lookup(context.Background(), "chicken minis", 3, 5)
 	if err != nil {

@@ -248,11 +248,17 @@ func New(cfg config.Config) (*Server, error) {
 	// providers are skipped; with no keys at all the endpoint reports
 	// 503 lookup_unavailable and the agent falls back to estimating.
 	// See prog-strength-docs/sows/custom-meal-macro-accuracy.md.
+	//
+	// The lookup path logs through a request-id-aware JSON slog logger
+	// (LOG_LEVEL-gated) so CloudWatch Logs Insights can reconstruct a
+	// request end-to-end via `filter request_id = "…"`.
 	lookupClient := &http.Client{Timeout: 8 * time.Second}
+	lookupLogger := nutritionlookup.NewLogger(os.Stdout, cfg.LogLevel)
 	nutritionLookupSvc := nutritionlookup.NewService(
 		nutritionLookupRepo,
-		nutritionlookup.NewFatSecretProvider(lookupClient, cfg.FatSecretClientID, cfg.FatSecretClientSecret),
-		nutritionlookup.NewUSDAProvider(lookupClient, cfg.USDAFDCAPIKey),
+		lookupLogger,
+		nutritionlookup.NewFatSecretProvider(lookupClient, cfg.FatSecretClientID, cfg.FatSecretClientSecret, lookupLogger),
+		nutritionlookup.NewUSDAProvider(lookupClient, cfg.USDAFDCAPIKey, lookupLogger),
 	)
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
@@ -290,7 +296,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Nutrition lookup — external food-database search behind the
 		// durable cache. Auth-gated alongside nutrition: public food
 		// data, but the endpoint spends shared provider quota.
-		nutritionlookup.NewHandler(nutritionLookupSvc).Mount(r)
+		nutritionlookup.NewHandler(nutritionLookupSvc, lookupLogger).Mount(r)
 		// Bodyweight lives in its own package — independent concept,
 		// independent read paths — and shares the same JWT-gated
 		// router group. Needs the user repository to default unit

@@ -31,7 +31,7 @@ type errEnvelope struct {
 func getLookup(t *testing.T, svc *Service, rawQuery string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := chi.NewRouter()
-	NewHandler(svc).Mount(r)
+	NewHandler(svc, testLogger()).Mount(r)
 	req := httptest.NewRequest("GET", "/nutrition/lookup?"+rawQuery, nil)
 	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
 	w := httptest.NewRecorder()
@@ -51,7 +51,7 @@ func happyService() (*Service, *fakeProvider) {
 			"fatsecret", "12345",
 		)},
 	}
-	return NewService(NewMemoryRepository(), fs), fs
+	return NewService(NewMemoryRepository(), testLogger(), fs), fs
 }
 
 func TestLookupParamValidation(t *testing.T) {
@@ -140,6 +140,7 @@ func TestLookupDefaultsQuantityAndMaxResults(t *testing.T) {
 func TestLookupUnavailableWhenNoProvidersConfigured(t *testing.T) {
 	svc := NewService(
 		NewMemoryRepository(),
+		testLogger(),
 		&fakeProvider{source: "fatsecret"},
 		&fakeProvider{source: "usda"},
 	)
@@ -159,6 +160,7 @@ func TestLookupUnavailableWhenNoProvidersConfigured(t *testing.T) {
 func TestLookupFailedWhenAllProvidersDownAndNoCache(t *testing.T) {
 	svc := NewService(
 		NewMemoryRepository(),
+		testLogger(),
 		&fakeProvider{source: "fatsecret", configured: true, err: errAlwaysDown},
 		&fakeProvider{source: "usda", configured: true, err: errAlwaysDown},
 	)
@@ -181,7 +183,7 @@ func TestLookupFailedWhenAllProvidersDownAndNoCache(t *testing.T) {
 func TestLookupMissingUserInContextIs500(t *testing.T) {
 	svc, _ := happyService()
 	r := chi.NewRouter()
-	NewHandler(svc).Mount(r)
+	NewHandler(svc, testLogger()).Mount(r)
 	req := httptest.NewRequest("GET", "/nutrition/lookup?query=eggs", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

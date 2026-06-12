@@ -1,3 +1,10 @@
+# [0.47.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.46.0...v0.47.0) (2026-06-12)
+
+
+### Features
+
+* Prometheus metrics for the nutrition lookup service ([#26](https://github.com/Prog-Strength/prog-strength-api/issues/26)) ([28f97d4](https://github.com/Prog-Strength/prog-strength-api/commit/28f97d4d8dd70f33956bbdeaa2fbdc3b5164eb35))
+
 # [0.46.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.45.0...v0.46.0) (2026-06-12)
 
 

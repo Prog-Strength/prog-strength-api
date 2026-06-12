@@ -53,6 +53,9 @@ jobs:
     # ARM runner so the image's only manifest is linux/arm64 — same cost
     # as x86, no QEMU emulation overhead.
     runs-on: ubuntu-24.04-arm
+    permissions:
+      id-token: write # mint the OIDC token for configure-aws-credentials
+      contents: read # checkout of the released tag
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,8 +64,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
           aws-region: us-east-2
 
       - id: ecr-login

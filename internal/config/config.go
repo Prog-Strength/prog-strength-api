@@ -92,6 +92,23 @@ type Config struct {
 	// unconfigured: GET/PATCH /me still work, but POST/DELETE /me/avatar
 	// return 503. Mirrors TCX_BUCKET_NAME; additive, no new required vars.
 	AvatarBucketName string
+
+	// FatSecretClientID and FatSecretClientSecret are the OAuth2
+	// client-credentials pair for the FatSecret Platform API (restaurant
+	// + branded food lookup), read from FATSECRET_CLIENT_ID and
+	// FATSECRET_CLIENT_SECRET. Both empty (the default) means the
+	// provider is unconfigured and skipped — GET /nutrition/lookup
+	// degrades per the AvatarBucketName "absent = feature degrades with
+	// a clear message" pattern (503 lookup_unavailable when no provider
+	// at all is configured).
+	FatSecretClientID     string
+	FatSecretClientSecret string
+
+	// USDAFDCAPIKey is the USDA FoodData Central API key (generic /
+	// homemade food lookup), read from USDA_FDC_API_KEY. Empty (the
+	// default) means the USDA provider is unconfigured and skipped —
+	// same degradation pattern as the FatSecret pair above.
+	USDAFDCAPIKey string
 }
 
 // Load reads configuration from environment variables.
@@ -112,6 +129,9 @@ func Load() (Config, error) {
 		UsagePriceTableJSON:    os.Getenv("USAGE_PRICE_TABLE_JSON"),
 		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
 		AvatarBucketName:       os.Getenv("AVATAR_BUCKET_NAME"),
+		FatSecretClientID:      os.Getenv("FATSECRET_CLIENT_ID"),
+		FatSecretClientSecret:  os.Getenv("FATSECRET_CLIENT_SECRET"),
+		USDAFDCAPIKey:          os.Getenv("USDA_FDC_API_KEY"),
 	}
 
 	// Default telemetry path next to app.db when the user set the app

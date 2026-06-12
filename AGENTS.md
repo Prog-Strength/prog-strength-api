@@ -36,6 +36,27 @@ up-front:
   (`internal/requestid/`, `internal/httpresp/response_test.go`) were
   written test-first. New behavior changes follow the same pattern —
   see CONTRIBUTING.md → Tests for what's expected.
+- **Run CI's checks locally BEFORE authoring a PR.** `go vet` and
+  `go test` alone are NOT enough — CI also runs golangci-lint (a
+  pinned **v2.x**; see `.github/workflows/ci.yml` for the exact
+  version) with `gosec`, shadow checking, and more, plus a
+  `go mod tidy` drift check and govulncheck. The git hooks that run
+  these locally are **per-clone opt-in** and a fresh clone has none
+  installed, so first arm them, then verify:
+
+  ```
+  pre-commit install --install-hooks --hook-type pre-commit \
+      --hook-type commit-msg --hook-type pre-push
+  go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@<CI-pinned version> run
+  go test ./...
+  ```
+
+  A PR whose checks you never ran locally is a CI round-trip someone
+  else pays for.
+- **PR titles are conventional commits, lowercase subject.** A check
+  rejects anything else (`feat: nutrition lookup endpoint`, not
+  `Nutrition lookup endpoint`). Same prefixes as commit messages:
+  semantic-release derives versions from them.
 - **Don't relitigate the decisions** in
   [Architecture decisions](#architecture-decisions) below. They were
   debated; the shape is settled. Add features within it.

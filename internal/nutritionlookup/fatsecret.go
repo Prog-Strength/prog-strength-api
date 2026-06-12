@@ -30,8 +30,10 @@ import (
 // doesn't parse are skipped rather than guessed at.
 
 const (
-	fatSecretTokenURL = "https://oauth.fatsecret.com/connect/token"
-	fatSecretAPIURL   = "https://platform.fatsecret.com/rest/server.api"
+	// G101 fires on the "secret"/"token" substrings in these names —
+	// they're public endpoint URLs, not credentials.
+	fatSecretTokenURL = "https://oauth.fatsecret.com/connect/token"      //nolint:gosec // G101: public URL, not a credential
+	fatSecretAPIURL   = "https://platform.fatsecret.com/rest/server.api" //nolint:gosec // G101: public URL, not a credential
 
 	// Refresh the cached token this many seconds before its stated
 	// expiry so an in-flight search never races an expiring token.

@@ -103,6 +103,13 @@ linters:
         # of user input would still trigger G201 which we keep enabled.
         - G202
         - G701
+        # G704 ("SSRF via taint analysis") fires on the nutrition lookup
+        # providers' outbound calls because the request URL is built from
+        # variables. The base URLs are code constants (overridable struct
+        # fields only in tests); user input flows exclusively into
+        # url.Values-encoded query parameters and can never change the
+        # host. gosec's taint analysis can't see that boundary.
+        - G704
         # G706 ("log injection via taint analysis") fires on log lines
         # that interpolate env var values (e.g. TCX_BUCKET_NAME). Env
         # is operator-controlled, not user input.

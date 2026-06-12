@@ -320,7 +320,7 @@ func TestSQLiteRepositoryGetMissAndHitBump(t *testing.T) {
 	fetched := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	repo.now = func() time.Time { return now }
-	if err := repo.Put(ctx, CacheRow{
+	if err = repo.Put(ctx, CacheRow{
 		QueryNormalized: "chicken minis",
 		CandidatesJSON:  "[]",
 		FetchedAt:       fetched,

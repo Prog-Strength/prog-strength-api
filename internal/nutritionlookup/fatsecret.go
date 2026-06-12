@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -56,6 +56,7 @@ type FatSecretProvider struct {
 	client       *http.Client
 	clientID     string
 	clientSecret string
+	log          *slog.Logger
 
 	// TokenURL and APIURL default to the production FatSecret
 	// endpoints; tests point them at httptest servers.
@@ -69,11 +70,12 @@ type FatSecretProvider struct {
 	tokenExpiresAt time.Time
 }
 
-func NewFatSecretProvider(client *http.Client, clientID, clientSecret string) *FatSecretProvider {
+func NewFatSecretProvider(client *http.Client, clientID, clientSecret string, log *slog.Logger) *FatSecretProvider {
 	return &FatSecretProvider{
 		client:       client,
 		clientID:     clientID,
 		clientSecret: clientSecret,
+		log:          log,
 		TokenURL:     fatSecretTokenURL,
 		APIURL:       fatSecretAPIURL,
 	}
@@ -103,11 +105,14 @@ func (p *FatSecretProvider) Search(ctx context.Context, query string, limit int)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 
+	started := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	p.log.DebugContext(ctx, "fatsecret foods.search response",
+		"status", resp.StatusCode, "elapsed_ms", time.Since(started).Milliseconds())
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fatsecret search: unexpected status %d", resp.StatusCode)
 	}
@@ -115,7 +120,7 @@ func (p *FatSecretProvider) Search(ctx context.Context, query string, limit int)
 	if err != nil {
 		return nil, err
 	}
-	return parseFatSecretSearch(body, limit)
+	return parseFatSecretSearch(ctx, p.log, body, limit)
 }
 
 // getToken returns the cached OAuth2 access token, fetching a fresh one
@@ -164,6 +169,8 @@ func (p *FatSecretProvider) getToken(ctx context.Context) (string, error) {
 		ttl = 0
 	}
 	p.tokenExpiresAt = time.Now().Add(ttl)
+	p.log.DebugContext(ctx, "fatsecret oauth token refreshed",
+		"expires_in_s", int(payload.ExpiresIn))
 	return p.token, nil
 }
 
@@ -178,7 +185,7 @@ type fatSecretFood struct {
 // response. FatSecret's JSON is converted from XML: a single hit comes
 // back as a bare object, multiple hits as an array — hence the
 // json.RawMessage two-step.
-func parseFatSecretSearch(body []byte, limit int) ([]Candidate, error) {
+func parseFatSecretSearch(ctx context.Context, log *slog.Logger, body []byte, limit int) ([]Candidate, error) {
 	var payload struct {
 		Foods struct {
 			Food json.RawMessage `json:"food"`
@@ -207,13 +214,15 @@ func parseFatSecretSearch(body []byte, limit int) ([]Candidate, error) {
 		if m == nil {
 			// Skipped, never guessed: a candidate we can't parse macros
 			// for is worse than one fewer candidate.
-			log.Printf("nutritionlookup: fatsecret: unparseable food_description for food_id=%s", food.FoodID)
+			log.DebugContext(ctx, "fatsecret candidate skipped: unparseable food_description",
+				"food_id", food.FoodID.String())
 			continue
 		}
 		serving := m[fatSecretDescriptionRE.SubexpIndex("serving")]
 		per, err := parseFatSecretMacros(m)
 		if err != nil {
-			log.Printf("nutritionlookup: fatsecret: bad macro number for food_id=%s: %v", food.FoodID, err)
+			log.DebugContext(ctx, "fatsecret candidate skipped: bad macro number",
+				"food_id", food.FoodID.String(), "error", err)
 			continue
 		}
 		out = append(out, newCandidate(

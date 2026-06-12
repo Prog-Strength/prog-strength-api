@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // USDA FoodData Central provider.
@@ -46,14 +48,15 @@ var _ Provider = (*USDAProvider)(nil)
 type USDAProvider struct {
 	client *http.Client
 	apiKey string
+	log    *slog.Logger
 
 	// BaseURL defaults to the production FDC search endpoint; tests
 	// point it at an httptest server.
 	BaseURL string
 }
 
-func NewUSDAProvider(client *http.Client, apiKey string) *USDAProvider {
-	return &USDAProvider{client: client, apiKey: apiKey, BaseURL: usdaSearchURL}
+func NewUSDAProvider(client *http.Client, apiKey string, log *slog.Logger) *USDAProvider {
+	return &USDAProvider{client: client, apiKey: apiKey, log: log, BaseURL: usdaSearchURL}
 }
 
 func (p *USDAProvider) Source() string   { return "usda" }
@@ -70,11 +73,14 @@ func (p *USDAProvider) Search(ctx context.Context, query string, limit int) ([]C
 	if err != nil {
 		return nil, err
 	}
+	started := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	p.log.DebugContext(ctx, "usda foods/search response",
+		"status", resp.StatusCode, "elapsed_ms", time.Since(started).Milliseconds())
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("usda search: unexpected status %d", resp.StatusCode)
 	}
@@ -90,6 +96,8 @@ func (p *USDAProvider) Search(ctx context.Context, query string, limit int) ([]C
 	for _, food := range payload.Foods {
 		c, ok := usdaToCandidate(food)
 		if !ok {
+			p.log.DebugContext(ctx, "usda candidate skipped: missing macros",
+				"fdc_id", food.FdcID.String())
 			continue
 		}
 		out = append(out, c)

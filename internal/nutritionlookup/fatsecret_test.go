@@ -60,7 +60,7 @@ func TestFatSecretSearchParsesDescriptionAndSendsBearer(t *testing.T) {
 	}))
 	t.Cleanup(searchSrv.Close)
 
-	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret")
+	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret", testLogger())
 	p.TokenURL = tokenSrv.URL
 	p.APIURL = searchSrv.URL
 
@@ -115,7 +115,7 @@ func TestFatSecretTokenCachedAcrossSearches(t *testing.T) {
 	}))
 	t.Cleanup(searchSrv.Close)
 
-	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret")
+	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret", testLogger())
 	p.TokenURL = tokenSrv.URL
 	p.APIURL = searchSrv.URL
 
@@ -145,7 +145,7 @@ func TestFatSecretSingleObjectFoodHandled(t *testing.T) {
 	}))
 	t.Cleanup(searchSrv.Close)
 
-	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret")
+	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret", testLogger())
 	p.TokenURL = tokenSrv.URL
 	p.APIURL = searchSrv.URL
 
@@ -175,7 +175,7 @@ func TestFatSecretUnparseableDescriptionSkipped(t *testing.T) {
 	}))
 	t.Cleanup(searchSrv.Close)
 
-	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret")
+	p := NewFatSecretProvider(searchSrv.Client(), "id", "secret", testLogger())
 	p.TokenURL = tokenSrv.URL
 	p.APIURL = searchSrv.URL
 
@@ -205,7 +205,7 @@ func TestFatSecretConfigured(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewFatSecretProvider(http.DefaultClient, tt.clientID, tt.clientSecret)
+			p := NewFatSecretProvider(http.DefaultClient, tt.clientID, tt.clientSecret, testLogger())
 			if got := p.Configured(); got != tt.want {
 				t.Errorf("Configured() = %v, want %v", got, tt.want)
 			}

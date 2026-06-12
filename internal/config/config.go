@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -109,6 +111,15 @@ type Config struct {
 	// default) means the USDA provider is unconfigured and skipped —
 	// same degradation pattern as the FatSecret pair above.
 	USDAFDCAPIKey string
+
+	// LogLevel gates the structured (slog) loggers, read from LOG_LEVEL
+	// ("debug", "info", "warn", "error"; case-insensitive; default
+	// "info"). Currently consumed only by the nutrition lookup logger —
+	// the first slog beachhead; the rest of the codebase still uses
+	// log.Printf, which this does not affect. The prod compose file
+	// sets debug while the lookup feature is under active development;
+	// flip it to info there once things reach steady state.
+	LogLevel slog.Level
 }
 
 // Load reads configuration from environment variables.
@@ -133,6 +144,12 @@ func Load() (Config, error) {
 		FatSecretClientSecret:  os.Getenv("FATSECRET_CLIENT_SECRET"),
 		USDAFDCAPIKey:          os.Getenv("USDA_FDC_API_KEY"),
 	}
+
+	level, err := parseLogLevel(os.Getenv("LOG_LEVEL"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LogLevel = level
 
 	// Default telemetry path next to app.db when the user set the app
 	// path but not the telemetry one. Keeps the common case zero-config
@@ -196,4 +213,18 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// parseLogLevel maps LOG_LEVEL to a slog.Level. Empty defaults to
+// info; an unrecognized value is a startup error (fail fast beats
+// silently logging at the wrong verbosity).
+func parseLogLevel(raw string) (slog.Level, error) {
+	if raw == "" {
+		return slog.LevelInfo, nil
+	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(raw)); err != nil {
+		return 0, fmt.Errorf("LOG_LEVEL: unrecognized level %q (use debug, info, warn, or error)", raw)
+	}
+	return level, nil
 }

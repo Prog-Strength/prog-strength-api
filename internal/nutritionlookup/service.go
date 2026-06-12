@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -41,15 +41,22 @@ type Result struct {
 // plausibility flags. Provider errors degrade: one provider down →
 // results from the other; all down with a stale cache row → serve
 // stale, flagged; all down with no cache → ErrFailed.
+//
+// Every decision point logs through the injected request-id-aware
+// logger (see logging.go): cache hit/miss/stale, each provider call's
+// outcome and latency, cache write success/failure, and the degraded
+// paths — so one CloudWatch `filter request_id = "…"` reconstructs
+// exactly what the backend did for a request.
 type Service struct {
 	repo      Repository
 	providers []Provider
+	log       *slog.Logger
 	// now is injectable so tests can time-travel the freshness check.
 	now func() time.Time
 }
 
-func NewService(repo Repository, providers ...Provider) *Service {
-	return &Service{repo: repo, providers: providers, now: time.Now}
+func NewService(repo Repository, log *slog.Logger, providers ...Provider) *Service {
+	return &Service{repo: repo, providers: providers, log: log, now: time.Now}
 }
 
 // Lookup resolves query into up to maxResults candidates scaled to
@@ -57,24 +64,38 @@ func NewService(repo Repository, providers ...Provider) *Service {
 // so "Chicken  Minis" and "chicken minis" share one cache row.
 func (s *Service) Lookup(ctx context.Context, query string, quantity float64, maxResults int) (Result, error) {
 	normalized := normalizeQuery(query)
+	s.log.DebugContext(ctx, "lookup start",
+		"query", normalized, "quantity", quantity, "max_results", maxResults)
 
 	// Cache first: a row fresher than freshnessTTL answers without any
 	// external call. A row past the TTL is kept around as the stale
 	// fallback in case every provider is down.
 	var staleRow *CacheRow
 	row, err := s.repo.Get(ctx, normalized)
-	if err != nil {
+	switch {
+	case err != nil:
 		// A broken cache read degrades to a provider pull — the cache
 		// is an optimization, never a gate.
-		log.Printf("nutritionlookup: cache get %q failed: %v", normalized, err)
-	} else if row != nil {
+		s.log.WarnContext(ctx, "cache read failed; falling through to providers",
+			"query", normalized, "error", err)
+	case row == nil:
+		s.log.DebugContext(ctx, "cache miss", "query", normalized)
+	default:
+		age := s.now().UTC().Sub(row.FetchedAt)
 		candidates, err := unmarshalCandidates(row.CandidatesJSON)
 		switch {
 		case err != nil:
-			log.Printf("nutritionlookup: corrupt cache row %q, re-pulling: %v", normalized, err)
-		case s.now().UTC().Sub(row.FetchedAt) < freshnessTTL:
+			s.log.WarnContext(ctx, "corrupt cache row; re-pulling",
+				"query", normalized, "error", err)
+		case age < freshnessTTL:
+			s.log.InfoContext(ctx, "cache hit",
+				"query", normalized,
+				"age_hours", int(age.Hours()),
+				"candidates", len(candidates))
 			return s.result(candidates, quantity, maxResults, false), nil
 		default:
+			s.log.DebugContext(ctx, "cache stale; re-pulling",
+				"query", normalized, "age_hours", int(age.Hours()))
 			staleRow = row
 		}
 	}
@@ -90,22 +111,31 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	)
 	for _, p := range s.providers {
 		if !p.Configured() {
+			s.log.DebugContext(ctx, "provider skipped: not configured", "source", p.Source())
 			continue
 		}
 		anyConfigured = true
 		if len(merged) >= maxResults {
 			break
 		}
+		started := s.now()
 		hits, err := p.Search(ctx, normalized, maxResults-len(merged))
+		elapsed := s.now().Sub(started)
 		if err != nil {
-			log.Printf("nutritionlookup: lookup via %s failed: %v", p.Source(), err)
+			s.log.WarnContext(ctx, "provider search failed",
+				"source", p.Source(), "query", normalized,
+				"elapsed_ms", elapsed.Milliseconds(), "error", err)
 			providerErrs = append(providerErrs, fmt.Sprintf("%s: %v", p.Source(), err))
 			continue
 		}
+		s.log.InfoContext(ctx, "provider search ok",
+			"source", p.Source(), "query", normalized,
+			"hits", len(hits), "elapsed_ms", elapsed.Milliseconds())
 		merged = append(merged, hits...)
 	}
 
 	if !anyConfigured {
+		s.log.InfoContext(ctx, "lookup unavailable: no providers configured")
 		return Result{}, ErrUnavailable
 	}
 
@@ -116,9 +146,15 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 		if staleRow != nil {
 			candidates, err := unmarshalCandidates(staleRow.CandidatesJSON)
 			if err == nil {
+				s.log.WarnContext(ctx, "all providers failed; serving stale cache",
+					"query", normalized,
+					"age_hours", int(s.now().UTC().Sub(staleRow.FetchedAt).Hours()),
+					"candidates", len(candidates))
 				return s.result(candidates, quantity, maxResults, true), nil
 			}
 		}
+		s.log.WarnContext(ctx, "lookup failed: all providers errored, no usable cache",
+			"query", normalized, "errors", strings.Join(providerErrs, "; "))
 		return Result{}, fmt.Errorf("%w: %s", ErrFailed, strings.Join(providerErrs, "; "))
 	}
 
@@ -127,7 +163,8 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	if len(merged) > 0 {
 		candidatesJSON, err := json.Marshal(merged)
 		if err != nil {
-			log.Printf("nutritionlookup: marshal candidates for %q failed: %v", normalized, err)
+			s.log.WarnContext(ctx, "cache write skipped: marshal failed",
+				"query", normalized, "error", err)
 		} else {
 			now := s.now().UTC()
 			if err := s.repo.Put(ctx, CacheRow{
@@ -137,7 +174,11 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 				LastUsedAt:      now,
 			}); err != nil {
 				// A broken cache write doesn't break the lookup.
-				log.Printf("nutritionlookup: cache put %q failed: %v", normalized, err)
+				s.log.WarnContext(ctx, "cache write failed",
+					"query", normalized, "error", err)
+			} else {
+				s.log.DebugContext(ctx, "cache write ok",
+					"query", normalized, "candidates", len(merged))
 			}
 		}
 	}

@@ -2,10 +2,12 @@ package nutritionlookup
 
 import (
 	"errors"
+	"log/slog"
 	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,9 +21,12 @@ import (
 // budget.
 type Handler struct {
 	svc *Service
+	log *slog.Logger
 }
 
-func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
+func NewHandler(svc *Service, log *slog.Logger) *Handler {
+	return &Handler{svc: svc, log: log}
+}
 
 // Mount registers routes under the given router. Callers are expected
 // to have already wrapped the router in auth.RequireUser middleware —
@@ -69,6 +74,7 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		maxResults = v
 	}
 
+	started := time.Now()
 	result, err := h.svc.Lookup(r.Context(), query, quantity, maxResults)
 	if err != nil {
 		switch {
@@ -83,7 +89,18 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		default:
 			httpresp.ServerError(w, r.Context(), "nutrition lookup", err)
 		}
+		h.log.WarnContext(r.Context(), "lookup request failed",
+			"query", query, "quantity", quantity,
+			"elapsed_ms", time.Since(started).Milliseconds(), "error", err)
 		return
 	}
+	// The request-level summary line: one INFO record per served
+	// lookup, carrying request_id (via the handler wrapper) so a
+	// CloudWatch `filter request_id = "…"` finds the entry point and
+	// the service/provider records around it tell the full story.
+	h.log.InfoContext(r.Context(), "lookup request served",
+		"query", query, "quantity", quantity, "max_results", maxResults,
+		"matches", len(result.Matches),
+		"elapsed_ms", time.Since(started).Milliseconds())
 	httpresp.OK(w, "nutrition lookup results", result)
 }

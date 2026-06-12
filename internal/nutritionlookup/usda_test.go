@@ -43,7 +43,7 @@ func newUSDAServer(t *testing.T, foods []map[string]any, lastParams *url.Values)
 		}
 	}))
 	t.Cleanup(srv.Close)
-	p := NewUSDAProvider(srv.Client(), "demo-key")
+	p := NewUSDAProvider(srv.Client(), "demo-key", testLogger())
 	p.BaseURL = srv.URL
 	return p
 }
@@ -181,10 +181,10 @@ func TestUSDAEnergyByNameFallback(t *testing.T) {
 }
 
 func TestUSDAConfigured(t *testing.T) {
-	if NewUSDAProvider(http.DefaultClient, "").Configured() {
+	if NewUSDAProvider(http.DefaultClient, "", testLogger()).Configured() {
 		t.Error("Configured() = true with empty api key, want false")
 	}
-	if !NewUSDAProvider(http.DefaultClient, "demo-key").Configured() {
+	if !NewUSDAProvider(http.DefaultClient, "demo-key", testLogger()).Configured() {
 		t.Error("Configured() = false with api key set, want true")
 	}
 }

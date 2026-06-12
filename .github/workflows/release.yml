@@ -113,12 +113,19 @@ jobs:
           # leave that way in prod.
           GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+          # Nutrition lookup providers (GET /nutrition/lookup). All
+          # optional — missing secrets deploy as empty strings and the
+          # endpoint degrades to 503 lookup_unavailable. See
+          # prog-strength-docs/sows/custom-meal-macro-accuracy.md.
+          FATSECRET_CLIENT_ID: ${{ secrets.FATSECRET_CLIENT_ID }}
+          FATSECRET_CLIENT_SECRET: ${{ secrets.FATSECRET_CLIENT_SECRET }}
+          USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
           RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,RELEASE_VERSION
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,RELEASE_VERSION
           script: |
             # Abort on the first failing command. Without this, a failed
             # docker compose call is followed by trailing `ps`/`logs`
@@ -164,6 +171,9 @@ jobs:
             BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
             GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
             GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+            FATSECRET_CLIENT_ID=${FATSECRET_CLIENT_ID}
+            FATSECRET_CLIENT_SECRET=${FATSECRET_CLIENT_SECRET}
+            USDA_FDC_API_KEY=${USDA_FDC_API_KEY}
             AWS_REGION=us-east-2
             APP_VERSION=v${RELEASE_VERSION}
             ECR_REGISTRY=${ECR_REGISTRY}

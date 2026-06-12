@@ -20,6 +20,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
@@ -131,6 +132,7 @@ func New(cfg config.Config) (*Server, error) {
 	var bodyweightRepo bodyweight.Repository
 	var chatRepo chat.Repository
 	var activityRepo activity.Repository
+	var nutritionLookupRepo nutritionlookup.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
@@ -169,6 +171,7 @@ func New(cfg config.Config) (*Server, error) {
 		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
 		chatRepo = chat.NewSQLiteRepository(database)
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
+		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -235,7 +238,22 @@ func New(cfg config.Config) (*Server, error) {
 		bodyweightRepo = bodyweight.NewMemoryRepository()
 		chatRepo = chat.NewMemoryRepository()
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
+		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
 	}
+
+	// Nutrition lookup service: FatSecret first (restaurant + branded),
+	// USDA FDC as fallback, both behind the durable cache repository.
+	// One shared http.Client with a tight timeout — a slow third party
+	// must not stall the agent's tool loop indefinitely. Unconfigured
+	// providers are skipped; with no keys at all the endpoint reports
+	// 503 lookup_unavailable and the agent falls back to estimating.
+	// See prog-strength-docs/sows/custom-meal-macro-accuracy.md.
+	lookupClient := &http.Client{Timeout: 8 * time.Second}
+	nutritionLookupSvc := nutritionlookup.NewService(
+		nutritionLookupRepo,
+		nutritionlookup.NewFatSecretProvider(lookupClient, cfg.FatSecretClientID, cfg.FatSecretClientSecret),
+		nutritionlookup.NewUSDAProvider(lookupClient, cfg.USDAFDCAPIKey),
+	)
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
 	// /auth/dev/token when DEV_AUTH=true. Always mounted so that login
@@ -269,6 +287,10 @@ func New(cfg config.Config) (*Server, error) {
 		// log + daily-macros aggregate; recipes and bodyweight ship
 		// in later phases under the same auth middleware.
 		nutrition.NewHandler(nutritionRepo).Mount(r)
+		// Nutrition lookup — external food-database search behind the
+		// durable cache. Auth-gated alongside nutrition: public food
+		// data, but the endpoint spends shared provider quota.
+		nutritionlookup.NewHandler(nutritionLookupSvc).Mount(r)
 		// Bodyweight lives in its own package — independent concept,
 		// independent read paths — and shares the same JWT-gated
 		// router group. Needs the user repository to default unit

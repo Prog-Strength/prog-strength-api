@@ -76,24 +76,30 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	case err != nil:
 		// A broken cache read degrades to a provider pull — the cache
 		// is an optimization, never a gate.
+		cacheEventsTotal.WithLabelValues("read_error").Inc()
 		s.log.WarnContext(ctx, "cache read failed; falling through to providers",
 			"query", normalized, "error", err)
 	case row == nil:
+		cacheEventsTotal.WithLabelValues("miss").Inc()
 		s.log.DebugContext(ctx, "cache miss", "query", normalized)
 	default:
 		age := s.now().UTC().Sub(row.FetchedAt)
 		candidates, err := unmarshalCandidates(row.CandidatesJSON)
 		switch {
 		case err != nil:
+			cacheEventsTotal.WithLabelValues("corrupt").Inc()
 			s.log.WarnContext(ctx, "corrupt cache row; re-pulling",
 				"query", normalized, "error", err)
 		case age < freshnessTTL:
+			cacheEventsTotal.WithLabelValues("hit").Inc()
+			lookupRequestsTotal.WithLabelValues("cache_hit").Inc()
 			s.log.InfoContext(ctx, "cache hit",
 				"query", normalized,
 				"age_hours", int(age.Hours()),
 				"candidates", len(candidates))
 			return s.result(candidates, quantity, maxResults, false), nil
 		default:
+			cacheEventsTotal.WithLabelValues("stale").Inc()
 			s.log.DebugContext(ctx, "cache stale; re-pulling",
 				"query", normalized, "age_hours", int(age.Hours()))
 			staleRow = row
@@ -121,13 +127,16 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 		started := s.now()
 		hits, err := p.Search(ctx, normalized, maxResults-len(merged))
 		elapsed := s.now().Sub(started)
+		providerDuration.WithLabelValues(p.Source()).Observe(elapsed.Seconds())
 		if err != nil {
+			providerRequestsTotal.WithLabelValues(p.Source(), "error").Inc()
 			s.log.WarnContext(ctx, "provider search failed",
 				"source", p.Source(), "query", normalized,
 				"elapsed_ms", elapsed.Milliseconds(), "error", err)
 			providerErrs = append(providerErrs, fmt.Sprintf("%s: %v", p.Source(), err))
 			continue
 		}
+		providerRequestsTotal.WithLabelValues(p.Source(), "ok").Inc()
 		s.log.InfoContext(ctx, "provider search ok",
 			"source", p.Source(), "query", normalized,
 			"hits", len(hits), "elapsed_ms", elapsed.Milliseconds())
@@ -135,6 +144,7 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	}
 
 	if !anyConfigured {
+		lookupRequestsTotal.WithLabelValues("unavailable").Inc()
 		s.log.InfoContext(ctx, "lookup unavailable: no providers configured")
 		return Result{}, ErrUnavailable
 	}
@@ -146,6 +156,7 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 		if staleRow != nil {
 			candidates, err := unmarshalCandidates(staleRow.CandidatesJSON)
 			if err == nil {
+				lookupRequestsTotal.WithLabelValues("served_stale").Inc()
 				s.log.WarnContext(ctx, "all providers failed; serving stale cache",
 					"query", normalized,
 					"age_hours", int(s.now().UTC().Sub(staleRow.FetchedAt).Hours()),
@@ -153,6 +164,7 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 				return s.result(candidates, quantity, maxResults, true), nil
 			}
 		}
+		lookupRequestsTotal.WithLabelValues("failed").Inc()
 		s.log.WarnContext(ctx, "lookup failed: all providers errored, no usable cache",
 			"query", normalized, "errors", strings.Join(providerErrs, "; "))
 		return Result{}, fmt.Errorf("%w: %s", ErrFailed, strings.Join(providerErrs, "; "))
@@ -174,15 +186,18 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 				LastUsedAt:      now,
 			}); err != nil {
 				// A broken cache write doesn't break the lookup.
+				cacheWritesTotal.WithLabelValues("error").Inc()
 				s.log.WarnContext(ctx, "cache write failed",
 					"query", normalized, "error", err)
 			} else {
+				cacheWritesTotal.WithLabelValues("ok").Inc()
 				s.log.DebugContext(ctx, "cache write ok",
 					"query", normalized, "candidates", len(merged))
 			}
 		}
 	}
 
+	lookupRequestsTotal.WithLabelValues("served").Inc()
 	return s.result(merged, quantity, maxResults, false), nil
 }
 

@@ -1,3 +1,10 @@
+# [0.46.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.45.0...v0.46.0) (2026-06-12)
+
+
+### Features
+
+* request-correlated structured logging for nutrition lookup ([#24](https://github.com/Prog-Strength/prog-strength-api/issues/24)) ([5b4a17f](https://github.com/Prog-Strength/prog-strength-api/commit/5b4a17f7c889c7ef48c2acfb49ff055ed92f5bdb))
+
 # [0.45.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.44.1...v0.45.0) (2026-06-12)
 
 

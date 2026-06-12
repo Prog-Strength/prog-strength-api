@@ -1,3 +1,10 @@
+# [0.45.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.44.1...v0.45.0) (2026-06-12)
+
+
+### Features
+
+* nutrition lookup endpoint with FatSecret + USDA and durable cache ([#22](https://github.com/Prog-Strength/prog-strength-api/issues/22)) ([3b71c7e](https://github.com/Prog-Strength/prog-strength-api/commit/3b71c7ebd334a4a7ace6f56d10193b31f7b19cbf))
+
 ## [0.44.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.44.0...v0.44.1) (2026-06-10)
 
 

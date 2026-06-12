@@ -1,3 +1,10 @@
+## [0.47.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.47.0...v0.47.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* **ci:** authenticate to AWS via the shared OIDC role ([#27](https://github.com/Prog-Strength/prog-strength-api/issues/27)) ([c2590d9](https://github.com/Prog-Strength/prog-strength-api/commit/c2590d98330ee3c38ca3f768488ab651ab8178a7))
+
 # [0.47.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.46.0...v0.47.0) (2026-06-12)
 
 

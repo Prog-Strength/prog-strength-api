@@ -69,8 +69,8 @@ func TestClassifySource(t *testing.T) {
 		{5000, 15000, "long_run_window"},
 	}
 	for _, c := range cases {
-		if got := classifySource(c.effort, c.activity); got != c.want {
-			t.Errorf("classifySource(%v, %v) = %q, want %q", c.effort, c.activity, got, c.want)
+		if got := ClassifySource(c.effort, c.activity); got != c.want {
+			t.Errorf("ClassifySource(%v, %v) = %q, want %q", c.effort, c.activity, got, c.want)
 		}
 	}
 }

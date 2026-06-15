@@ -641,3 +641,284 @@ func TestRunningBestEffortHistory_UnknownDistanceKey(t *testing.T) {
 		t.Errorf("code = %q, want unknown_distance_key", env.Code)
 	}
 }
+
+// --- running max-effort estimates ---------------------------------------
+
+type maxEffortSummaryEnvelope struct {
+	Message string                   `json:"message"`
+	Data    maxEffortSummaryResponse `json:"data"`
+}
+
+type maxEffortDetailEnvelope struct {
+	Message string                  `json:"message"`
+	Data    maxEffortDetailResponse `json:"data"`
+}
+
+// fixedMaxEffortNow is the injected clock for the max-effort tests: well
+// after the seeded efforts so recency weighting is deterministic.
+var fixedMaxEffortNow = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+func atRFC(t *testing.T, s string) time.Time {
+	t.Helper()
+	tt, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tt
+}
+
+// seedRunFull inserts a running activity with an explicit total distance so
+// source classification (effort vs. activity distance) can be exercised.
+func seedRunFull(t *testing.T, repo *MemoryRepository, source string, start time.Time, distanceMeters float64, efforts []ActivityBestEffort) *Activity {
+	t.Helper()
+	avg := 300.0
+	a := &Activity{
+		UserID:           testUserID,
+		ActivityType:     ActivityRunning,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: source,
+		StartTime:        start,
+		DistanceMeters:   distanceMeters,
+		DurationSeconds:  3000,
+		AvgPaceSecPerKm:  &avg,
+		BestEfforts:      efforts,
+	}
+	if err := repo.Create(context.Background(), a, []byte("<x/>")); err != nil {
+		t.Fatalf("seed run: %v", err)
+	}
+	return a
+}
+
+// seedMultiDistance seeds a user with a spread of efforts across several
+// distances and dates, enough for the engine to fit a curve.
+func seedMultiDistance(t *testing.T, repo *MemoryRepository) {
+	t.Helper()
+	// A 1mi window inside a 5k run, a 5k race, and a 10k race — multi-distance
+	// evidence on distinct dates.
+	seedRunFull(t, repo, "me1", atRFC(t, "2026-03-10T07:00:00Z"), 5000, []ActivityBestEffort{
+		{DistanceKey: "1mi", DurationSeconds: 330},
+		{DistanceKey: "5k", DurationSeconds: 1180},
+	})
+	seedRunFull(t, repo, "me2", atRFC(t, "2026-04-15T07:00:00Z"), 10000, []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1170},
+		{DistanceKey: "10k", DurationSeconds: 2500},
+	})
+	seedRunFull(t, repo, "me3", atRFC(t, "2026-05-20T07:00:00Z"), 10000, []ActivityBestEffort{
+		{DistanceKey: "10k", DurationSeconds: 2460},
+	})
+}
+
+func TestRunningMaxEffort_SummaryHappyPath(t *testing.T) {
+	h, _, repo := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+	seedMultiDistance(t, repo)
+
+	req := httptest.NewRequest("GET", "/running/max-effort", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env maxEffortSummaryEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.EstimatorVersion != "1.0.0" {
+		t.Errorf("estimator_version = %q, want 1.0.0", env.Data.EstimatorVersion)
+	}
+	if len(env.Data.Distances) != 6 {
+		t.Fatalf("distances len = %d, want 6", len(env.Data.Distances))
+	}
+	// At least one fitted_curve with a non-null estimate.
+	sawFitted := false
+	for _, d := range env.Data.Distances {
+		if d.Basis != nil && *d.Basis == "fitted_curve" && d.EstimateSeconds != nil {
+			sawFitted = true
+		}
+	}
+	if !sawFitted {
+		t.Errorf("expected at least one fitted_curve with a non-null estimate: %+v", env.Data.Distances)
+	}
+	// 5k was seeded → actual_best present.
+	for _, d := range env.Data.Distances {
+		if d.DistanceKey == "5k" {
+			if d.ActualBestSeconds == nil || *d.ActualBestSeconds != 1170 {
+				t.Errorf("5k actual_best_seconds = %v, want 1170", d.ActualBestSeconds)
+			}
+		}
+	}
+}
+
+func TestRunningMaxEffort_SummaryNeverRanDistance(t *testing.T) {
+	h, _, repo := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+	// Only a single 5k effort — marathon is never directly run, but the
+	// engine can still extrapolate. To get a genuine insufficient/null case
+	// we seed nothing and assert the all-null shape with no actual best.
+	seedRunFull(t, repo, "only5k", atRFC(t, "2026-05-01T07:00:00Z"), 5000, []ActivityBestEffort{
+		{DistanceKey: "5k", DurationSeconds: 1200},
+	})
+
+	req := httptest.NewRequest("GET", "/running/max-effort", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env maxEffortSummaryEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// marathon was never run → no actual best at that distance.
+	for _, d := range env.Data.Distances {
+		if d.DistanceKey == "marathon" {
+			if d.ActualBestSeconds != nil {
+				t.Errorf("marathon actual_best_seconds = %v, want nil", *d.ActualBestSeconds)
+			}
+		}
+	}
+}
+
+func TestRunningMaxEffort_SummaryEmptyUserNullEstimates(t *testing.T) {
+	h, _, _ := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+
+	req := httptest.NewRequest("GET", "/running/max-effort", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffort(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env maxEffortSummaryEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Distances) != 6 {
+		t.Fatalf("distances len = %d, want 6", len(env.Data.Distances))
+	}
+	for _, d := range env.Data.Distances {
+		if d.EstimateSeconds != nil || d.Basis != nil || d.ActualBestSeconds != nil {
+			t.Errorf("empty user should have all-null fields, got %+v", d)
+		}
+	}
+}
+
+func TestRunningMaxEffortDetail_HappyPath(t *testing.T) {
+	h, _, repo := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+	seedMultiDistance(t, repo)
+
+	req := httptest.NewRequest("GET", "/running/max-effort/5k", nil)
+	req = withParam(req, "distance_key", "5k")
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffortDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env maxEffortDetailEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Estimate == nil {
+		t.Fatalf("expected non-null estimate block; body=%s", w.Body.String())
+	}
+	if env.Data.EstimatorVersion != "1.0.0" {
+		t.Errorf("estimator_version = %q, want 1.0.0", env.Data.EstimatorVersion)
+	}
+	// estimate_history has >= 1 point and is ascending by as_of.
+	if len(env.Data.EstimateHistory) < 1 {
+		t.Fatalf("estimate_history empty")
+	}
+	for i := 1; i < len(env.Data.EstimateHistory); i++ {
+		if env.Data.EstimateHistory[i-1].AsOf > env.Data.EstimateHistory[i].AsOf {
+			t.Errorf("estimate_history not ascending: %+v", env.Data.EstimateHistory)
+		}
+	}
+	// attempts: ascending, pace derived, source present.
+	if len(env.Data.Attempts) != 2 {
+		t.Fatalf("attempts len = %d, want 2", len(env.Data.Attempts))
+	}
+	for i := 1; i < len(env.Data.Attempts); i++ {
+		if env.Data.Attempts[i-1].AchievedAt > env.Data.Attempts[i].AchievedAt {
+			t.Errorf("attempts not ascending: %+v", env.Data.Attempts)
+		}
+	}
+	first := env.Data.Attempts[0]
+	wantPace := first.DurationSeconds / (5000.0 / 1000)
+	if d := first.PaceSecPerKm - wantPace; d > 0.001 || d < -0.001 {
+		t.Errorf("pace_sec_per_km = %v, want %v", first.PaceSecPerKm, wantPace)
+	}
+	if first.Source == "" {
+		t.Errorf("source empty on attempt %+v", first)
+	}
+	if first.ActivityID == "" {
+		t.Errorf("activity_id empty on attempt %+v", first)
+	}
+	// stats.gap_seconds = estimate - best.
+	if env.Data.ActualBest == nil {
+		t.Fatalf("expected actual_best for 5k")
+	}
+	if env.Data.Stats.GapSeconds == nil || env.Data.Stats.EstimatedMaxEffortSeconds == nil || env.Data.Stats.CurrentBestSeconds == nil {
+		t.Fatalf("stats numeric fields should be present: %+v", env.Data.Stats)
+	}
+	wantGap := *env.Data.Stats.EstimatedMaxEffortSeconds - *env.Data.Stats.CurrentBestSeconds
+	if d := *env.Data.Stats.GapSeconds - wantGap; d > 0.001 || d < -0.001 {
+		t.Errorf("gap_seconds = %v, want %v", *env.Data.Stats.GapSeconds, wantGap)
+	}
+}
+
+func TestRunningMaxEffortDetail_UnknownDistanceKey(t *testing.T) {
+	h, _, _ := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+
+	req := httptest.NewRequest("GET", "/running/max-effort/15k", nil)
+	req = withParam(req, "distance_key", "15k")
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffortDetail(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+	var env codeEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Code != "unknown_distance_key" {
+		t.Errorf("code = %q, want unknown_distance_key", env.Code)
+	}
+}
+
+func TestRunningMaxEffortDetail_InsufficientData(t *testing.T) {
+	h, _, _ := newTestHandler()
+	h.now = func() time.Time { return fixedMaxEffortNow }
+	// No efforts at all → marathon detail has insufficient data.
+
+	req := httptest.NewRequest("GET", "/running/max-effort/marathon", nil)
+	req = withParam(req, "distance_key", "marathon")
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.runningMaxEffortDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env maxEffortDetailEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Estimate != nil {
+		t.Errorf("expected null estimate for insufficient data, got %+v", env.Data.Estimate)
+	}
+	if env.Data.Stats.Confidence != "insufficient_data" {
+		t.Errorf("stats.confidence = %q, want insufficient_data", env.Data.Stats.Confidence)
+	}
+}

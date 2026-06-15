@@ -40,11 +40,11 @@ func qualityWeight(effortMeters, activityMeters float64) float64 {
 	return qualityFloor + (1-qualityFloor)*clamp(ratio/qualityKnee, 0, 1)
 }
 
-// classifySource is the label behind qualityWeight: an effort that fills the
+// ClassifySource is the label behind qualityWeight: an effort that fills the
 // run (or whose activity distance is unknown) reads as "race_like"; a small
 // window of a longer run reads as "long_run_window". Purely informational —
 // the regression uses qualityWeight's continuous value, not this string.
-func classifySource(effortMeters, activityMeters float64) string {
+func ClassifySource(effortMeters, activityMeters float64) string {
 	if activityMeters <= 0 {
 		return "race_like"
 	}

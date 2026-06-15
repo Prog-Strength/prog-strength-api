@@ -198,7 +198,7 @@ func (r *SQLiteRepository) GetUserRunningBestEfforts(ctx context.Context, userID
 // for the user's live running activities, ascending by start_time.
 func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.activity_id, a.start_time, e.duration_seconds
+		SELECT e.activity_id, a.start_time, e.duration_seconds, a.distance_meters
 		FROM activity_best_efforts e
 		JOIN activities a ON a.id = e.activity_id
 		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.activity_type = ? AND e.distance_key = ?
@@ -212,7 +212,7 @@ func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, user
 	var out []BestEffortPoint
 	for rows.Next() {
 		var p BestEffortPoint
-		if err := rows.Scan(&p.ActivityID, &p.ActivityStartTime, &p.DurationSeconds); err != nil {
+		if err := rows.Scan(&p.ActivityID, &p.ActivityStartTime, &p.DurationSeconds, &p.ActivityDistanceMeters); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

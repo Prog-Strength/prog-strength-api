@@ -93,6 +93,9 @@ type BestEffortPoint struct {
 	ActivityID        string
 	ActivityStartTime time.Time
 	DurationSeconds   float64
+	// ActivityDistanceMeters is the total distance of the source activity,
+	// used by the max-effort estimator's quality weight.
+	ActivityDistanceMeters float64
 }
 
 // PeriodStat is a distance + activity-count rollup over some window of

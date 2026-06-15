@@ -1,10 +1,13 @@
 package activity
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +17,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
 )
 
 // maxTCXBytes caps the multipart upload size. A typical activity TCX is
@@ -32,9 +36,12 @@ const (
 // metrics tiles.
 type Handler struct {
 	repo Repository
+	// now supplies the current time; defaulted to time.Now and overridable
+	// in tests for deterministic recency weighting and back-test dates.
+	now func() time.Time
 }
 
-func NewHandler(repo Repository) *Handler { return &Handler{repo: repo} }
+func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
 
 // Mount registers routes under /activities. Callers are expected to
 // have already wrapped the router in auth.RequireUser — these handlers
@@ -60,6 +67,8 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Route("/running", func(r chi.Router) {
 		r.Get("/best-efforts", h.runningBestEfforts)
 		r.Get("/best-efforts/{distance_key}/history", h.runningBestEffortHistory)
+		r.Get("/max-effort", h.runningMaxEffort)
+		r.Get("/max-effort/{distance_key}", h.runningMaxEffortDetail)
 	})
 }
 
@@ -571,7 +580,11 @@ func (h *Handler) runningBestEffortHistory(w http.ResponseWriter, r *http.Reques
 
 	pts := make([]bestEffortHistoryPointDTO, 0, len(points))
 	for _, p := range points {
-		pts = append(pts, bestEffortHistoryPointDTO(p))
+		pts = append(pts, bestEffortHistoryPointDTO{
+			ActivityID:        p.ActivityID,
+			ActivityStartTime: p.ActivityStartTime,
+			DurationSeconds:   p.DurationSeconds,
+		})
 	}
 
 	httpresp.OK(w, "listed running best effort history", bestEffortHistoryResponse{
@@ -579,5 +592,368 @@ func (h *Handler) runningBestEffortHistory(w http.ResponseWriter, r *http.Reques
 		DistanceLabel:  d.DisplayName,
 		DistanceMeters: d.Meters,
 		Points:         pts,
+	})
+}
+
+// --- Running max-effort estimates ---------------------------------------
+
+// assembleAttempts flattens the user's best-effort history across every
+// standard distance into the engine's Attempt shape. The estimator needs
+// efforts at ALL distances (not just the target) because the curve fit
+// draws its power from multi-distance evidence.
+func (h *Handler) assembleAttempts(ctx context.Context, userID string) ([]estimate.Attempt, error) {
+	var attempts []estimate.Attempt
+	for _, d := range StandardDistances {
+		points, err := h.repo.GetRunningBestEffortHistory(ctx, userID, d.Key)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range points {
+			attempts = append(attempts, estimate.Attempt{
+				DistanceKey:            d.Key,
+				DistanceMeters:         d.Meters,
+				DurationSeconds:        p.DurationSeconds,
+				AchievedAt:             p.ActivityStartTime,
+				ActivityDistanceMeters: p.ActivityDistanceMeters,
+			})
+		}
+	}
+	return attempts, nil
+}
+
+// maxEffortSummaryEntryDTO is one distance row in the cross-distance
+// summary. Estimate-derived numeric fields and basis/confidence are
+// pointers so they render null when the engine returns insufficient_data;
+// actual_best_* are likewise nullable and present only when the user has a
+// best at that distance.
+type maxEffortSummaryEntryDTO struct {
+	DistanceKey    string  `json:"distance_key"`
+	DistanceLabel  string  `json:"distance_label"`
+	DistanceMeters float64 `json:"distance_meters"`
+
+	EstimateSeconds *float64 `json:"estimate_seconds"`
+	LowerSeconds    *float64 `json:"lower_seconds"`
+	UpperSeconds    *float64 `json:"upper_seconds"`
+	Basis           *string  `json:"basis"`
+	Confidence      *string  `json:"confidence"`
+
+	ActualBestSeconds    *float64   `json:"actual_best_seconds"`
+	ActualBestActivityID *string    `json:"actual_best_activity_id"`
+	ActualBestAchievedAt *time.Time `json:"actual_best_achieved_at"`
+}
+
+// maxEffortSummaryResponse is the GET /running/max-effort payload.
+type maxEffortSummaryResponse struct {
+	EstimatorVersion string                     `json:"estimator_version"`
+	Distances        []maxEffortSummaryEntryDTO `json:"distances"`
+}
+
+// runningMaxEffort handles GET /running/max-effort: a cross-distance
+// summary of the user's predicted race time at each standard distance,
+// alongside their actual best where they have one.
+func (h *Handler) runningMaxEffort(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	attempts, err := h.assembleAttempts(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "assemble attempts", err)
+		return
+	}
+	bests, err := h.repo.GetUserRunningBestEfforts(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get running best efforts", err)
+		return
+	}
+	bestByKey := make(map[string]RunningBestEffort, len(bests))
+	for _, b := range bests {
+		bestByKey[b.DistanceKey] = b
+	}
+
+	est := estimate.NewEstimator()
+	now := h.now().UTC()
+
+	distances := make([]maxEffortSummaryEntryDTO, 0, len(StandardDistances))
+	for _, d := range StandardDistances {
+		res := est.Estimate(estimate.EstimateInput{
+			TargetDistanceKey:    d.Key,
+			TargetDistanceMeters: d.Meters,
+			Attempts:             attempts,
+			Now:                  now,
+		})
+
+		entry := maxEffortSummaryEntryDTO{
+			DistanceKey:    d.Key,
+			DistanceLabel:  d.DisplayName,
+			DistanceMeters: d.Meters,
+		}
+		if res.Basis != "insufficient_data" {
+			seconds := res.Seconds
+			lower := res.LowerSeconds
+			upper := res.UpperSeconds
+			basis := res.Basis
+			confidence := res.Confidence
+			entry.EstimateSeconds = &seconds
+			entry.LowerSeconds = &lower
+			entry.UpperSeconds = &upper
+			entry.Basis = &basis
+			entry.Confidence = &confidence
+		}
+		if b, ok := bestByKey[d.Key]; ok {
+			seconds := b.DurationSeconds
+			activityID := b.ActivityID
+			achievedAt := b.ActivityStartTime
+			entry.ActualBestSeconds = &seconds
+			entry.ActualBestActivityID = &activityID
+			entry.ActualBestAchievedAt = &achievedAt
+		}
+		distances = append(distances, entry)
+	}
+
+	httpresp.OK(w, "running max-effort estimates", maxEffortSummaryResponse{
+		EstimatorVersion: estimate.EstimatorVersion,
+		Distances:        distances,
+	})
+}
+
+// --- Running max-effort detail ------------------------------------------
+
+// maxEffortHistoryPointDTO is one back-tested estimate, computed on read by
+// re-running the engine against the efforts known as of an earlier date.
+type maxEffortHistoryPointDTO struct {
+	AsOf         string  `json:"as_of"`
+	Seconds      float64 `json:"seconds"`
+	LowerSeconds float64 `json:"lower_seconds"`
+	UpperSeconds float64 `json:"upper_seconds"`
+}
+
+// maxEffortAttemptDTO is one effort at the target distance: the raw data
+// point with a derived pace and the quality classification used by the
+// estimator's weight.
+type maxEffortAttemptDTO struct {
+	ActivityID      string  `json:"activity_id"`
+	AchievedAt      string  `json:"achieved_at"`
+	DurationSeconds float64 `json:"duration_seconds"`
+	PaceSecPerKm    float64 `json:"pace_sec_per_km"`
+	Source          string  `json:"source"`
+}
+
+// maxEffortActualBestDTO is the user's actual best at the target distance.
+type maxEffortActualBestDTO struct {
+	Seconds    float64 `json:"seconds"`
+	ActivityID string  `json:"activity_id"`
+	AchievedAt string  `json:"achieved_at"`
+}
+
+// maxEffortEstimateDTO is the current prediction block, null when the
+// engine has insufficient data.
+type maxEffortEstimateDTO struct {
+	Seconds      float64 `json:"seconds"`
+	LowerSeconds float64 `json:"lower_seconds"`
+	UpperSeconds float64 `json:"upper_seconds"`
+	Basis        string  `json:"basis"`
+	Confidence   string  `json:"confidence"`
+	NPoints      int     `json:"n_points"`
+	NDistances   int     `json:"n_distances"`
+}
+
+// maxEffortStatsDTO is the summary tile: estimate vs. current best and a
+// human data summary. Nullable numerics are pointers (present-as-null).
+type maxEffortStatsDTO struct {
+	EstimatedMaxEffortSeconds *float64 `json:"estimated_max_effort_seconds"`
+	CurrentBestSeconds        *float64 `json:"current_best_seconds"`
+	GapSeconds                *float64 `json:"gap_seconds"`
+	Confidence                string   `json:"confidence"`
+	DataSummary               string   `json:"data_summary"`
+}
+
+// maxEffortDetailResponse is the GET /running/max-effort/{distance_key}
+// payload.
+type maxEffortDetailResponse struct {
+	DistanceKey      string                     `json:"distance_key"`
+	DistanceLabel    string                     `json:"distance_label"`
+	DistanceMeters   float64                    `json:"distance_meters"`
+	EstimatorVersion string                     `json:"estimator_version"`
+	Estimate         *maxEffortEstimateDTO      `json:"estimate"`
+	EstimateHistory  []maxEffortHistoryPointDTO `json:"estimate_history"`
+	Attempts         []maxEffortAttemptDTO      `json:"attempts"`
+	ActualBest       *maxEffortActualBestDTO    `json:"actual_best"`
+	Stats            maxEffortStatsDTO          `json:"stats"`
+}
+
+// runningMaxEffortDetail handles GET /running/max-effort/{distance_key}:
+// the current estimate at one distance plus an on-read back-test history,
+// the contributing attempts, and the user's actual best. An unknown
+// distance_key is a 404 with code unknown_distance_key. insufficient_data
+// is a 200 with estimate null and an explanatory basis in stats.
+func (h *Handler) runningMaxEffortDetail(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	distanceKey := chi.URLParam(r, "distance_key")
+	d, ok := standardDistanceByKey(distanceKey)
+	if !ok {
+		httpresp.ErrorWithCode(w, http.StatusNotFound, "unknown distance key", "unknown_distance_key")
+		return
+	}
+
+	attempts, err := h.assembleAttempts(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "assemble attempts", err)
+		return
+	}
+
+	est := estimate.NewEstimator()
+	now := h.now().UTC()
+
+	res := est.Estimate(estimate.EstimateInput{
+		TargetDistanceKey:    d.Key,
+		TargetDistanceMeters: d.Meters,
+		Attempts:             attempts,
+		Now:                  now,
+	})
+
+	// Target-distance efforts drive the attempts list and the back-test
+	// dates. They're already ascending by achieved-at from assembleAttempts'
+	// per-distance history query.
+	var targetAttempts []estimate.Attempt
+	for _, a := range attempts {
+		if a.DistanceKey == d.Key {
+			targetAttempts = append(targetAttempts, a)
+		}
+	}
+
+	// estimate_history: re-run the engine at each distinct target-distance
+	// effort date, seeing only efforts known by then, so the chart shows how
+	// the prediction evolved. Use end-of-day as Now so all efforts on a date
+	// are visible to that date's estimate.
+	history := make([]maxEffortHistoryPointDTO, 0)
+	seenDate := map[string]struct{}{}
+	var dates []time.Time
+	for _, a := range targetAttempts {
+		day := a.AchievedAt.Format("2006-01-02")
+		if _, ok := seenDate[day]; ok {
+			continue
+		}
+		seenDate[day] = struct{}{}
+		y, m, dd := a.AchievedAt.Date()
+		eod := time.Date(y, m, dd, 23, 59, 59, 0, a.AchievedAt.Location())
+		dates = append(dates, eod)
+	}
+	sort.Slice(dates, func(i, j int) bool { return dates[i].Before(dates[j]) })
+	for _, t := range dates {
+		var filtered []estimate.Attempt
+		for _, a := range attempts {
+			if !a.AchievedAt.After(t) {
+				filtered = append(filtered, a)
+			}
+		}
+		hr := est.Estimate(estimate.EstimateInput{
+			TargetDistanceKey:    d.Key,
+			TargetDistanceMeters: d.Meters,
+			Attempts:             filtered,
+			Now:                  t,
+		})
+		if hr.Basis == "insufficient_data" {
+			continue
+		}
+		history = append(history, maxEffortHistoryPointDTO{
+			AsOf:         t.Format("2006-01-02"),
+			Seconds:      hr.Seconds,
+			LowerSeconds: hr.LowerSeconds,
+			UpperSeconds: hr.UpperSeconds,
+		})
+	}
+
+	// attempts (this distance only), ascending by achieved-at.
+	attemptDTOs := make([]maxEffortAttemptDTO, 0, len(targetAttempts))
+	for _, a := range targetAttempts {
+		attemptDTOs = append(attemptDTOs, maxEffortAttemptDTO{
+			ActivityID:      "",
+			AchievedAt:      a.AchievedAt.Format(time.RFC3339),
+			DurationSeconds: a.DurationSeconds,
+			PaceSecPerKm:    a.DurationSeconds / (d.Meters / 1000),
+			Source:          estimate.ClassifySource(d.Meters, a.ActivityDistanceMeters),
+		})
+	}
+	// Attempt doesn't carry the activity id, so re-read the target history
+	// for ids in the same ascending order.
+	targetPoints, err := h.repo.GetRunningBestEffortHistory(r.Context(), userID, d.Key)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get running best effort history", err)
+		return
+	}
+	for i := range attemptDTOs {
+		if i < len(targetPoints) {
+			attemptDTOs[i].ActivityID = targetPoints[i].ActivityID
+		}
+	}
+
+	// actual_best at this distance.
+	bests, err := h.repo.GetUserRunningBestEfforts(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get running best efforts", err)
+		return
+	}
+	var actualBest *maxEffortActualBestDTO
+	var currentBestSeconds *float64
+	for _, b := range bests {
+		if b.DistanceKey == d.Key {
+			actualBest = &maxEffortActualBestDTO{
+				Seconds:    b.DurationSeconds,
+				ActivityID: b.ActivityID,
+				AchievedAt: b.ActivityStartTime.Format(time.RFC3339),
+			}
+			s := b.DurationSeconds
+			currentBestSeconds = &s
+			break
+		}
+	}
+
+	// estimate block + stats.
+	var estimateBlock *maxEffortEstimateDTO
+	var estimatedSeconds *float64
+	stats := maxEffortStatsDTO{
+		CurrentBestSeconds: currentBestSeconds,
+		DataSummary:        fmt.Sprintf("%d efforts across %d distances", res.NPoints, res.NDistances),
+	}
+	if res.Basis != "insufficient_data" {
+		estimateBlock = &maxEffortEstimateDTO{
+			Seconds:      res.Seconds,
+			LowerSeconds: res.LowerSeconds,
+			UpperSeconds: res.UpperSeconds,
+			Basis:        res.Basis,
+			Confidence:   res.Confidence,
+			NPoints:      res.NPoints,
+			NDistances:   res.NDistances,
+		}
+		s := res.Seconds
+		estimatedSeconds = &s
+		stats.EstimatedMaxEffortSeconds = &s
+		stats.Confidence = res.Confidence
+	} else {
+		stats.Confidence = res.Basis
+	}
+	if estimatedSeconds != nil && currentBestSeconds != nil {
+		gap := *estimatedSeconds - *currentBestSeconds
+		stats.GapSeconds = &gap
+	}
+
+	httpresp.OK(w, "running max-effort estimate", maxEffortDetailResponse{
+		DistanceKey:      d.Key,
+		DistanceLabel:    d.DisplayName,
+		DistanceMeters:   d.Meters,
+		EstimatorVersion: estimate.EstimatorVersion,
+		Estimate:         estimateBlock,
+		EstimateHistory:  history,
+		Attempts:         attemptDTOs,
+		ActualBest:       actualBest,
+		Stats:            stats,
 	})
 }

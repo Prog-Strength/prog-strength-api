@@ -372,6 +372,12 @@ func New(cfg config.Config) (*Server, error) {
 		// actor's id from context and renders profile summaries via the user
 		// domain through the follow.ProfileProvider seam.
 		follow.NewHandler(followRepo, newFollowProfileProvider(userRepo, avatarStore)).Mount(r)
+		// Discovery — public profile, followers/following lists, and ranked
+		// profile search. Lives in the user package as a handler separate from
+		// /me; consumes the follow repo's read methods through the user-side
+		// FollowReader seam (followRepo satisfies it directly). Mounted after
+		// the follow handler in the same JWT-gated group.
+		user.NewDiscoveryHandler(userRepo, followRepo, avatarStore).Mount(r)
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

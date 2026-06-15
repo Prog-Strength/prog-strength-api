@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mattn/go-sqlite3"
@@ -152,6 +153,112 @@ func (r *SQLiteRepository) Update(ctx context.Context, u *User) error {
 	}
 
 	return nil
+}
+
+// escapeLike escapes the LIKE wildcards (% and _) and the escape char itself
+// in user-supplied input so the query can use it as a literal prefix/substring
+// under an `ESCAPE '\'` clause — a user typing "a_b" or "50%" can't smuggle in
+// wildcard semantics that would broaden the match.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
+// SearchProfiles implements the ranked, keyset-paginated profile search. The
+// CASE-expression bucket and SortKey are computed in an inner SELECT so the
+// outer keyset WHERE can reference them by name; the whole query is fully
+// parameterized (LIKE input escaped via escapeLike + ESCAPE '\'). See the
+// Repository interface doc for the follower_count tiebreak deferral.
+func (r *SQLiteRepository) SearchProfiles(ctx context.Context, query string, limit int, after *SearchCursor) ([]*User, *SearchCursor, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return []*User{}, nil, nil
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	esc := escapeLike(q)
+	prefix := esc + "%"         // username LIKE q%
+	contains := "%" + esc + "%" // lower(display_name) LIKE %q%
+
+	// The inner query computes, per matching non-deleted user, the best bucket
+	// and the stable sort key; the outer query applies the keyset filter and
+	// the total order. Fetch limit+1 to detect a next page.
+	args := []any{
+		q, prefix, // bucket CASE
+		q, prefix, contains, // WHERE match predicate
+	}
+	keysetClause := ""
+	if after != nil {
+		// Strictly-greater tuple over (bucket, sortkey, id).
+		keysetClause = `
+		WHERE bucket > ?
+		   OR (bucket = ? AND sortkey > ?)
+		   OR (bucket = ? AND sortkey = ? AND id > ?)`
+		args = append(args, after.Bucket, after.Bucket, after.SortKey, after.Bucket, after.SortKey, after.ID)
+	}
+	args = append(args, limit+1)
+
+	sqlStr := `
+	SELECT id, email, display_name, username, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, created_at, updated_at, deleted_at, bucket, sortkey
+	FROM (
+		SELECT id, email, display_name, username, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, created_at, updated_at, deleted_at,
+			CASE
+				WHEN username IS NOT NULL AND lower(username) = ? THEN 0
+				WHEN username IS NOT NULL AND lower(username) LIKE ? ESCAPE '\' THEN 1
+				ELSE 2
+			END AS bucket,
+			COALESCE(lower(username), lower(display_name)) AS sortkey
+		FROM users
+		WHERE deleted_at IS NULL
+		  AND (
+			(username IS NOT NULL AND lower(username) = ?)
+			OR (username IS NOT NULL AND lower(username) LIKE ? ESCAPE '\')
+			OR (lower(display_name) LIKE ? ESCAPE '\')
+		  )
+	)` + keysetClause + `
+	ORDER BY bucket ASC, sortkey ASC, id ASC
+	LIMIT ?`
+
+	rows, err := r.db.QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	var (
+		users   []*User
+		buckets []int
+		keys    []string
+	)
+	for rows.Next() {
+		var u User
+		var bucket int
+		var sortkey string
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.Username, &u.WeightUnit, &u.DistanceUnit, &u.HeightCm, &u.AvatarKey, &u.OAuthAvatarURL, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt, &bucket, &sortkey); err != nil {
+			return nil, nil, err
+		}
+		uu := u
+		users = append(users, &uu)
+		buckets = append(buckets, bucket)
+		keys = append(keys, sortkey)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	var next *SearchCursor
+	if len(users) > limit {
+		last := users[limit-1]
+		next = &SearchCursor{Bucket: buckets[limit-1], SortKey: keys[limit-1], ID: last.ID}
+		users = users[:limit]
+	}
+	if users == nil {
+		users = []*User{}
+	}
+	return users, next, nil
 }
 
 func (r *SQLiteRepository) Delete(ctx context.Context, id string) error {

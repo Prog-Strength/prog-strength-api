@@ -1,3 +1,10 @@
+# [0.50.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.49.0...v0.50.0) (2026-06-15)
+
+
+### Features
+
+* **timeline:** user timeline feed domain, endpoints, and backfill ([#30](https://github.com/Prog-Strength/prog-strength-api/issues/30)) ([f0effee](https://github.com/Prog-Strength/prog-strength-api/commit/f0effee8b7e7e092c5125e7765c38c8d7561befc))
+
 # [0.49.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.48.0...v0.49.0) (2026-06-15)
 
 

@@ -19,6 +19,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
@@ -137,6 +138,7 @@ func New(cfg config.Config) (*Server, error) {
 	var activityRepo activity.Repository
 	var nutritionLookupRepo nutritionlookup.Repository
 	var timelineRepo timeline.Repository
+	var followRepo follow.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
@@ -178,6 +180,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 		timelineRepo = timeline.NewSQLiteRepository(database)
+		followRepo = follow.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -254,6 +257,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
 		timelineRepo = timeline.NewMemoryRepository()
+		followRepo = follow.NewMemoryRepository()
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),
@@ -363,6 +367,11 @@ func New(cfg config.Config) (*Server, error) {
 		// group; the handler reads the viewer's id from context and hydrates
 		// post content from the live source repos via timelineHydrator.
 		timeline.NewHandler(timelineRepo, timelineHydrator).Mount(r)
+		// Follow graph — the request/accept state machine, teardown verbs, and
+		// the requests inbox. Shares the JWT-gated group; the handler reads the
+		// actor's id from context and renders profile summaries via the user
+		// domain through the follow.ProfileProvider seam.
+		follow.NewHandler(followRepo, newFollowProfileProvider(userRepo, avatarStore)).Mount(r)
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

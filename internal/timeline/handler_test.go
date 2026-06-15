@@ -48,6 +48,33 @@ func (h *fakeHydrator) Hydrate(ctx context.Context, refs []PostRef) (map[PostRef
 	return out, nil
 }
 
+// --- fake follow/user seams ----------------------------------------------
+
+// fakeFollowees is a deterministic in-test AcceptedFollowees. accepted maps a
+// viewer id to the set of user ids whose non-private posts that viewer may see.
+type fakeFollowees struct {
+	accepted map[string][]string
+}
+
+func (f *fakeFollowees) AcceptedFollowees(ctx context.Context, viewerID string) ([]string, error) {
+	return f.accepted[viewerID], nil
+}
+
+// fakeUsers is a deterministic in-test UserResolver. byUsername maps a username
+// to a user id; an unknown username returns ErrNotFound so the handler's
+// not-found branch fires.
+type fakeUsers struct {
+	byUsername map[string]string
+}
+
+func (f *fakeUsers) ResolveUsername(ctx context.Context, username string) (string, error) {
+	id, ok := f.byUsername[username]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return id, nil
+}
+
 // --- envelopes for assertions --------------------------------------------
 
 type feedEnvelope struct {
@@ -73,9 +100,19 @@ type reactionsEnvelope struct {
 // --- helpers -------------------------------------------------------------
 
 func newTestHandler() (*Handler, *MemoryRepository, *fakeHydrator) {
+	h, repo, hyd, _, _ := newSocialTestHandler()
+	return h, repo, hyd
+}
+
+// newSocialTestHandler additionally exposes the follow/user fakes for the
+// fan-out and ?user= scoped-feed tests. The fakes start empty (no followees,
+// no resolvable usernames); tests populate them.
+func newSocialTestHandler() (*Handler, *MemoryRepository, *fakeHydrator, *fakeFollowees, *fakeUsers) {
 	repo := NewMemoryRepository()
 	hyd := &fakeHydrator{missing: map[string]bool{}}
-	return NewHandler(repo, hyd), repo, hyd
+	followees := &fakeFollowees{accepted: map[string][]string{}}
+	users := &fakeUsers{byUsername: map[string]string{}}
+	return NewHandler(repo, hyd, followees, users), repo, hyd, followees, users
 }
 
 // seedPost inserts a feed-index row for userID via the repo's EnsurePost and
@@ -92,6 +129,18 @@ func seedPost(t *testing.T, repo *MemoryRepository, userID, sourceID string, occ
 		t.Fatalf("seed post %s: %v", sourceID, err)
 	}
 	return p
+}
+
+// seedPostVis inserts a post for userID and forces its visibility (EnsurePost
+// always writes 'friends'), letting a test pin a 'private' or 'public' post.
+func seedPostVis(t *testing.T, repo *MemoryRepository, userID, sourceID string, occurredAt time.Time, vis Visibility) Post {
+	t.Helper()
+	p := seedPost(t, repo, userID, sourceID, occurredAt)
+	repo.mu.Lock()
+	repo.posts[p.ID].Visibility = vis
+	stored := *repo.posts[p.ID]
+	repo.mu.Unlock()
+	return stored
 }
 
 // req builds a request as the given user with optional chi URL params (passed
@@ -158,8 +207,8 @@ func TestFeedPaginationAndShape(t *testing.T) {
 	if top.SourceType != SourceWorkout || top.SourceID != "c" {
 		t.Errorf("top source = %s/%s, want workout/c", top.SourceType, top.SourceID)
 	}
-	if top.Visibility != VisibilityPrivate {
-		t.Errorf("visibility = %q, want private", top.Visibility)
+	if top.Visibility != VisibilityFriends {
+		t.Errorf("visibility = %q, want friends", top.Visibility)
 	}
 	if top.Content.Title != "title-c" || top.Content.Href != "/source/workout/c" {
 		t.Errorf("content wrong: %+v", top.Content)
@@ -503,5 +552,223 @@ func TestCursorRoundTrip(t *testing.T) {
 	}
 	if !out.OccurredAt.Equal(in.OccurredAt) || out.ID != in.ID {
 		t.Errorf("round-trip = %+v, want %+v", out, in)
+	}
+}
+
+// --- timeline fan-out: the multi-author home feed ------------------------
+
+// fetchFeed runs GET /timeline (optional raw query like "?user=bob") as viewer
+// and returns the decoded payload.
+func fetchFeed(t *testing.T, h *Handler, viewer, rawQuery string) feedResponse {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.listFeed(w, req(t, "GET", "/timeline"+rawQuery, viewer, ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("listFeed status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env feedEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode feed: %v", err)
+	}
+	return env.Data
+}
+
+func sourceIDSet(posts []postDTO) map[string]bool {
+	s := make(map[string]bool, len(posts))
+	for _, p := range posts {
+		s[p.SourceID] = true
+	}
+	return s
+}
+
+// An accepted follower sees the followee's friends posts and NOT their private
+// posts; own-post visibility is unchanged (the viewer sees their own private +
+// friends). Removing the edge immediately revokes visibility.
+func TestFeedFanOutAcceptedFollower(t *testing.T) {
+	h, repo, _, followees, _ := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+
+	// B's posts: one friends (visible to an accepted follower), one private (not).
+	seedPostVis(t, repo, userB, "b-friends", base.Add(time.Hour), VisibilityFriends)
+	seedPostVis(t, repo, userB, "b-private", base.Add(2*time.Hour), VisibilityPrivate)
+	// A's own posts: a private one A must still see in their own feed.
+	seedPostVis(t, repo, userA, "a-private", base, VisibilityPrivate)
+
+	// A follows B (accepted).
+	followees.accepted[userA] = []string{userB}
+
+	got := sourceIDSet(fetchFeed(t, h, userA, "").Posts)
+	if !got["b-friends"] {
+		t.Errorf("accepted follower should see followee's friends post; got %v", got)
+	}
+	if got["b-private"] {
+		t.Errorf("accepted follower must NOT see followee's private post; got %v", got)
+	}
+	if !got["a-private"] {
+		t.Errorf("viewer should see their own private post; got %v", got)
+	}
+
+	// Unfollow / remove: empty accepted set immediately revokes B's posts.
+	followees.accepted[userA] = nil
+	got2 := sourceIDSet(fetchFeed(t, h, userA, "").Posts)
+	if got2["b-friends"] || got2["b-private"] {
+		t.Errorf("after unfollow, none of B's posts should appear; got %v", got2)
+	}
+	if !got2["a-private"] {
+		t.Errorf("own posts must survive unfollow; got %v", got2)
+	}
+}
+
+// A non-accepted (e.g. pending) follower has an empty accepted set, so they see
+// nothing of the other author.
+func TestFeedFanOutPendingSeesNothing(t *testing.T) {
+	h, repo, _, _, _ := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	seedPostVis(t, repo, userB, "b-friends", base, VisibilityFriends)
+	// followees.accepted[userA] left empty — A's request to B is pending.
+
+	got := sourceIDSet(fetchFeed(t, h, userA, "").Posts)
+	if len(got) != 0 {
+		t.Errorf("pending follower should see no posts of B; got %v", got)
+	}
+}
+
+// The multi-author keyset page orders correctly across authors with interleaved
+// occurred_at, paginating without gaps or repeats.
+func TestFeedFanOutKeysetAcrossAuthors(t *testing.T) {
+	h, repo, _, followees, _ := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	// Interleave A and B by occurred_at: a0 < b1 < a2 < b3 (all friends/own).
+	seedPostVis(t, repo, userA, "a0", base, VisibilityFriends)
+	seedPostVis(t, repo, userB, "b1", base.Add(1*time.Hour), VisibilityFriends)
+	seedPostVis(t, repo, userA, "a2", base.Add(2*time.Hour), VisibilityFriends)
+	seedPostVis(t, repo, userB, "b3", base.Add(3*time.Hour), VisibilityFriends)
+	followees.accepted[userA] = []string{userB}
+
+	// Walk in pages of 2 and collect the source-id order.
+	var order []string
+	rawQuery := "?limit=2"
+	for {
+		page := fetchFeed(t, h, userA, rawQuery)
+		for _, p := range page.Posts {
+			order = append(order, p.SourceID)
+		}
+		if page.NextBefore == nil {
+			break
+		}
+		rawQuery = "?limit=2&before=" + *page.NextBefore
+		if len(order) > 4 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+	want := []string{"b3", "a2", "b1", "a0"} // newest-first across authors
+	if len(order) != len(want) {
+		t.Fatalf("got %v, want %v", order, want)
+	}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("page order = %v, want %v", order, want)
+		}
+	}
+}
+
+// --- canView via getPost (single post) -----------------------------------
+
+func TestGetPostFollowerVisibility(t *testing.T) {
+	h, repo, _, followees, _ := newSocialTestHandler()
+	now := time.Now().UTC()
+	friends := seedPostVis(t, repo, userA, "a-friends", now, VisibilityFriends)
+	private := seedPostVis(t, repo, userA, "a-private", now, VisibilityPrivate)
+
+	// B follows A (accepted): can GET A's friends post, but not the private one.
+	followees.accepted[userB] = []string{userA}
+
+	get := func(viewer, postID string) int {
+		w := httptest.NewRecorder()
+		h.getPost(w, req(t, "GET", "/timeline/posts/"+postID, viewer, "", "id", postID))
+		return w.Code
+	}
+
+	if code := get(userB, friends.ID); code != http.StatusOK {
+		t.Errorf("accepted follower GET friends post = %d, want 200", code)
+	}
+	if code := get(userB, private.ID); code != http.StatusNotFound {
+		t.Errorf("accepted follower GET private post = %d, want 404", code)
+	}
+	// Author sees their own private post.
+	if code := get(userA, private.ID); code != http.StatusOK {
+		t.Errorf("author GET own private post = %d, want 200", code)
+	}
+
+	// A non-follower (C) sees neither.
+	if code := get("userC", friends.ID); code != http.StatusNotFound {
+		t.Errorf("non-follower GET friends post = %d, want 404", code)
+	}
+}
+
+// --- ?user= scoped feed --------------------------------------------------
+
+func TestScopedFeedAuthorSeesOwnIncludingPrivate(t *testing.T) {
+	h, repo, _, _, users := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
+	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
+	users.byUsername["alice"] = userA
+
+	data := fetchFeed(t, h, userA, "?user=alice")
+	got := sourceIDSet(data.Posts)
+	if !got["a-friends"] || !got["a-private"] {
+		t.Errorf("author's scoped feed should include own private + friends; got %v", got)
+	}
+	if data.Locked {
+		t.Error("author's own scoped feed must not be locked")
+	}
+}
+
+func TestScopedFeedAcceptedFollowerSeesFriendsOnly(t *testing.T) {
+	h, repo, _, followees, users := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
+	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
+	users.byUsername["alice"] = userA
+	followees.accepted[userB] = []string{userA}
+
+	data := fetchFeed(t, h, userB, "?user=alice")
+	got := sourceIDSet(data.Posts)
+	if !got["a-friends"] {
+		t.Errorf("accepted follower scoped feed should include friends post; got %v", got)
+	}
+	if got["a-private"] {
+		t.Errorf("accepted follower scoped feed must exclude private post; got %v", got)
+	}
+	if data.Locked {
+		t.Error("accepted follower scoped feed must not be locked")
+	}
+}
+
+func TestScopedFeedNonFollowerLocked(t *testing.T) {
+	h, repo, _, _, users := newSocialTestHandler()
+	seedPostVis(t, repo, userA, "a-friends", time.Now().UTC(), VisibilityFriends)
+	users.byUsername["alice"] = userA
+	// userB does not follow A → gated locked-empty 200.
+
+	data := fetchFeed(t, h, userB, "?user=alice")
+	if !data.Locked {
+		t.Error("non-follower scoped feed should be locked")
+	}
+	if len(data.Posts) != 0 {
+		t.Errorf("locked scoped feed must be empty; got %v", data.Posts)
+	}
+	if data.NextBefore != nil {
+		t.Errorf("locked scoped feed next_before must be nil; got %q", *data.NextBefore)
+	}
+}
+
+func TestScopedFeedUnknownUsername(t *testing.T) {
+	h, _, _, _, _ := newSocialTestHandler()
+	w := httptest.NewRecorder()
+	h.listFeed(w, req(t, "GET", "/timeline?user=ghost", userA, ""))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown username status = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
 }

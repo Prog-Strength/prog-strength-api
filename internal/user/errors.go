@@ -12,6 +12,13 @@ var (
 	ErrHeightOutOfRange    = fmt.Errorf("user: height must be between %g and %g cm", 50.0, 250.0)
 	ErrNotFound            = errors.New("user: not found")
 	ErrEmailExists         = errors.New("user: email already exists")
+
+	// Username write-path errors. Invalid covers charset/length/shape (input
+	// the regex rejects); Reserved is a structurally-valid but denylisted name;
+	// Taken is a case-insensitive collision surfaced from the unique index.
+	ErrUsernameInvalid  = errors.New("user: username must be 3-30 chars, start with a letter, and contain only letters, digits, and underscores")
+	ErrUsernameReserved = errors.New("user: username is reserved")
+	ErrUsernameTaken    = errors.New("user: username already taken")
 )
 
 // InvalidEnumError indicates a value outside the allowed enum set.

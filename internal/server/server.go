@@ -20,6 +20,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
@@ -138,6 +139,7 @@ func New(cfg config.Config) (*Server, error) {
 	var activityRepo activity.Repository
 	var nutritionLookupRepo nutritionlookup.Repository
 	var timelineRepo timeline.Repository
+	var followRepo follow.Repository
 	var betaRepo beta.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
@@ -180,6 +182,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 		timelineRepo = timeline.NewSQLiteRepository(database)
+		followRepo = follow.NewSQLiteRepository(database)
 		betaSQLiteRepo := beta.NewSQLiteRepository(database)
 		betaRepo = betaSQLiteRepo
 
@@ -268,6 +271,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
 		timelineRepo = timeline.NewMemoryRepository()
+		followRepo = follow.NewMemoryRepository()
 		betaRepo = beta.NewMemoryRepository()
 	}
 
@@ -372,11 +376,33 @@ func New(cfg config.Config) (*Server, error) {
 		if usageLedger != nil {
 			usage.NewHandler(usageLedger, cfg.DailyUsageCapUSD).Mount(r)
 		}
-		// Timeline — the reverse-chronological feed of the user's own
-		// training events, with comments + reactions. Shares the JWT-gated
-		// group; the handler reads the viewer's id from context and hydrates
-		// post content from the live source repos via timelineHydrator.
-		timeline.NewHandler(timelineRepo, timelineHydrator).Mount(r)
+		// The follow profile provider adapts the user domain for both the follow
+		// handler (ProfileProvider) and the timeline scoped-feed username
+		// resolution (timeline.UserResolver — it has ResolveUsername, which
+		// returns follow.ErrNotFound for an unknown username; the timeline
+		// handler masks any resolve error as a 404).
+		followProvider := newFollowProfileProvider(userRepo, avatarStore)
+		// Timeline — the reverse-chronological social feed: the viewer's own
+		// training events plus their accepted-followees' non-private posts, with
+		// comments + reactions, and a ?user=<username> scoped feed. Shares the
+		// JWT-gated group; the handler reads the viewer's id from context,
+		// hydrates post content from the live source repos via timelineHydrator,
+		// fans out over the follow graph via followRepo (it satisfies
+		// timeline.AcceptedFollowees), and resolves usernames via followProvider.
+		var _ timeline.AcceptedFollowees = followRepo
+		var _ timeline.UserResolver = followProvider
+		timeline.NewHandler(timelineRepo, timelineHydrator, followRepo, followProvider).Mount(r)
+		// Follow graph — the request/accept state machine, teardown verbs, and
+		// the requests inbox. Shares the JWT-gated group; the handler reads the
+		// actor's id from context and renders profile summaries via the user
+		// domain through the follow.ProfileProvider seam.
+		follow.NewHandler(followRepo, followProvider).Mount(r)
+		// Discovery — public profile, followers/following lists, and ranked
+		// profile search. Lives in the user package as a handler separate from
+		// /me; consumes the follow repo's read methods through the user-side
+		// FollowReader seam (followRepo satisfies it directly). Mounted after
+		// the follow handler in the same JWT-gated group.
+		user.NewDiscoveryHandler(userRepo, followRepo, avatarStore).Mount(r)
 
 		// Admin beta-allowlist surface — manage the closed-beta allowlist at
 		// runtime (GET/POST/DELETE /admin/beta-emails). Wrapped in its own

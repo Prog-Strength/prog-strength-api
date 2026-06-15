@@ -34,14 +34,21 @@ const (
 type Handler struct {
 	repo     Repository
 	hydrator SourceHydrator
+	// followees yields the viewer's accepted-followee set, the fan-out input for
+	// the multi-author feed and the canView followee check. users resolves a
+	// username to a user id for the ?user= scoped feed. Both are injected seams
+	// implemented by the follow/user domains so the timeline package never
+	// imports them.
+	followees AcceptedFollowees
+	users     UserResolver
 	// now supplies the current time; defaulted to time.Now and overridable in
 	// tests. Kept for parity with the other domains' handlers even though the
 	// timeline read paths are time-independent.
 	now func() time.Time
 }
 
-func NewHandler(repo Repository, hydrator SourceHydrator) *Handler {
-	return &Handler{repo: repo, hydrator: hydrator, now: time.Now}
+func NewHandler(repo Repository, hydrator SourceHydrator, followees AcceptedFollowees, users UserResolver) *Handler {
+	return &Handler{repo: repo, hydrator: hydrator, followees: followees, users: users, now: time.Now}
 }
 
 // Mount registers routes under /timeline. Callers are expected to have already
@@ -63,18 +70,24 @@ func (h *Handler) Mount(r chi.Router) {
 // --- authorization split -------------------------------------------------
 //
 // The two checks below are the single isolated authorization point the
-// friends/followers SOW will revisit. That SOW changes ONLY canView (to admit
-// posts whose author is in the viewer's followee set per the post's
+// friends/followers SOW revisits. That SOW changes ONLY canView (to admit posts
+// whose author is in the viewer's accepted-followee set per the post's
 // visibility); canModerate is already user-scoped and needs no change. Keeping
 // them as tiny, named functions — rather than inlining `post.UserID == viewer`
 // at each call site — is what makes the social change a one-line edit instead
 // of an audit of every endpoint.
 
-// canView reports whether viewerID may see post. v1: self-only (the author is
-// the only viewer). A non-viewable post is reported to the client as a 404
-// (ErrNotFound), never a 403, so post ids can't be enumerated cross-user.
-func canView(post Post, viewerID string) bool {
-	return post.UserID == viewerID
+// canView reports whether viewerID may see post: their own post (any
+// visibility), or an accepted-followee's non-private post. accepted is the
+// viewer's accepted-followee set as a membership map. A non-viewable post is
+// reported to the client as a 404 (ErrNotFound), never a 403 — so a follower
+// looking at a 'private' post, or a non-follower, is indistinguishable from a
+// missing post and ids can't be enumerated cross-user.
+func canView(post Post, viewerID string, accepted map[string]bool) bool {
+	if post.UserID == viewerID {
+		return true
+	}
+	return post.Visibility != VisibilityPrivate && accepted[post.UserID]
 }
 
 // canModerate reports whether viewerID may modify comment (i.e. delete it).
@@ -159,10 +172,14 @@ type commentDTO struct {
 
 // feedResponse is the GET /timeline payload: a page of posts plus the opaque
 // keyset cursor for the next page. next_before is null when the feed is
-// exhausted.
+// exhausted. locked is set true only for the gated ?user= scoped feed (the
+// viewer may not see the requested author's posts) — an empty page plus a flag
+// the client renders as a follow-to-unlock state; it is omitted for the normal
+// feed and the authorized scoped feed.
 type feedResponse struct {
 	Posts      []postDTO `json:"posts"`
 	NextBefore *string   `json:"next_before"`
+	Locked     bool      `json:"locked,omitempty"`
 }
 
 // postDetailResponse is the GET /timeline/posts/{id} payload: the post in the
@@ -222,10 +239,14 @@ func refOf(p Post) PostRef {
 
 // --- handlers ------------------------------------------------------------
 
-// listFeed handles GET /timeline?limit=&before=: a keyset page of the viewer's
-// own posts, newest first. It hydrates the page's content and batch-loads
-// reaction summaries and comment counts so a page is assembled without an N+1
-// over its posts.
+// listFeed handles GET /timeline?limit=&before=&user=: a keyset page of posts,
+// newest first. With no ?user it is the multi-author home feed — the viewer's
+// own posts plus their accepted-followees' non-private posts. With ?user=<name>
+// it is the scoped feed for one author: the viewer's own (all visibilities),
+// an accepted-followee's non-private posts, an unknown username → 404, and an
+// author the viewer can't see → the gated locked-empty state. It hydrates the
+// page's content and batch-loads reaction summaries and comment counts so a
+// page is assembled without an N+1 over its posts.
 func (h *Handler) listFeed(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -256,7 +277,48 @@ func (h *Handler) listFeed(w http.ResponseWriter, r *http.Request) {
 		before = &c
 	}
 
-	posts, next, err := h.repo.ListFeed(r.Context(), userID, limit, before)
+	// Resolve which authors this page draws from.
+	var userIDs []string
+	if username := r.URL.Query().Get("user"); username != "" {
+		authorID, err := h.users.ResolveUsername(r.Context(), username)
+		if err != nil {
+			// Any resolve error (incl. the provider's not-found) masks as 404 —
+			// don't distinguish an unknown username from a lookup failure.
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "user not found", "not_found")
+			return
+		}
+		allowed := authorID == userID
+		if !allowed {
+			accepted, err := h.followees.AcceptedFollowees(r.Context(), userID)
+			if err != nil {
+				httpresp.ServerError(w, r.Context(), "accepted followees", err)
+				return
+			}
+			for _, id := range accepted {
+				if id == authorID {
+					allowed = true
+					break
+				}
+			}
+		}
+		if !allowed {
+			// The viewer may not see this author's posts. Return the gated
+			// locked-empty state (200), not a 404: the author exists and the
+			// client renders a follow-to-unlock affordance.
+			httpresp.OK(w, "listed timeline", feedResponse{Posts: []postDTO{}, NextBefore: nil, Locked: true})
+			return
+		}
+		userIDs = []string{authorID}
+	} else {
+		accepted, err := h.followees.AcceptedFollowees(r.Context(), userID)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "accepted followees", err)
+			return
+		}
+		userIDs = append(accepted, userID)
+	}
+
+	posts, next, err := h.repo.ListFeed(r.Context(), userIDs, userID, limit, before)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list feed", err)
 		return
@@ -351,7 +413,23 @@ func (h *Handler) loadViewablePost(w http.ResponseWriter, r *http.Request, viewe
 		httpresp.ServerError(w, r.Context(), "get post", err)
 		return Post{}, false
 	}
-	if !canView(post, viewerID) {
+	// Build the viewer's accepted-followee set so canView can admit a
+	// followee's non-private post. Fetched once per request; only needed when
+	// the post isn't the viewer's own, but the set is cheap and the lookup
+	// keeps canView a pure function.
+	var accepted map[string]bool
+	if post.UserID != viewerID {
+		followees, err := h.followees.AcceptedFollowees(r.Context(), viewerID)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "accepted followees", err)
+			return Post{}, false
+		}
+		accepted = make(map[string]bool, len(followees))
+		for _, id := range followees {
+			accepted[id] = true
+		}
+	}
+	if !canView(post, viewerID, accepted) {
 		// Same 404 as a missing post — don't leak existence cross-user.
 		httpresp.ErrorWithCode(w, http.StatusNotFound, "post not found", "not_found")
 		return Post{}, false

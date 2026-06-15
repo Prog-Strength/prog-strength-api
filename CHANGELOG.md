@@ -1,3 +1,10 @@
+## [0.53.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.53.0...v0.53.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **auth:** accept auth_token cookie as bearer-token fallback in RequireUser ([#34](https://github.com/Prog-Strength/prog-strength-api/issues/34)) ([0e65a53](https://github.com/Prog-Strength/prog-strength-api/commit/0e65a534437e72e40df492f2cc363170a52b81c8))
+
 # [0.53.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.52.0...v0.53.0) (2026-06-15)
 
 

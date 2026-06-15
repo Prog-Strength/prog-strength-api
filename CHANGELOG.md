@@ -1,3 +1,10 @@
+# [0.53.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.52.0...v0.53.0) (2026-06-15)
+
+
+### Features
+
+* planned workouts + Google Calendar sync (API) ([#33](https://github.com/Prog-Strength/prog-strength-api/issues/33)) ([8fbd074](https://github.com/Prog-Strength/prog-strength-api/commit/8fbd0747253171303b63507d6891b036977a1762))
+
 # [0.52.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.51.0...v0.52.0) (2026-06-15)
 
 

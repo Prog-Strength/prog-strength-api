@@ -22,6 +22,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
@@ -130,6 +131,7 @@ func New(cfg config.Config) (*Server, error) {
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
+	var stepsRepo steps.Repository
 	var chatRepo chat.Repository
 	var activityRepo activity.Repository
 	var nutritionLookupRepo nutritionlookup.Repository
@@ -169,6 +171,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewSQLiteRepository(database)
 		nutritionRepo = nutrition.NewSQLiteRepository(database)
 		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
+		stepsRepo = steps.NewSQLiteRepository(database)
 		chatRepo = chat.NewSQLiteRepository(database)
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
@@ -236,6 +239,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewMemoryRepository()
 		nutritionRepo = nutrition.NewMemoryRepository()
 		bodyweightRepo = bodyweight.NewMemoryRepository()
+		stepsRepo = steps.NewMemoryRepository()
 		chatRepo = chat.NewMemoryRepository()
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
@@ -302,6 +306,11 @@ func New(cfg config.Config) (*Server, error) {
 		// router group. Needs the user repository to default unit
 		// from the user's preferred WeightUnit when omitted.
 		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
+		// Steps lives in its own package — daily totals upserted by
+		// calendar date, unitless and hard-deleted — and shares the same
+		// JWT-gated router group. No user repository needed since there's
+		// no unit to default.
+		steps.NewHandler(stepsRepo).Mount(r)
 		// Activity import + CRUD + running-specific metrics. Shares the
 		// JWT-gated group; the import handler reads the user ID from
 		// context and archives the raw TCX through activityArchiver.

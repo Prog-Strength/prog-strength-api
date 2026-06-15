@@ -320,7 +320,7 @@ func New(cfg config.Config) (*Server, error) {
 			// Dedicated client with a timeout so a slow Google token/revoke
 			// call can't stall a request indefinitely (mirrors lookupClient).
 			calendarClient := &http.Client{Timeout: 8 * time.Second}
-			calendarSyncHandler = calendarsync.NewHandler(calendarOAuthConfig, calendarConnRepo, cipher, calendarClient, cfg.ReturnToAllowedOrigins)
+			calendarSyncHandler = calendarsync.NewHandler(calendarOAuthConfig, calendarConnRepo, cipher, calendarClient, cfg.ReturnToAllowedOrigins, jwtSecret)
 			// Public callback — Google redirects here; the user id rides in the
 			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
 			calendarSyncHandler.MountPublic(r)

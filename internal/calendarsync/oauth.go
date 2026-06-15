@@ -2,7 +2,9 @@ package calendarsync
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -60,30 +62,60 @@ func randomToken() (string, error) {
 // every browser/path combination), so the user id cannot be read from the
 // request context — it must survive inside the state parameter.
 //
-// Layout: base64url( random + ":" + userID ). The `random` half is also set as
-// an HttpOnly cookie; the callback compares the decoded random against the
-// cookie (CSRF) and trusts the userID half only because the matching random
-// proves the state was minted by /connect for this browser. userIDs in this
-// system have no ":" (they are uuid/ulid-style), but we split on the FIRST ":"
-// regardless so an id containing one would still round-trip cleanly.
-func encodeState(random, userID string) string {
-	raw := random + ":" + userID
+// Layout: base64url( random + ":" + userID + ":" + base64url(HMAC-SHA256) ),
+// where the HMAC is computed with hmacKey over (random + ":" + userID). The
+// `random` half is also set as an HttpOnly cookie. The signature is what makes
+// the userID half trustworthy: without it, an attacker could complete a real
+// Google consent for their OWN account and then replay the callback with a
+// forged state carrying a VICTIM's userID plus an attacker-chosen random/cookie
+// pair, linking the attacker's calendar to the victim's account (an
+// account-linking CSRF). Signing the (random, userID) pair with the server's
+// secret means the callback only accepts state values minted by /connect.
+//
+// userIDs in this system have no ":" (they are id.New() hex strings), but
+// decodeState splits on the FIRST two ":" so an id containing one still
+// round-trips cleanly.
+func encodeState(random, userID string, hmacKey []byte) string {
+	payload := random + ":" + userID
+	sig := stateSignature(payload, hmacKey)
+	raw := payload + ":" + base64.RawURLEncoding.EncodeToString(sig)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
 // decodeState reverses encodeState, returning the random (CSRF) half and the
-// user id. An error means the state was malformed (truncated, not base64, or
-// missing the separator) and the callback must reject it.
-func decodeState(state string) (random, userID string, err error) {
+// user id, but ONLY after verifying the embedded HMAC signature with hmacKey in
+// constant time. An error means the state was malformed (truncated, not base64,
+// missing a separator) OR the signature is absent/invalid — in every case the
+// callback must reject it and write no connection row.
+func decodeState(state string, hmacKey []byte) (random, userID string, err error) {
 	raw, err := base64.RawURLEncoding.DecodeString(state)
 	if err != nil {
 		return "", "", fmt.Errorf("calendarsync: state is not valid base64: %w", err)
 	}
-	parts := strings.SplitN(string(raw), ":", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", errors.New("calendarsync: state is missing random or user id")
+	parts := strings.SplitN(string(raw), ":", 3)
+	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+		return "", "", errors.New("calendarsync: state is missing random, user id, or signature")
 	}
-	return parts[0], parts[1], nil
+	random, userID, sigB64 := parts[0], parts[1], parts[2]
+
+	gotSig, err := base64.RawURLEncoding.DecodeString(sigB64)
+	if err != nil {
+		return "", "", fmt.Errorf("calendarsync: state signature is not valid base64: %w", err)
+	}
+	wantSig := stateSignature(random+":"+userID, hmacKey)
+	if !hmac.Equal(gotSig, wantSig) {
+		return "", "", errors.New("calendarsync: state signature mismatch")
+	}
+	return random, userID, nil
+}
+
+// stateSignature computes HMAC-SHA256(hmacKey, payload). It is the single source
+// of truth for both encode (mint) and decode (verify) so the two can never
+// drift in how the signed message is constructed.
+func stateSignature(payload string, hmacKey []byte) []byte {
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write([]byte(payload))
+	return mac.Sum(nil)
 }
 
 // authCodeURL builds the consent-screen redirect URL for the calendar flow.

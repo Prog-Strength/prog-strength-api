@@ -34,6 +34,10 @@ type Handler struct {
 	cipher                 *Cipher
 	httpClient             *http.Client
 	returnToAllowedOrigins []string
+	// stateHMACKey signs the OAuth state's (random, userID) pair so the public
+	// callback can trust the userID it recovers. It is the server's JWT signing
+	// key — reused here purely as an HMAC secret, never as a JWT.
+	stateHMACKey []byte
 	// revokeURL is Google's revocation endpoint, overridable in tests.
 	revokeURL string
 }
@@ -41,14 +45,17 @@ type Handler struct {
 // NewHandler constructs a Handler. oauthConfig must already carry the calendar
 // scope + redirect URL (build it with NewCalendarConfig). httpClient bounds the
 // token-exchange and revoke calls; pass a client with a timeout. cipher
-// encrypts refresh tokens at rest.
-func NewHandler(oauthConfig *oauth2.Config, conns calendarconn.Repository, cipher *Cipher, httpClient *http.Client, returnToAllowedOrigins []string) *Handler {
+// encrypts refresh tokens at rest. stateHMACKey (the server's JWT signing key)
+// signs the OAuth state so the public callback can't be tricked into linking a
+// calendar to the wrong user.
+func NewHandler(oauthConfig *oauth2.Config, conns calendarconn.Repository, cipher *Cipher, httpClient *http.Client, returnToAllowedOrigins []string, stateHMACKey []byte) *Handler {
 	return &Handler{
 		oauthConfig:            oauthConfig,
 		conns:                  conns,
 		cipher:                 cipher,
 		httpClient:             httpClient,
 		returnToAllowedOrigins: returnToAllowedOrigins,
+		stateHMACKey:           stateHMACKey,
 		revokeURL:              googleRevokeURL,
 	}
 }
@@ -114,7 +121,7 @@ func (h *Handler) connect(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	state := encodeState(random, userID)
+	state := encodeState(random, userID, h.stateHMACKey)
 	http.Redirect(w, r, authCodeURL(h.oauthConfig, state), http.StatusTemporaryRedirect)
 }
 
@@ -131,7 +138,10 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid oauth state")
 		return
 	}
-	random, userID, err := decodeState(state)
+	// Verify BOTH the HMAC signature (proves the state was minted by /connect,
+	// so the recovered userID is trustworthy) AND that the random half matches
+	// the HttpOnly cookie (CSRF, defense in depth).
+	random, userID, err := decodeState(state, h.stateHMACKey)
 	if err != nil || random != cookie.Value {
 		httpresp.Error(w, http.StatusBadRequest, "invalid oauth state")
 		return

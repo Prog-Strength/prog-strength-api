@@ -43,7 +43,7 @@ func newHandler(t *testing.T, conns calendarconn.Repository, tokenURL string) *H
 			TokenURL: tokenURL,
 		}
 	}
-	return NewHandler(cfg, conns, testCipher(t), http.DefaultClient, []string{"https://app.example.com"})
+	return NewHandler(cfg, conns, testCipher(t), http.DefaultClient, []string{"https://app.example.com"}, testHMACKey)
 }
 
 // authedRouter mounts the authed routes behind a middleware that injects the
@@ -106,7 +106,7 @@ func TestConnectRedirectsToGoogle(t *testing.T) {
 	if cookie == nil || cookie.Value == "" {
 		t.Fatal("state cookie not set")
 	}
-	random, userID, err := decodeState(q.Get("state"))
+	random, userID, err := decodeState(q.Get("state"), testHMACKey)
 	if err != nil {
 		t.Fatalf("decode state: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestCallbackStoresEncryptedConnection(t *testing.T) {
 	router := publicRouter(h)
 
 	random := "csrf-random"
-	state := encodeState(random, "user-7")
+	state := encodeState(random, "user-7", testHMACKey)
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/callback?code=auth-code&state="+url.QueryEscape(state), nil)
 	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: random})
 	rec := httptest.NewRecorder()
@@ -198,7 +198,7 @@ func TestCallbackRedirectsToReturnTo(t *testing.T) {
 	router := publicRouter(h)
 
 	random := "csrf-random"
-	state := encodeState(random, "user-9")
+	state := encodeState(random, "user-9", testHMACKey)
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/callback?code=c&state="+url.QueryEscape(state), nil)
 	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: random})
 	req.AddCookie(&http.Cookie{Name: returnToCookieName, Value: "https://app.example.com/settings"})
@@ -222,7 +222,7 @@ func TestCallbackMismatchedState(t *testing.T) {
 	h := newHandler(t, conns, "")
 	router := publicRouter(h)
 
-	state := encodeState("real-random", "user-1")
+	state := encodeState("real-random", "user-1", testHMACKey)
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/callback?code=c&state="+url.QueryEscape(state), nil)
 	// Cookie carries a DIFFERENT random.
 	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: "different-random"})
@@ -237,12 +237,59 @@ func TestCallbackMismatchedState(t *testing.T) {
 	}
 }
 
+// TestCallbackRejectsForgedStateAccountLinking is the regression test for the
+// account-linking CSRF: an attacker who completed a real Google consent for
+// their own account replays the callback with a state that carries the VICTIM's
+// userID and an attacker-chosen random (also set as the matching cookie). The
+// random matches the cookie, so the old code accepted it and stored the
+// attacker's refresh token under the victim. With HMAC-signed state the forged
+// state has no valid signature (the attacker doesn't know the server secret),
+// so the callback must reject it with 400 and write NO connection row.
+func TestCallbackRejectsForgedStateAccountLinking(t *testing.T) {
+	// Token server would hand back the attacker's refresh token if we ever got
+	// far enough to exchange — we must NOT.
+	tokenSrv := newTokenServer(t, map[string]any{
+		"access_token":  "attacker-at",
+		"refresh_token": "attacker-rt",
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+	})
+	defer tokenSrv.Close()
+
+	conns := calendarconn.NewMemoryRepository()
+	h := newHandler(t, conns, tokenSrv.URL)
+	h.httpClient = tokenSrv.Client()
+	router := publicRouter(h)
+
+	const victimUserID = "victim-user"
+	attackerRandom := "attacker-chosen-random"
+
+	// The attacker forges state for the victim, signing with a key they control
+	// (they don't know the server's real stateHMACKey).
+	forgedState := encodeState(attackerRandom, victimUserID, []byte("attacker-key"))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/auth/google/calendar/callback?code=attacker-code&state="+url.QueryEscape(forgedState), nil)
+	// Cookie matches the attacker's random, so the random==cookie check passes;
+	// only the signature stops the attack.
+	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: attackerRandom})
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (forged state must be rejected); body=%s", rec.Code, rec.Body.String())
+	}
+	if ok, _ := conns.Exists(context.Background(), victimUserID); ok {
+		t.Fatal("attacker linked their calendar to the victim: connection row was written")
+	}
+}
+
 func TestCallbackMissingStateCookie(t *testing.T) {
 	conns := calendarconn.NewMemoryRepository()
 	h := newHandler(t, conns, "")
 	router := publicRouter(h)
 
-	state := encodeState("r", "user-1")
+	state := encodeState("r", "user-1", testHMACKey)
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/callback?code=c&state="+url.QueryEscape(state), nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -266,7 +313,7 @@ func TestCallbackNoRefreshToken(t *testing.T) {
 	router := publicRouter(h)
 
 	random := "csrf-random"
-	state := encodeState(random, "user-3")
+	state := encodeState(random, "user-3", testHMACKey)
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/callback?code=c&state="+url.QueryEscape(state), nil)
 	req.AddCookie(&http.Cookie{Name: stateCookieName, Value: random})
 	rec := httptest.NewRecorder()

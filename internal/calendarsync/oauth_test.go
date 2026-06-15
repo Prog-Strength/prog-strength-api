@@ -13,12 +13,15 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// testHMACKey is a fixed key used to sign/verify OAuth state in unit tests.
+var testHMACKey = []byte("test-jwt-signing-key-for-state-hmac")
+
 func TestEncodeDecodeStateRoundTrip(t *testing.T) {
 	random := "rnd-abc123"
 	userID := "user-42"
-	state := encodeState(random, userID)
+	state := encodeState(random, userID, testHMACKey)
 
-	gotRandom, gotUser, err := decodeState(state)
+	gotRandom, gotUser, err := decodeState(state, testHMACKey)
 	if err != nil {
 		t.Fatalf("decodeState: %v", err)
 	}
@@ -32,25 +35,50 @@ func TestEncodeDecodeStateRoundTrip(t *testing.T) {
 
 func TestDecodeStateRejectsMalformed(t *testing.T) {
 	cases := map[string]string{
-		"not base64":     "!!!not-base64!!!",
-		"missing colon":  base64urlNoColon(),
-		"empty userID":   encodeStateRaw("rnd:"),
-		"empty random":   encodeStateRaw(":user"),
-		"both empty":     encodeStateRaw(":"),
-		"completely raw": "",
+		"not base64":        "!!!not-base64!!!",
+		"no separators":     encodeStateRaw("nocolonhere"),
+		"missing signature": encodeStateRaw("rnd:user"),
+		"empty userID":      encodeStateRaw("rnd::sig"),
+		"empty random":      encodeStateRaw(":user:sig"),
+		"empty signature":   encodeStateRaw("rnd:user:"),
+		"all empty":         encodeStateRaw("::"),
+		"completely raw":    "",
 	}
 	for name, state := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := decodeState(state); err == nil {
+			if _, _, err := decodeState(state, testHMACKey); err == nil {
 				t.Errorf("decodeState(%q) = nil err, want error", state)
 			}
 		})
 	}
 }
 
+// TestDecodeStateRejectsTamperedSignature proves a syntactically valid state
+// whose signature doesn't match the key (forged userID, swapped key, or flipped
+// bits) is rejected — the core of the account-linking CSRF fix.
+func TestDecodeStateRejectsTamperedSignature(t *testing.T) {
+	// A well-formed state with a signature computed under a DIFFERENT key, as an
+	// attacker who doesn't know the server secret would have to produce.
+	forged := encodeState("attacker-random", "victim-user", []byte("attacker-guessed-key"))
+	if _, _, err := decodeState(forged, testHMACKey); err == nil {
+		t.Error("decodeState accepted a state signed with the wrong key")
+	}
+
+	// A state with the right key but a userID swapped AFTER signing must also
+	// fail: take a valid (random,userID) pair's signature and graft a different
+	// userID in front of it.
+	validSig := encodeState("r", "real-user", testHMACKey)
+	rawValid, _ := base64.RawURLEncoding.DecodeString(validSig)
+	parts := strings.SplitN(string(rawValid), ":", 3)
+	tampered := encodeStateRaw("r:attacker-user:" + parts[2])
+	if _, _, err := decodeState(tampered, testHMACKey); err == nil {
+		t.Error("decodeState accepted a state whose userID was swapped after signing")
+	}
+}
+
 func TestAuthCodeURLParams(t *testing.T) {
 	cfg := NewCalendarConfig("client-id", "secret", "https://api.example.com/auth/google/calendar/callback")
-	raw := authCodeURL(cfg, encodeState("rnd", "user-1"))
+	raw := authCodeURL(cfg, encodeState("rnd", "user-1", testHMACKey))
 
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -170,8 +198,4 @@ func tokenServerConfig(tokenURL string) *oauth2.Config {
 
 func encodeStateRaw(raw string) string {
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
-}
-
-func base64urlNoColon() string {
-	return encodeStateRaw("nocolonhere")
 }

@@ -1,3 +1,10 @@
+# [0.55.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.54.0...v0.55.0) (2026-06-15)
+
+
+### Features
+
+* **planned-workouts:** auto-reconcile logged sessions with planned workouts ([#36](https://github.com/Prog-Strength/prog-strength-api/issues/36)) ([30a6d2a](https://github.com/Prog-Strength/prog-strength-api/commit/30a6d2a190c0b225972a3abef0d2021bc9047bfd))
+
 # [0.54.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.53.1...v0.54.0) (2026-06-15)
 
 

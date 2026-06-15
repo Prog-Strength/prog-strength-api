@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -45,6 +46,11 @@ type CalendarScheduler interface {
 	Schedule(ctx context.Context, userID, planID, detailOverride string) error
 	Resync(ctx context.Context, userID, planID string) error
 	Delete(ctx context.Context, userID, planID string) error
+	// RewriteCompleted patches the plan's Google event to show actual logged
+	// details plus a "completed" marker. Called from the /complete flow; the
+	// calendarsync.Service already implements it. Best-effort at the call site:
+	// the handler logs a failure but does not fail the request.
+	RewriteCompleted(ctx context.Context, userID, planID, actualText string) error
 }
 
 func NewHandler(repo Repository, userRepo user.Repository) *Handler {
@@ -68,6 +74,7 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
 		r.Post("/{id}/skip", h.skip)
+		r.Post("/{id}/complete", h.complete)
 		r.Post("/{id}/schedule", h.schedule)
 		r.Post("/{id}/resync", h.resync)
 	})
@@ -492,6 +499,93 @@ func (h *Handler) skip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.OK(w, "planned workout skipped", nil)
+}
+
+// completeRequest is the body for POST /{id}/complete: the polymorphic link to
+// the session that fulfilled the plan. Both fields are required.
+type completeRequest struct {
+	SessionID   string `json:"session_id"`
+	SessionKind string `json:"session_kind"`
+}
+
+// complete (POST /{id}/complete) flips a plan to "completed", stores the
+// polymorphic link to the logged session (a workout or an activity), and — when
+// the plan is Google-synced — best-effort rewrites its calendar event to show
+// the actuals plus a completed marker.
+func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		httpresp.Error(w, http.StatusBadRequest, "planned workout id is required")
+		return
+	}
+
+	var req completeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.SessionID == "" || req.SessionKind == "" {
+		httpresp.Error(w, http.StatusBadRequest, "session_id and session_kind are required")
+		return
+	}
+	// Validate the kind here for a clean message; SetCompletion → Validate would
+	// otherwise surface the same as ErrInvalidCompletionLink.
+	kind := SessionKind(req.SessionKind)
+	if kind != SessionKindWorkout && kind != SessionKindActivity {
+		httpresp.Error(w, http.StatusBadRequest, "session_kind must be 'workout' or 'activity'")
+		return
+	}
+
+	// Confirm the plan exists/is owned before mutating, so a bad id is a clean
+	// 404 (and the same for cross-user, which the repo collapses to ErrNotFound).
+	plan, err := h.repo.Get(r.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get planned workout", err)
+		return
+	}
+
+	if err := h.repo.SetCompletion(r.Context(), userID, id, req.SessionID, kind); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
+			return
+		}
+		if isValidationError(err) {
+			httpresp.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "complete planned workout", err)
+		return
+	}
+
+	// If the plan was pushed to Google, rewrite the event to reflect completion.
+	// Best-effort: a Google failure is logged but never fails the request — the
+	// plan is already marked completed in our store. v1 actualText is a concise
+	// marker referencing the linked session; the handler only has the session
+	// id/kind, not the full logged details (see SOW note).
+	if plan.GoogleEventID != nil && *plan.GoogleEventID != "" && h.calendar != nil {
+		actualText := "Completed — logged " + req.SessionKind + " session " + req.SessionID
+		if err := h.calendar.RewriteCompleted(r.Context(), userID, id, actualText); err != nil {
+			log.Printf("complete planned workout: rewrite google event (plan %s): %v", id, err)
+		}
+	}
+
+	// Re-read so the response reflects the completed status, the populated link,
+	// and any sync status the rewrite persisted.
+	updated, err := h.repo.Get(r.Context(), userID, id)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "get planned workout", err)
+		return
+	}
+	httpresp.OK(w, "planned workout completed", toDTO(updated))
 }
 
 // scheduleRequest is the body for POST /{id}/schedule and /{id}/resync. The

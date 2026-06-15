@@ -18,13 +18,17 @@ import (
 // sync status the way the real service would) so the handler's re-read behavior
 // is exercised.
 type fakeScheduler struct {
-	scheduleErr  error
-	resyncErr    error
-	onSchedule   func(userID, planID string)
-	scheduleCall int
-	resyncCall   int
-	deleteCall   int
-	lastDetail   string
+	scheduleErr       error
+	resyncErr         error
+	rewriteErr        error
+	onSchedule        func(userID, planID string)
+	scheduleCall      int
+	resyncCall        int
+	deleteCall        int
+	rewriteCall       int
+	lastDetail        string
+	lastRewritePlanID string
+	lastRewriteActual string
 }
 
 func (f *fakeScheduler) Schedule(ctx context.Context, userID, planID, detailOverride string) error {
@@ -44,6 +48,13 @@ func (f *fakeScheduler) Resync(ctx context.Context, userID, planID string) error
 func (f *fakeScheduler) Delete(ctx context.Context, userID, planID string) error {
 	f.deleteCall++
 	return nil
+}
+
+func (f *fakeScheduler) RewriteCompleted(ctx context.Context, userID, planID, actualText string) error {
+	f.rewriteCall++
+	f.lastRewritePlanID = planID
+	f.lastRewriteActual = actualText
+	return f.rewriteErr
 }
 
 // doCal is like do but wires a CalendarScheduler into the handler.

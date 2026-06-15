@@ -42,6 +42,9 @@ func backfillPlannedWorkoutLinks(ctx context.Context, tx *sql.Tx) error {
 	}
 	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].createdAt.Before(sessions[j].createdAt) })
 
+	// updated_at reflects when this backfill links the plan, mirroring the live
+	// SetCompletion write (which stamps the current time, not the session start).
+	now := time.Now().UTC()
 	for _, s := range sessions {
 		wantKind := "lift"
 		if s.kind == "activity" {
@@ -58,7 +61,7 @@ func backfillPlannedWorkoutLinks(ctx context.Context, tx *sql.Tx) error {
 			UPDATE planned_workouts
 			SET status = 'completed', completed_session_id = ?, completed_session_kind = ?, updated_at = ?
 			WHERE id = ? AND status = 'planned' AND deleted_at IS NULL
-		`, s.id, s.kind, s.startUTC.UTC(), plan.id); err != nil {
+		`, s.id, s.kind, now, plan.id); err != nil {
 			return err
 		}
 	}

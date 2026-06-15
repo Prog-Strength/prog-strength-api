@@ -91,7 +91,7 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 	// than failing an otherwise-valid add.
 	addedBy := h.callerEmail(r)
 
-	if err := h.repo.Add(r.Context(), email, addedBy, req.Note); err != nil {
+	if err = h.repo.Add(r.Context(), email, addedBy, req.Note); err != nil {
 		httpresp.ServerError(w, r.Context(), "add beta email", err)
 		return
 	}

@@ -75,7 +75,7 @@ func TestGate_DecisionFlipsAfterAdd(t *testing.T) {
 	}
 
 	// Admin adds the email at runtime — no handler restart.
-	if err := betaRepo.Add(ctx, target, "admin@example.com", ""); err != nil {
+	if err = betaRepo.Add(ctx, target, "admin@example.com", ""); err != nil {
 		t.Fatalf("Add target: %v", err)
 	}
 

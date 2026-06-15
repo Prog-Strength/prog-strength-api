@@ -155,6 +155,40 @@ func (r *MemoryRepository) SetCompletion(ctx context.Context, userID, planID, se
 	return nil
 }
 
+func (r *MemoryRepository) ClearCompletion(ctx context.Context, userID, planID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.plans[planID]
+	if !ok || existing.UserID != userID || existing.DeletedAt != nil {
+		return ErrNotFound
+	}
+	existing.Status = StatusPlanned
+	existing.CompletedSessionID = nil
+	existing.CompletedSessionKind = nil
+	existing.UpdatedAt = r.nowFunc().UTC()
+	return nil
+}
+
+func (r *MemoryRepository) GetByCompletedSession(ctx context.Context, userID, sessionID string, kind SessionKind) (*PlannedWorkout, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, pw := range r.plans {
+		if pw.UserID != userID || pw.DeletedAt != nil {
+			continue
+		}
+		if pw.CompletedSessionID == nil || *pw.CompletedSessionID != sessionID {
+			continue
+		}
+		if pw.CompletedSessionKind == nil || *pw.CompletedSessionKind != kind {
+			continue
+		}
+		return clonePlan(pw), nil
+	}
+	return nil, ErrNotFound
+}
+
 func (r *MemoryRepository) SetGoogleSync(ctx context.Context, userID, planID string, eventID *string, status GoogleSyncStatus, lastErr *string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

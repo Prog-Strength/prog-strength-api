@@ -47,6 +47,15 @@ type Repository interface {
 	// missing, soft-deleted, or cross-user.
 	SetCompletion(ctx context.Context, userID, id, sessionID string, kind SessionKind) error
 
+	// ClearCompletion reverts a completed plan to "planned" and clears its
+	// completion link. Inverse of SetCompletion. Returns ErrNotFound when the
+	// plan is missing, soft-deleted, or cross-user.
+	ClearCompletion(ctx context.Context, userID, id string) error
+
+	// GetByCompletedSession returns the user's non-deleted plan whose completion
+	// link points at (sessionID, kind), or ErrNotFound when none does.
+	GetByCompletedSession(ctx context.Context, userID, sessionID string, kind SessionKind) (*PlannedWorkout, error)
+
 	// SetGoogleSync records the outcome of a Google Calendar sync attempt:
 	// the (possibly nil) event id, the sync status, and the last error
 	// message (nil on success). Passing a nil eventID clears it. Returns

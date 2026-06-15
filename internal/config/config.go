@@ -112,6 +112,13 @@ type Config struct {
 	// same degradation pattern as the FatSecret pair above.
 	USDAFDCAPIKey string
 
+	// CalendarTokenEncKey is the base64-encoded 32-byte AES-256-GCM key used to
+	// encrypt stored Google refresh tokens, read from CALENDAR_TOKEN_ENC_KEY.
+	// Empty (the default) disables Google Calendar sync entirely — the planned-
+	// workout feature still works without it. Provided via the same secret
+	// delivery as JWT_SIGNING_KEY/GOOGLE_CLIENT_SECRET.
+	CalendarTokenEncKey string
+
 	// LogLevel gates the structured (slog) loggers, read from LOG_LEVEL
 	// ("debug", "info", "warn", "error"; case-insensitive; default
 	// "info"). Currently consumed only by the nutrition lookup logger —
@@ -143,6 +150,7 @@ func Load() (Config, error) {
 		FatSecretClientID:      os.Getenv("FATSECRET_CLIENT_ID"),
 		FatSecretClientSecret:  os.Getenv("FATSECRET_CLIENT_SECRET"),
 		USDAFDCAPIKey:          os.Getenv("USDA_FDC_API_KEY"),
+		CalendarTokenEncKey:    os.Getenv("CALENDAR_TOKEN_ENC_KEY"),
 	}
 
 	level, err := parseLogLevel(os.Getenv("LOG_LEVEL"))

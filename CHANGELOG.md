@@ -1,3 +1,10 @@
+# [0.48.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.47.1...v0.48.0) (2026-06-15)
+
+
+### Features
+
+* **running:** max-effort estimate engine + endpoints ([#28](https://github.com/Prog-Strength/prog-strength-api/issues/28)) ([36057ec](https://github.com/Prog-Strength/prog-strength-api/commit/36057ecd6a2a513d8d6755b2a5b3801ea8e87ba8))
+
 ## [0.47.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.47.0...v0.47.1) (2026-06-12)
 
 

@@ -69,9 +69,7 @@ func backfillPlannedWorkoutLinks(ctx context.Context, tx *sql.Tx) error {
 }
 
 func bfLoadSessions(ctx context.Context, tx *sql.Tx) ([]bfSession, error) {
-	var out []bfSession
-
-	actRows, err := tx.QueryContext(ctx, `
+	acts, err := bfQuerySessions(ctx, tx, "activity", `
 		SELECT a.id, a.user_id, a.start_time, a.created_at
 		FROM activities a
 		WHERE a.activity_type = 'running' AND a.deleted_at IS NULL
@@ -83,22 +81,8 @@ func bfLoadSessions(ctx context.Context, tx *sql.Tx) ([]bfSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	for actRows.Next() {
-		var s bfSession
-		s.kind = "activity"
-		if err := actRows.Scan(&s.id, &s.userID, &s.startUTC, &s.createdAt); err != nil {
-			actRows.Close()
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	if err := actRows.Err(); err != nil {
-		actRows.Close()
-		return nil, err
-	}
-	actRows.Close()
 
-	woRows, err := tx.QueryContext(ctx, `
+	workouts, err := bfQuerySessions(ctx, tx, "workout", `
 		SELECT w.id, w.user_id, w.performed_at, w.created_at
 		FROM workouts w
 		WHERE w.deleted_at IS NULL
@@ -110,22 +94,30 @@ func bfLoadSessions(ctx context.Context, tx *sql.Tx) ([]bfSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	for woRows.Next() {
-		var s bfSession
-		s.kind = "workout"
-		if err := woRows.Scan(&s.id, &s.userID, &s.startUTC, &s.createdAt); err != nil {
-			woRows.Close()
+
+	return append(acts, workouts...), nil
+}
+
+// bfQuerySessions runs one session-loading query and scans every row into a
+// bfSession of the given kind. Each query lives in its own function so the
+// loop's err can't shadow a reused outer err (govet shadow), and Close is
+// deferred (sqlclosecheck); rows.Err() is returned so rowserrcheck is satisfied.
+func bfQuerySessions(ctx context.Context, tx *sql.Tx, kind, query string) ([]bfSession, error) {
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []bfSession
+	for rows.Next() {
+		s := bfSession{kind: kind}
+		if err := rows.Scan(&s.id, &s.userID, &s.startUTC, &s.createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
 	}
-	if err := woRows.Err(); err != nil {
-		woRows.Close()
-		return nil, err
-	}
-	woRows.Close()
-
-	return out, nil
+	return out, rows.Err()
 }
 
 // bfSelectPlan is the FROZEN copy of selectPlan: planned-status plans of the

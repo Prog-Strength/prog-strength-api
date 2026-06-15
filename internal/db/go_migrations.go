@@ -6,6 +6,6 @@ package db
 // in git alongside the schema change that necessitated it.
 func registeredGoMigrations() []goMigration {
 	return []goMigration{
-		// 028 appended in the backfill task.
+		migration028(),
 	}
 }

@@ -2,7 +2,9 @@ package plannedworkout
 
 import (
 	"context"
+	"errors"
 	"log"
+	"time"
 )
 
 // Service owns the single completion code path shared by the HTTP complete
@@ -34,6 +36,43 @@ func (s *Service) LinkCompletion(ctx context.Context, userID, planID, sessionID 
 		}
 	}
 	return s.repo.Get(ctx, userID, planID)
+}
+
+// OnSessionLogged best-effort links a freshly logged session to the planned
+// workout it completes, if any. A no-candidate result is a clean no-op; all
+// failures are logged, never returned (matching must not fail ingest).
+func (s *Service) OnSessionLogged(ctx context.Context, userID, sessionID string, kind SessionKind, sessionStartUTC time.Time) {
+	since := sessionStartUTC.Add(-36 * time.Hour)
+	until := sessionStartUTC.Add(36 * time.Hour)
+	plans, err := s.repo.List(ctx, userID, &since, &until)
+	if err != nil {
+		log.Printf("plan matcher: list candidates (user %s): %v", userID, err)
+		return
+	}
+	match := selectPlan(plans, sessionStartUTC, kind)
+	if match == nil {
+		return
+	}
+	if _, err := s.LinkCompletion(ctx, userID, match.ID, sessionID, kind); err != nil {
+		log.Printf("plan matcher: link completion (plan %s, session %s): %v", match.ID, sessionID, err)
+	}
+}
+
+// OnSessionDeleted reverts the plan (if any) whose completion link points at the
+// deleted session back to planned, clearing the link and re-rendering the Google
+// event. Best-effort; a no-link session is a clean no-op.
+func (s *Service) OnSessionDeleted(ctx context.Context, userID, sessionID string, kind SessionKind) {
+	plan, err := s.repo.GetByCompletedSession(ctx, userID, sessionID, kind)
+	if errors.Is(err, ErrNotFound) {
+		return
+	}
+	if err != nil {
+		log.Printf("plan matcher: reverse lookup (session %s): %v", sessionID, err)
+		return
+	}
+	if _, err := s.Unlink(ctx, userID, plan.ID); err != nil {
+		log.Printf("plan matcher: revert on delete (plan %s): %v", plan.ID, err)
+	}
 }
 
 func (s *Service) Unlink(ctx context.Context, userID, planID string) (*PlannedWorkout, error) {

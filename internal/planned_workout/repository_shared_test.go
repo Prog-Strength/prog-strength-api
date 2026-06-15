@@ -67,6 +67,37 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("CreateRun_RoundTripsRunAgenda", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-22T06:00:00Z"))
+		pw.ActivityKind = ActivityKindRun
+		rt := RunTypeIntervals
+		pw.RunType = &rt
+		pw.RunDetails = ptrStr("4x800m @ 5k pace, 90s jog recovery")
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		got, err := repo.Get(ctx, "u1", pw.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.ActivityKind != ActivityKindRun {
+			t.Errorf("activity_kind = %q, want run", got.ActivityKind)
+		}
+		if got.RunType == nil || *got.RunType != RunTypeIntervals {
+			t.Errorf("run_type = %v, want intervals", got.RunType)
+		}
+		if got.RunDetails == nil || *got.RunDetails != "4x800m @ 5k pace, 90s jog recovery" {
+			t.Errorf("run_details = %v, want the interval text", got.RunDetails)
+		}
+		if len(got.Exercises) != 0 {
+			t.Errorf("run carried exercises: %+v", got.Exercises)
+		}
+	})
+
 	t.Run("CreateWithAgenda_HydratesInOrder", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()

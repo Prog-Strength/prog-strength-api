@@ -106,6 +106,9 @@ type planDTO struct {
 	GoogleSyncStatus *string `json:"google_sync_status"`
 	LastSyncError    *string `json:"last_sync_error"`
 
+	RunType    *string `json:"run_type"`
+	RunDetails *string `json:"run_details"`
+
 	Exercises []exerciseDTO `json:"exercises"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -142,9 +145,14 @@ func toDTO(pw *PlannedWorkout) planDTO {
 		CompletedSessionID: pw.CompletedSessionID,
 		GoogleEventID:      pw.GoogleEventID,
 		LastSyncError:      pw.LastSyncError,
+		RunDetails:         pw.RunDetails,
 		Exercises:          make([]exerciseDTO, 0, len(pw.Exercises)),
 		CreatedAt:          pw.CreatedAt,
 		UpdatedAt:          pw.UpdatedAt,
+	}
+	if pw.RunType != nil {
+		rt := string(*pw.RunType)
+		dto.RunType = &rt
 	}
 	if pw.CompletedSessionKind != nil {
 		k := string(*pw.CompletedSessionKind)
@@ -180,12 +188,17 @@ func toDTO(pw *PlannedWorkout) planDTO {
 // require them (nil → 400) while update treats nil as "unchanged".
 type planRequest struct {
 	Name           *string        `json:"name"`
+	ActivityKind   *string        `json:"activity_kind"`
 	ScheduledStart *string        `json:"scheduled_start"`
 	ScheduledEnd   *string        `json:"scheduled_end"`
 	Timezone       *string        `json:"timezone"`
 	Notes          *string        `json:"notes"`
 	CalendarDetail *string        `json:"calendar_detail"`
 	Exercises      *[]exerciseReq `json:"exercises"`
+	// RunType / RunDetails are the run agenda, set only when activity_kind is
+	// "run". RunType is one of easy/threshold/intervals; RunDetails is free text.
+	RunType    *string `json:"run_type"`
+	RunDetails *string `json:"run_details"`
 	// CalendarSync, when true, also pushes the plan to Google Calendar after a
 	// successful DB write. It is the "sync now" toggle, distinct from
 	// calendar_detail (which controls how much agenda the event carries). The
@@ -271,16 +284,26 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		timezone = u.Timezone
 	}
 
+	// activity_kind defaults to "lift" for back-compat with clients that
+	// predate the run kind. Validation rejects unknown values and enforces
+	// that the agenda matches the kind.
+	kind := ActivityKindLift
+	if req.ActivityKind != nil && *req.ActivityKind != "" {
+		kind = ActivityKind(*req.ActivityKind)
+	}
+
 	pw := &PlannedWorkout{
 		UserID:            userID,
 		Name:              req.Name,
-		ActivityKind:      ActivityKindLift,
+		ActivityKind:      kind,
 		ScheduledStartUTC: start.UTC(),
 		ScheduledEndUTC:   end.UTC(),
 		Timezone:          timezone,
 		Status:            StatusPlanned,
 		Notes:             req.Notes,
 		CalendarDetail:    toCalendarDetail(req.CalendarDetail),
+		RunType:           toRunType(req.RunType),
+		RunDetails:        req.RunDetails,
 	}
 	if req.Exercises != nil {
 		pw.Exercises = buildExercises(*req.Exercises)
@@ -385,6 +408,25 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	updated := *existing
 	if req.Name != nil {
 		updated.Name = req.Name
+	}
+	// Changing the activity kind drops the opposing agenda so the result stays
+	// coherent (a lift has no run fields; a run has no exercises). The relevant
+	// agenda is then overlaid from the request below.
+	if req.ActivityKind != nil && *req.ActivityKind != "" {
+		updated.ActivityKind = ActivityKind(*req.ActivityKind)
+		switch updated.ActivityKind {
+		case ActivityKindLift:
+			updated.RunType = nil
+			updated.RunDetails = nil
+		case ActivityKindRun:
+			updated.Exercises = nil
+		}
+	}
+	if req.RunType != nil {
+		updated.RunType = toRunType(req.RunType)
+	}
+	if req.RunDetails != nil {
+		updated.RunDetails = req.RunDetails
 	}
 	if req.Notes != nil {
 		updated.Notes = req.Notes
@@ -694,6 +736,14 @@ func toCalendarDetail(s *string) *CalendarDetail {
 	}
 	d := CalendarDetail(*s)
 	return &d
+}
+
+func toRunType(s *string) *RunType {
+	if s == nil || *s == "" {
+		return nil
+	}
+	rt := RunType(*s)
+	return &rt
 }
 
 func parseSinceUntil(r *http.Request) (*time.Time, *time.Time, error) {

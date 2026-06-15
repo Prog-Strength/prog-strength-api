@@ -91,6 +91,59 @@ func TestRenderEvent_UnnamedPlan(t *testing.T) {
 	}
 }
 
+func sampleRunPlan() *plannedworkout.PlannedWorkout {
+	rt := plannedworkout.RunTypeIntervals
+	return &plannedworkout.PlannedWorkout{
+		ID:                "run-1",
+		UserID:            "user-1",
+		ActivityKind:      plannedworkout.ActivityKindRun,
+		ScheduledStartUTC: time.Date(2026, 6, 20, 6, 0, 0, 0, time.UTC),
+		ScheduledEndUTC:   time.Date(2026, 6, 20, 7, 0, 0, 0, time.UTC),
+		Timezone:          "America/New_York",
+		RunType:           &rt,
+		RunDetails:        strPtr("4x800m @ 5k pace, 90s jog recovery"),
+	}
+}
+
+func TestRenderEvent_RunFullAgenda(t *testing.T) {
+	ev := RenderEvent(sampleRunPlan(), DetailFullAgenda, "")
+
+	if !strings.Contains(ev.Description, "Interval run") {
+		t.Errorf("expected run-type heading, got: %q", ev.Description)
+	}
+	if !strings.Contains(ev.Description, "4x800m @ 5k pace") {
+		t.Errorf("expected run details, got: %q", ev.Description)
+	}
+	// A run must never render an exercise agenda.
+	if strings.Contains(ev.Description, "Bench Press") {
+		t.Errorf("run rendered a lift agenda, got: %q", ev.Description)
+	}
+}
+
+func TestRenderEvent_RunTimeBlockOmitsDetails(t *testing.T) {
+	ev := RenderEvent(sampleRunPlan(), DetailTimeBlock, "")
+	if strings.Contains(ev.Description, "4x800m") {
+		t.Errorf("time_block should not include run details, got: %q", ev.Description)
+	}
+	if !strings.Contains(ev.Description, "Reserved") {
+		t.Errorf("expected reserved-slot note, got: %q", ev.Description)
+	}
+}
+
+func TestSummaryFor_UnnamedDefaultsToKind(t *testing.T) {
+	run := sampleRunPlan() // unnamed run
+	if ev := RenderEvent(run, DetailTimeBlock, ""); ev.Summary != "Run" {
+		t.Errorf("unnamed run summary = %q, want Run", ev.Summary)
+	}
+
+	lift := samplePlan()
+	lift.Name = nil
+	lift.ActivityKind = plannedworkout.ActivityKindLift
+	if ev := RenderEvent(lift, DetailTimeBlock, ""); ev.Summary != "Lift" {
+		t.Errorf("unnamed lift summary = %q, want Lift", ev.Summary)
+	}
+}
+
 func TestRenderCompletedEvent(t *testing.T) {
 	ev := RenderCompletedEvent(samplePlan(), "Bench Press 3x5 @ 140 lb", DetailFullAgenda, "")
 	if !strings.HasPrefix(ev.Summary, "✓ Completed") {

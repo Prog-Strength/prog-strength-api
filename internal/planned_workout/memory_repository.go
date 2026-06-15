@@ -194,6 +194,11 @@ func clonePlan(src *PlannedWorkout) *PlannedWorkout {
 	dst.CompletedSessionID = clonePtrStr(src.CompletedSessionID)
 	dst.LastSyncError = clonePtrStr(src.LastSyncError)
 	dst.GoogleEventID = clonePtrStr(src.GoogleEventID)
+	dst.RunDetails = clonePtrStr(src.RunDetails)
+	if src.RunType != nil {
+		rt := *src.RunType
+		dst.RunType = &rt
+	}
 	if src.CompletedSessionKind != nil {
 		k := *src.CompletedSessionKind
 		dst.CompletedSessionKind = &k

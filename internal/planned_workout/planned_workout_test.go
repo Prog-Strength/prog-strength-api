@@ -41,10 +41,59 @@ func TestValidate_UserRequired(t *testing.T) {
 }
 
 func TestValidate_ActivityKind(t *testing.T) {
+	// "lift" and "run" are both valid kinds.
+	for _, kind := range []ActivityKind{ActivityKindLift, ActivityKindRun} {
+		pw := validPlan()
+		pw.ActivityKind = kind
+		// validPlan() has no agenda, so this is a bare plan, valid for either kind.
+		if err := pw.Validate(); err != nil {
+			t.Errorf("kind %q: want nil, got %v", kind, err)
+		}
+	}
+	// An unknown kind is rejected.
 	pw := validPlan()
-	pw.ActivityKind = "run"
+	pw.ActivityKind = "mobility"
 	if err := pw.Validate(); !errors.Is(err, ErrInvalidActivityKind) {
 		t.Errorf("want ErrInvalidActivityKind, got %v", err)
+	}
+}
+
+func TestValidate_RunAgenda(t *testing.T) {
+	easy := RunTypeEasy
+	details := "4x800m @ 5k pace"
+
+	// A run with a valid type + details is fine.
+	pw := validPlan()
+	pw.ActivityKind = ActivityKindRun
+	pw.RunType = &easy
+	pw.RunDetails = &details
+	if err := pw.Validate(); err != nil {
+		t.Errorf("valid run: want nil, got %v", err)
+	}
+
+	// A run can't carry exercises (that's a lift's agenda).
+	pw = validPlan()
+	pw.ActivityKind = ActivityKindRun
+	pw.Exercises = []PlannedExercise{{ExerciseID: "bench"}}
+	if err := pw.Validate(); !errors.Is(err, ErrAgendaKindMismatch) {
+		t.Errorf("run with exercises: want ErrAgendaKindMismatch, got %v", err)
+	}
+
+	// A lift can't carry run fields.
+	pw = validPlan()
+	pw.ActivityKind = ActivityKindLift
+	pw.RunDetails = &details
+	if err := pw.Validate(); !errors.Is(err, ErrAgendaKindMismatch) {
+		t.Errorf("lift with run details: want ErrAgendaKindMismatch, got %v", err)
+	}
+
+	// An unknown run type is rejected.
+	pw = validPlan()
+	pw.ActivityKind = ActivityKindRun
+	bad := RunType("sprint")
+	pw.RunType = &bad
+	if err := pw.Validate(); !errors.Is(err, ErrInvalidRunType) {
+		t.Errorf("bad run type: want ErrInvalidRunType, got %v", err)
 	}
 }
 

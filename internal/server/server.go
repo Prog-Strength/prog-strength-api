@@ -21,6 +21,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
+	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
@@ -132,6 +133,7 @@ func New(cfg config.Config) (*Server, error) {
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
+	var plannedWorkoutRepo plannedworkout.Repository
 	var stepsRepo steps.Repository
 	var chatRepo chat.Repository
 	var activityRepo activity.Repository
@@ -173,6 +175,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewSQLiteRepository(database)
 		nutritionRepo = nutrition.NewSQLiteRepository(database)
 		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
+		plannedWorkoutRepo = plannedworkout.NewSQLiteRepository(database)
 		stepsRepo = steps.NewSQLiteRepository(database)
 		chatRepo = chat.NewSQLiteRepository(database)
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
@@ -249,6 +252,7 @@ func New(cfg config.Config) (*Server, error) {
 		userRepo = user.NewMemoryRepository()
 		nutritionRepo = nutrition.NewMemoryRepository()
 		bodyweightRepo = bodyweight.NewMemoryRepository()
+		plannedWorkoutRepo = plannedworkout.NewMemoryRepository()
 		stepsRepo = steps.NewMemoryRepository()
 		chatRepo = chat.NewMemoryRepository()
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
@@ -329,6 +333,11 @@ func New(cfg config.Config) (*Server, error) {
 		// router group. Needs the user repository to default unit
 		// from the user's preferred WeightUnit when omitted.
 		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
+		// Planned workouts — forward-looking scheduled training entries with
+		// an optional lift agenda and (in later phases) Google Calendar sync.
+		// Shares the JWT-gated group; needs the user repository to default a
+		// plan's timezone from the user's Timezone when omitted.
+		plannedworkout.NewHandler(plannedWorkoutRepo, userRepo).Mount(r)
 		// Steps lives in its own package — daily totals upserted by
 		// calendar date, unitless and hard-deleted — and shares the same
 		// JWT-gated router group. No user repository needed since there's

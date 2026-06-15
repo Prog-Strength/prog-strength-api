@@ -1,4 +1,4 @@
--- migrations/019_timeline.sql
+-- migrations/020_timeline.sql
 -- The Timeline feed index and its interaction tables.
 --
 -- The feed is a hybrid feed-index: rather than copying workout/run/PR

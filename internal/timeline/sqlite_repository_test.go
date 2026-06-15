@@ -290,7 +290,7 @@ func assertReactionStacking(t *testing.T, repo Repository, ctx context.Context) 
 	if err != nil {
 		t.Fatalf("AddReaction strong: %v", err)
 	}
-	if _, err := repo.AddReaction(ctx, post.ID, "u2", ReactionFire); err != nil {
+	if _, err = repo.AddReaction(ctx, post.ID, "u2", ReactionFire); err != nil {
 		t.Fatalf("AddReaction fire: %v", err)
 	}
 
@@ -316,11 +316,11 @@ func assertReactionStacking(t *testing.T, repo Repository, ctx context.Context) 
 	}
 
 	// Toggle off 'strong'; 'fire' remains.
-	if err := repo.RemoveReaction(ctx, post.ID, "u2", ReactionStrong); err != nil {
+	if err = repo.RemoveReaction(ctx, post.ID, "u2", ReactionStrong); err != nil {
 		t.Fatalf("RemoveReaction strong: %v", err)
 	}
 	// Removing the now-absent 'strong' again is not an error.
-	if err := repo.RemoveReaction(ctx, post.ID, "u2", ReactionStrong); err != nil {
+	if err = repo.RemoveReaction(ctx, post.ID, "u2", ReactionStrong); err != nil {
 		t.Fatalf("idempotent RemoveReaction: %v", err)
 	}
 	sum, err = repo.ReactionSummaries(ctx, []string{post.ID}, "u2")
@@ -354,11 +354,11 @@ func assertSoftDeleteExclusion(t *testing.T, repo Repository, ctx context.Contex
 		t.Fatalf("AddComment gone: %v", err)
 	}
 
-	if err := repo.DeleteComment(ctx, gone.ID); err != nil {
+	if err = repo.DeleteComment(ctx, gone.ID); err != nil {
 		t.Fatalf("DeleteComment: %v", err)
 	}
 	// Double-delete is ErrNotFound (no live comment).
-	if err := repo.DeleteComment(ctx, gone.ID); !errors.Is(err, ErrNotFound) {
+	if err = repo.DeleteComment(ctx, gone.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("double delete: want ErrNotFound, got %v", err)
 	}
 

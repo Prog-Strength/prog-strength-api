@@ -30,7 +30,7 @@ func TestBackfillTimeline(t *testing.T) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	t.Cleanup(func() { database.Close() })
-	if err := db.Migrate(database); err != nil {
+	if err = db.Migrate(database); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestBackfillTimeline(t *testing.T) {
 
 	repo := timeline.NewSQLiteRepository(database)
 
-	if err := backfillTimeline(ctx, database, repo); err != nil {
+	if err = backfillTimeline(ctx, database, repo); err != nil {
 		t.Fatalf("backfillTimeline: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func TestBackfillTimeline(t *testing.T) {
 
 	// Idempotent re-run: gated on timeline_post being non-empty, so it's a
 	// no-op and post count is unchanged.
-	if err := backfillTimeline(ctx, database, repo); err != nil {
+	if err = backfillTimeline(ctx, database, repo); err != nil {
 		t.Fatalf("backfillTimeline (re-run): %v", err)
 	}
 	posts2, _, err := repo.ListFeed(ctx, "u1", 100, nil)

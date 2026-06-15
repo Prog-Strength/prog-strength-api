@@ -101,16 +101,16 @@ func TestMemory_CascadeOnPostDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsurePost: %v", err)
 	}
-	if _, err := repo.AddComment(ctx, post.ID, "u2", "nice work"); err != nil {
+	if _, err = repo.AddComment(ctx, post.ID, "u2", "nice work"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
-	if _, err := repo.AddReaction(ctx, post.ID, "u2", ReactionFire); err != nil {
+	if _, err = repo.AddReaction(ctx, post.ID, "u2", ReactionFire); err != nil {
 		t.Fatalf("AddReaction: %v", err)
 	}
 
 	repo.deletePost(post.ID)
 
-	if _, err := repo.GetPost(ctx, post.ID); !errors.Is(err, ErrNotFound) {
+	if _, err = repo.GetPost(ctx, post.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("post should be gone: %v", err)
 	}
 	live, err := repo.ListComments(ctx, post.ID)
@@ -141,7 +141,7 @@ func TestMemory_DefensiveCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsurePost: %v", err)
 	}
-	if _, err := repo.AddComment(ctx, post.ID, "u2", "original"); err != nil {
+	if _, err = repo.AddComment(ctx, post.ID, "u2", "original"); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	got, err := repo.ListComments(ctx, post.ID)

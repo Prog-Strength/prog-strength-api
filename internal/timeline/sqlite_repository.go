@@ -283,7 +283,7 @@ func (r *SQLiteRepository) ReactionSummaries(ctx context.Context, postIDs []stri
 	for countRows.Next() {
 		var postID, typ string
 		var count int
-		if err := countRows.Scan(&postID, &typ, &count); err != nil {
+		if err = countRows.Scan(&postID, &typ, &count); err != nil {
 			return nil, err
 		}
 		s, ok := out[postID]
@@ -293,7 +293,7 @@ func (r *SQLiteRepository) ReactionSummaries(ctx context.Context, postIDs []stri
 		s.Counts[ReactionType(typ)] = count
 		out[postID] = s
 	}
-	if err := countRows.Err(); err != nil {
+	if err = countRows.Err(); err != nil {
 		return nil, err
 	}
 

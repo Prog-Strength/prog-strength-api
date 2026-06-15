@@ -1,3 +1,10 @@
+# [0.54.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.53.1...v0.54.0) (2026-06-15)
+
+
+### Features
+
+* **planned-workouts:** support run activity kind alongside lift ([#35](https://github.com/Prog-Strength/prog-strength-api/issues/35)) ([dc65c8a](https://github.com/Prog-Strength/prog-strength-api/commit/dc65c8a851b8a77d3b743e0510150d0d773e95a4))
+
 ## [0.53.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.53.0...v0.53.1) (2026-06-15)
 
 

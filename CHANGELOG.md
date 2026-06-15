@@ -1,3 +1,10 @@
+# [0.49.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.48.0...v0.49.0) (2026-06-15)
+
+
+### Features
+
+* **steps:** daily steps domain, upsert-by-date endpoints + goal ([#29](https://github.com/Prog-Strength/prog-strength-api/issues/29)) ([5e31c28](https://github.com/Prog-Strength/prog-strength-api/commit/5e31c28cc5e1e3628819bf91d7e4dda6a8b11616))
+
 # [0.48.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.47.1...v0.48.0) (2026-06-15)
 
 

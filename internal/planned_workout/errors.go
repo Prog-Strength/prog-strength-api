@@ -13,9 +13,17 @@ var (
 	// NOT NULL as well; the handler-side validation gives a clean 400.
 	ErrUserRequired = errors.New("plannedworkout: user_id is required")
 
-	// ErrInvalidActivityKind is returned when activity_kind isn't "lift".
-	// The schema CHECK enforces the same set; surface as 400, not 500.
-	ErrInvalidActivityKind = errors.New("plannedworkout: activity_kind must be 'lift'")
+	// ErrInvalidActivityKind is returned when activity_kind isn't "lift" or
+	// "run". The schema CHECK enforces the same set; surface as 400, not 500.
+	ErrInvalidActivityKind = errors.New("plannedworkout: activity_kind must be 'lift' or 'run'")
+
+	// ErrAgendaKindMismatch is returned when the agenda doesn't match the
+	// activity kind: a lift carrying run fields, or a run carrying exercises.
+	ErrAgendaKindMismatch = errors.New("plannedworkout: agenda does not match activity_kind")
+
+	// ErrInvalidRunType is returned when run_type is set but isn't one of
+	// easy/threshold/intervals.
+	ErrInvalidRunType = errors.New("plannedworkout: run_type must be 'easy', 'threshold', or 'intervals'")
 
 	// ErrInvalidWindow is returned when either scheduled boundary is the
 	// zero time or end is not strictly after start.
@@ -72,6 +80,8 @@ func isValidationError(err error) bool {
 	switch {
 	case errors.Is(err, ErrUserRequired),
 		errors.Is(err, ErrInvalidActivityKind),
+		errors.Is(err, ErrAgendaKindMismatch),
+		errors.Is(err, ErrInvalidRunType),
 		errors.Is(err, ErrInvalidWindow),
 		errors.Is(err, ErrInvalidTimezone),
 		errors.Is(err, ErrInvalidStatus),

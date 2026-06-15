@@ -149,6 +149,75 @@ func TestCreateHandler_WithAgenda(t *testing.T) {
 	}
 }
 
+func TestCreateHandler_Run(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{
+		"activity_kind":"run",
+		"scheduled_start":"2026-07-01T06:00:00Z",
+		"scheduled_end":"2026-07-01T07:00:00Z",
+		"timezone":"UTC",
+		"run_type":"intervals",
+		"run_details":"4x800m @ 5k pace, 90s jog recovery"
+	}`
+	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
+	created := decodePlan(t, w, http.StatusCreated)
+	if created.ActivityKind != "run" {
+		t.Errorf("activity_kind = %q, want run", created.ActivityKind)
+	}
+
+	g := do(t, repo, nil, "u1", "GET", "/planned-workouts/"+created.ID, "")
+	got := decodePlan(t, g, http.StatusOK)
+	if got.RunType == nil || *got.RunType != "intervals" {
+		t.Errorf("run_type = %v, want intervals", got.RunType)
+	}
+	if got.RunDetails == nil || *got.RunDetails != "4x800m @ 5k pace, 90s jog recovery" {
+		t.Errorf("run_details = %v", got.RunDetails)
+	}
+	if len(got.Exercises) != 0 {
+		t.Errorf("run carried exercises: %+v", got.Exercises)
+	}
+}
+
+func TestCreateHandler_RunWithExercisesIs400(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{
+		"activity_kind":"run",
+		"scheduled_start":"2026-07-01T06:00:00Z",
+		"scheduled_end":"2026-07-01T07:00:00Z",
+		"timezone":"UTC",
+		"exercises":[{"exercise_id":"squat","sets":[]}]
+	}`
+	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (run can't carry exercises)", w.Code)
+	}
+}
+
+func TestUpdateHandler_SwitchLiftToRunClearsAgenda(t *testing.T) {
+	repo := NewMemoryRepository()
+	// Start as a lift with an agenda.
+	create := `{
+		"scheduled_start":"2026-07-01T09:00:00Z",
+		"scheduled_end":"2026-07-01T10:00:00Z",
+		"timezone":"UTC",
+		"exercises":[{"exercise_id":"squat","sets":[{"target_reps":5}]}]
+	}`
+	created := decodePlan(t, do(t, repo, nil, "u1", "POST", "/planned-workouts/", create), http.StatusCreated)
+
+	// Switch it to a run; the server drops the lift agenda so the result is coherent.
+	upd := `{"activity_kind":"run","run_type":"easy","run_details":"conversational 5 miles"}`
+	updated := decodePlan(t, do(t, repo, nil, "u1", "PUT", "/planned-workouts/"+created.ID, upd), http.StatusOK)
+	if updated.ActivityKind != "run" {
+		t.Errorf("activity_kind = %q, want run", updated.ActivityKind)
+	}
+	if len(updated.Exercises) != 0 {
+		t.Errorf("expected lift agenda cleared on switch, got: %+v", updated.Exercises)
+	}
+	if updated.RunType == nil || *updated.RunType != "easy" {
+		t.Errorf("run_type = %v, want easy", updated.RunType)
+	}
+}
+
 func TestCreateHandler_DefaultsTimezoneFromUser(t *testing.T) {
 	repo := NewMemoryRepository()
 	userRepo := user.NewMemoryRepository()

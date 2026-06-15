@@ -19,7 +19,7 @@ const planColumns = `
 	id, user_id, name, activity_kind, scheduled_start_utc, scheduled_end_utc,
 	timezone, status, notes, completed_session_id, completed_session_kind,
 	calendar_detail, google_event_id, google_sync_status, last_sync_error,
-	created_at, updated_at, deleted_at`
+	run_type, run_details, created_at, updated_at, deleted_at`
 
 type SQLiteRepository struct {
 	db  *sql.DB
@@ -58,14 +58,14 @@ func (r *SQLiteRepository) Create(ctx context.Context, pw *PlannedWorkout) error
 			id, user_id, name, activity_kind, scheduled_start_utc, scheduled_end_utc,
 			timezone, status, notes, completed_session_id, completed_session_kind,
 			calendar_detail, google_event_id, google_sync_status, last_sync_error,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			run_type, run_details, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		pw.ID, pw.UserID, pw.Name, string(pw.ActivityKind),
 		pw.ScheduledStartUTC, pw.ScheduledEndUTC, pw.Timezone, string(pw.Status),
 		pw.Notes, pw.CompletedSessionID, kindStr(pw.CompletedSessionKind),
 		detailStr(pw.CalendarDetail), pw.GoogleEventID, syncStr(pw.GoogleSyncStatus),
-		pw.LastSyncError, pw.CreatedAt, pw.UpdatedAt,
+		pw.LastSyncError, runTypeStr(pw.RunType), pw.RunDetails, pw.CreatedAt, pw.UpdatedAt,
 	); err != nil {
 		return err
 	}
@@ -162,13 +162,15 @@ func (r *SQLiteRepository) Update(ctx context.Context, pw *PlannedWorkout) error
 			name = ?, activity_kind = ?, scheduled_start_utc = ?, scheduled_end_utc = ?,
 			timezone = ?, status = ?, notes = ?, completed_session_id = ?,
 			completed_session_kind = ?, calendar_detail = ?, google_event_id = ?,
-			google_sync_status = ?, last_sync_error = ?, updated_at = ?
+			google_sync_status = ?, last_sync_error = ?, run_type = ?, run_details = ?,
+			updated_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`,
 		pw.Name, string(pw.ActivityKind), pw.ScheduledStartUTC, pw.ScheduledEndUTC,
 		pw.Timezone, string(pw.Status), pw.Notes, pw.CompletedSessionID,
 		kindStr(pw.CompletedSessionKind), detailStr(pw.CalendarDetail), pw.GoogleEventID,
-		syncStr(pw.GoogleSyncStatus), pw.LastSyncError, now,
+		syncStr(pw.GoogleSyncStatus), pw.LastSyncError, runTypeStr(pw.RunType), pw.RunDetails,
+		now,
 		pw.ID, pw.UserID,
 	)
 	if err != nil {
@@ -383,12 +385,15 @@ func scanPlan(s scanner) (*PlannedWorkout, error) {
 		eventID      sql.NullString
 		syncStatus   sql.NullString
 		lastErr      sql.NullString
+		runType      sql.NullString
+		runDetails   sql.NullString
 		deletedAt    sql.NullTime
 	)
 	if err := s.Scan(
 		&pw.ID, &pw.UserID, &name, &activityKind, &pw.ScheduledStartUTC, &pw.ScheduledEndUTC,
 		&pw.Timezone, &status, &notes, &completedID, &completedK,
 		&detail, &eventID, &syncStatus, &lastErr,
+		&runType, &runDetails,
 		&pw.CreatedAt, &pw.UpdatedAt, &deletedAt,
 	); err != nil {
 		return nil, err
@@ -421,6 +426,13 @@ func scanPlan(s scanner) (*PlannedWorkout, error) {
 	}
 	if lastErr.Valid {
 		pw.LastSyncError = &lastErr.String
+	}
+	if runType.Valid {
+		rt := RunType(runType.String)
+		pw.RunType = &rt
+	}
+	if runDetails.Valid {
+		pw.RunDetails = &runDetails.String
 	}
 	if deletedAt.Valid {
 		t := deletedAt.Time
@@ -466,4 +478,11 @@ func syncStr(s *GoogleSyncStatus) any {
 		return nil
 	}
 	return string(*s)
+}
+
+func runTypeStr(rt *RunType) any {
+	if rt == nil {
+		return nil
+	}
+	return string(*rt)
 }

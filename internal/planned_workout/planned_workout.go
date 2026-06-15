@@ -21,12 +21,26 @@ const (
 	StatusSkipped   Status = "skipped"
 )
 
-// ActivityKind is the kind of training the plan represents. Only "lift" is
-// supported today; the column exists so future kinds (run, mobility, …) can
-// be added without a schema migration.
+// ActivityKind is the kind of training the plan represents. A "lift" carries
+// an exercise agenda (Exercises); a "run" carries a RunType + free-text
+// RunDetails. Both kinds' details are optional, so either can be a bare
+// time block.
 type ActivityKind string
 
-const ActivityKindLift ActivityKind = "lift"
+const (
+	ActivityKindLift ActivityKind = "lift"
+	ActivityKindRun  ActivityKind = "run"
+)
+
+// RunType is the kind of run a planned run represents. Optional — a run plan
+// can omit it and just block time (or describe everything in RunDetails).
+type RunType string
+
+const (
+	RunTypeEasy      RunType = "easy"
+	RunTypeThreshold RunType = "threshold"
+	RunTypeIntervals RunType = "intervals"
+)
 
 // SessionKind distinguishes the two session tables a completed plan can
 // point at: a strength workout or a cardio/other activity.
@@ -104,6 +118,10 @@ type PlannedWorkout struct {
 	GoogleSyncStatus *GoogleSyncStatus
 	LastSyncError    *string
 
+	// Run agenda. Set only for ActivityKindRun; nil/empty for lifts.
+	RunType    *RunType
+	RunDetails *string
+
 	Exercises []PlannedExercise
 
 	CreatedAt time.Time
@@ -120,8 +138,30 @@ func (pw *PlannedWorkout) Validate() error {
 	if pw.UserID == "" {
 		return ErrUserRequired
 	}
-	if pw.ActivityKind != ActivityKindLift {
+	switch pw.ActivityKind {
+	case ActivityKindLift, ActivityKindRun:
+	default:
 		return ErrInvalidActivityKind
+	}
+	// Agenda must match the kind: a lift carries exercises (not run fields),
+	// a run carries run_type/run_details (not exercises). Both are optional,
+	// so the empty case is valid for either kind.
+	if pw.ActivityKind == ActivityKindLift {
+		if pw.RunType != nil || pw.RunDetails != nil {
+			return ErrAgendaKindMismatch
+		}
+	}
+	if pw.ActivityKind == ActivityKindRun {
+		if len(pw.Exercises) > 0 {
+			return ErrAgendaKindMismatch
+		}
+		if pw.RunType != nil {
+			switch *pw.RunType {
+			case RunTypeEasy, RunTypeThreshold, RunTypeIntervals:
+			default:
+				return ErrInvalidRunType
+			}
+		}
 	}
 	if pw.ScheduledStartUTC.IsZero() || pw.ScheduledEndUTC.IsZero() ||
 		!pw.ScheduledEndUTC.After(pw.ScheduledStartUTC) {

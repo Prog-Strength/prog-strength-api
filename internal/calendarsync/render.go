@@ -54,11 +54,21 @@ func parseDetail(s string) (CalendarDetail, bool) {
 	}
 }
 
-// summaryFor returns the event summary for a plan: its name, or the default
-// when unnamed/blank.
+// summaryFor returns the event summary for a plan: its name, or — when
+// unnamed — a label derived from the activity kind ("Run" / "Lift") so two
+// same-day events read distinctly on the calendar. Falls back to the generic
+// default for an unknown kind.
 func summaryFor(plan *plannedworkout.PlannedWorkout) string {
 	if plan != nil && plan.Name != nil && strings.TrimSpace(*plan.Name) != "" {
 		return *plan.Name
+	}
+	if plan != nil {
+		switch plan.ActivityKind {
+		case plannedworkout.ActivityKindRun:
+			return "Run"
+		case plannedworkout.ActivityKindLift:
+			return "Lift"
+		}
 	}
 	return defaultSummary
 }
@@ -76,8 +86,8 @@ func RenderEvent(plan *plannedworkout.PlannedWorkout, detail CalendarDetail, app
 	}
 
 	var b strings.Builder
-	if detail == DetailFullAgenda && len(plan.Exercises) > 0 {
-		b.WriteString(renderAgenda(plan.Exercises))
+	if agenda := agendaBody(plan, detail); agenda != "" {
+		b.WriteString(agenda)
 	} else {
 		b.WriteString("Reserved training slot.")
 	}
@@ -112,6 +122,55 @@ func RenderCompletedEvent(plan *plannedworkout.PlannedWorkout, actualText string
 	}
 	ev.Description = b.String()
 	return ev
+}
+
+// agendaBody returns the full-agenda body text for a plan, dispatching on the
+// activity kind: a lift renders its exercise agenda, a run renders its run
+// type + details. Returns "" when the detail level isn't full_agenda or the
+// plan carries no agenda — the caller then falls back to the time-block copy.
+func agendaBody(plan *plannedworkout.PlannedWorkout, detail CalendarDetail) string {
+	if detail != DetailFullAgenda {
+		return ""
+	}
+	if plan.ActivityKind == plannedworkout.ActivityKindRun {
+		return renderRunAgenda(plan)
+	}
+	if len(plan.Exercises) > 0 {
+		return renderAgenda(plan.Exercises)
+	}
+	return ""
+}
+
+// renderRunAgenda renders a run plan's type + free-text details, e.g.:
+//
+//	Threshold run
+//	4x800m @ 5k pace, 90s jog recovery
+//
+// Either piece may be absent; returns "" when both are.
+func renderRunAgenda(plan *plannedworkout.PlannedWorkout) string {
+	var parts []string
+	if plan.RunType != nil && *plan.RunType != "" {
+		parts = append(parts, runTypeLabel(*plan.RunType))
+	}
+	if plan.RunDetails != nil && strings.TrimSpace(*plan.RunDetails) != "" {
+		parts = append(parts, strings.TrimSpace(*plan.RunDetails))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// runTypeLabel renders a run type as a human heading, e.g. "Threshold run".
+// Unknown values fall back to the raw value plus "run".
+func runTypeLabel(rt plannedworkout.RunType) string {
+	switch rt {
+	case plannedworkout.RunTypeEasy:
+		return "Easy run"
+	case plannedworkout.RunTypeThreshold:
+		return "Threshold run"
+	case plannedworkout.RunTypeIntervals:
+		return "Interval run"
+	default:
+		return string(rt) + " run"
+	}
 }
 
 // renderAgenda renders each exercise and its present target sets, one exercise

@@ -277,6 +277,51 @@ func TestUpdateMe_OverlongNameRejected(t *testing.T) {
 	}
 }
 
+func TestUpdateMe_SetsTimezoneAndCalendarDetail(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"timezone":"America/New_York","calendar_default_detail":"full_agenda"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+	got := decodeMe(t, w)
+	if got.Timezone != "America/New_York" {
+		t.Fatalf("timezone echo: got %q want America/New_York", got.Timezone)
+	}
+	if got.CalendarDefaultDetail != "full_agenda" {
+		t.Fatalf("calendar_default_detail echo: got %q want full_agenda", got.CalendarDefaultDetail)
+	}
+	// Persisted.
+	after, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Timezone != "America/New_York" || after.CalendarDefaultDetail != "full_agenda" {
+		t.Fatalf("not persisted: tz=%q detail=%q", after.Timezone, after.CalendarDefaultDetail)
+	}
+}
+
+func TestUpdateMe_InvalidTimezoneRejected(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"timezone":"Not/AZone"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateMe_InvalidCalendarDetailRejected(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"calendar_default_detail":"bogus"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestUpdateMe_OutOfRangeHeightRejected(t *testing.T) {
 	repo := NewMemoryRepository()
 	u := seedUser(t, repo)

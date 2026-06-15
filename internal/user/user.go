@@ -25,6 +25,12 @@ type User struct {
 	DistanceUnit DistanceUnit `json:"distance_unit"`
 	// HeightCm is an optional static body metric in canonical centimeters.
 	HeightCm *float64 `json:"height_cm"`
+	// Timezone is the canonical IANA timezone used for server-side Google
+	// Calendar writes (defaults to UTC).
+	Timezone string `json:"timezone"`
+	// CalendarDefaultDetail is the default calendar event detail level when
+	// planning workouts: "time_block" or "full_agenda".
+	CalendarDefaultDetail string `json:"calendar_default_detail"`
 	// AvatarKey is the S3 object key of the user's uploaded avatar, or nil
 	// when none is set. It is never serialized raw — the resolved avatar_url
 	// (a presigned GET, or the OAuth fallback) is produced at the GET /me edge.
@@ -58,6 +64,15 @@ func (u *User) Validate() error {
 	}
 	if u.HeightCm != nil && (*u.HeightCm < HeightCmMin || *u.HeightCm > HeightCmMax) {
 		return ErrHeightOutOfRange
+	}
+	if u.Timezone == "" {
+		return ErrInvalidTimezone
+	}
+	if _, err := time.LoadLocation(u.Timezone); err != nil {
+		return ErrInvalidTimezone
+	}
+	if u.CalendarDefaultDetail != "time_block" && u.CalendarDefaultDetail != "full_agenda" {
+		return ErrInvalidCalendarDetail
 	}
 	return nil
 }

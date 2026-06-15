@@ -12,10 +12,12 @@ func floatPtr(v float64) *float64 { return &v }
 func TestValidate_DisplayName(t *testing.T) {
 	base := func(name string) *User {
 		return &User{
-			Email:        "lifter@example.com",
-			DisplayName:  name,
-			WeightUnit:   WeightUnitPounds,
-			DistanceUnit: DistanceUnitMiles,
+			Email:                 "lifter@example.com",
+			DisplayName:           name,
+			WeightUnit:            WeightUnitPounds,
+			DistanceUnit:          DistanceUnitMiles,
+			Timezone:              "UTC",
+			CalendarDefaultDetail: "time_block",
 		}
 	}
 
@@ -48,14 +50,57 @@ func TestValidate_DisplayName(t *testing.T) {
 	}
 }
 
+func TestValidate_TimezoneAndCalendarDetail(t *testing.T) {
+	base := func(tz, detail string) *User {
+		return &User{
+			Email:                 "lifter@example.com",
+			DisplayName:           "Lifter",
+			WeightUnit:            WeightUnitPounds,
+			DistanceUnit:          DistanceUnitMiles,
+			Timezone:              tz,
+			CalendarDefaultDetail: detail,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		tz      string
+		detail  string
+		wantErr error
+	}{
+		{"valid utc time_block", "UTC", "time_block", nil},
+		{"valid iana full_agenda", "America/New_York", "full_agenda", nil},
+		{"empty timezone rejected", "", "time_block", ErrInvalidTimezone},
+		{"bad timezone rejected", "Not/AZone", "time_block", ErrInvalidTimezone},
+		{"bad calendar detail rejected", "UTC", "bogus", ErrInvalidCalendarDetail},
+		{"empty calendar detail rejected", "UTC", "", ErrInvalidCalendarDetail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := base(tt.tz, tt.detail).Validate()
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidate_HeightCm(t *testing.T) {
 	base := func(h *float64) *User {
 		return &User{
-			Email:        "lifter@example.com",
-			DisplayName:  "Lifter",
-			WeightUnit:   WeightUnitPounds,
-			DistanceUnit: DistanceUnitMiles,
-			HeightCm:     h,
+			Email:                 "lifter@example.com",
+			DisplayName:           "Lifter",
+			WeightUnit:            WeightUnitPounds,
+			DistanceUnit:          DistanceUnitMiles,
+			HeightCm:              h,
+			Timezone:              "UTC",
+			CalendarDefaultDetail: "time_block",
 		}
 	}
 

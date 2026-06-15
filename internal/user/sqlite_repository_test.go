@@ -144,3 +144,48 @@ func TestSQLite_UpdateProfileColumns(t *testing.T) {
 		t.Fatalf("height_cm should persist: got %v", cleared.HeightCm)
 	}
 }
+
+// TestSQLite_TimezoneAndCalendarDetailDefaultsAndUpdate checks the two new
+// columns default to UTC/time_block on create and round-trip through Update.
+func TestSQLite_TimezoneAndCalendarDetailDefaultsAndUpdate(t *testing.T) {
+	repo, _ := newSQLiteUserRepo(t)
+	ctx := context.Background()
+
+	u := &User{
+		Email:        "lifter@example.com",
+		DisplayName:  "Lifter",
+		WeightUnit:   WeightUnitPounds,
+		DistanceUnit: DistanceUnitMiles,
+	}
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Timezone != "UTC" {
+		t.Fatalf("timezone default: got %q want UTC", got.Timezone)
+	}
+	if got.CalendarDefaultDetail != "time_block" {
+		t.Fatalf("calendar_default_detail default: got %q want time_block", got.CalendarDefaultDetail)
+	}
+
+	got.Timezone = "America/New_York"
+	got.CalendarDefaultDetail = "full_agenda"
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	after, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if after.Timezone != "America/New_York" {
+		t.Fatalf("timezone after update: got %q want America/New_York", after.Timezone)
+	}
+	if after.CalendarDefaultDetail != "full_agenda" {
+		t.Fatalf("calendar_default_detail after update: got %q want full_agenda", after.CalendarDefaultDetail)
+	}
+}

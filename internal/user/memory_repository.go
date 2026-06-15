@@ -29,6 +29,15 @@ func NewMemoryRepository() *MemoryRepository {
 }
 
 func (r *MemoryRepository) Create(ctx context.Context, u *User) error {
+	// Default the calendar prefs before validation so memory and sqlite repos
+	// behave identically for a newly-built user without them set.
+	if u.Timezone == "" {
+		u.Timezone = "UTC"
+	}
+	if u.CalendarDefaultDetail == "" {
+		u.CalendarDefaultDetail = "time_block"
+	}
+
 	if err := u.Validate(); err != nil {
 		return err
 	}

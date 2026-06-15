@@ -28,6 +28,15 @@ func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
 }
 
 func (r *SQLiteRepository) Create(ctx context.Context, u *User) error {
+	// Default the calendar prefs before validation so a newly-built user
+	// without them set passes Validate and matches the DB defaults.
+	if u.Timezone == "" {
+		u.Timezone = "UTC"
+	}
+	if u.CalendarDefaultDetail == "" {
+		u.CalendarDefaultDetail = "time_block"
+	}
+
 	if err := u.Validate(); err != nil {
 		return err
 	}
@@ -39,9 +48,9 @@ func (r *SQLiteRepository) Create(ctx context.Context, u *User) error {
 	u.UpdatedAt = now
 
 	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO users (id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, u.ID, u.Email, u.DisplayName, u.WeightUnit, u.DistanceUnit, u.HeightCm, u.AvatarKey, u.OAuthAvatarURL, u.CreatedAt, u.UpdatedAt)
+		INSERT INTO users (id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, timezone, calendar_default_detail, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, u.ID, u.Email, u.DisplayName, u.WeightUnit, u.DistanceUnit, u.HeightCm, u.AvatarKey, u.OAuthAvatarURL, u.Timezone, u.CalendarDefaultDetail, u.CreatedAt, u.UpdatedAt)
 
 	if err != nil {
 		// Check for UNIQUE constraint violation on email.
@@ -58,10 +67,10 @@ func (r *SQLiteRepository) Create(ctx context.Context, u *User) error {
 func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*User, error) {
 	var u User
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, created_at, updated_at, deleted_at
+		SELECT id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, timezone, calendar_default_detail, created_at, updated_at, deleted_at
 		FROM users
 		WHERE id = ? AND deleted_at IS NULL
-	`, id).Scan(&u.ID, &u.Email, &u.DisplayName, &u.WeightUnit, &u.DistanceUnit, &u.HeightCm, &u.AvatarKey, &u.OAuthAvatarURL, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
+	`, id).Scan(&u.ID, &u.Email, &u.DisplayName, &u.WeightUnit, &u.DistanceUnit, &u.HeightCm, &u.AvatarKey, &u.OAuthAvatarURL, &u.Timezone, &u.CalendarDefaultDetail, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -78,10 +87,10 @@ func (r *SQLiteRepository) GetByEmail(ctx context.Context, email string) (*User,
 
 	var u User
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, created_at, updated_at, deleted_at
+		SELECT id, email, display_name, weight_unit, distance_unit, height_cm, avatar_key, oauth_avatar_url, timezone, calendar_default_detail, created_at, updated_at, deleted_at
 		FROM users
 		WHERE email = ? AND deleted_at IS NULL
-	`, email).Scan(&u.ID, &u.Email, &u.DisplayName, &u.WeightUnit, &u.DistanceUnit, &u.HeightCm, &u.AvatarKey, &u.OAuthAvatarURL, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
+	`, email).Scan(&u.ID, &u.Email, &u.DisplayName, &u.WeightUnit, &u.DistanceUnit, &u.HeightCm, &u.AvatarKey, &u.OAuthAvatarURL, &u.Timezone, &u.CalendarDefaultDetail, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -110,9 +119,9 @@ func (r *SQLiteRepository) Update(ctx context.Context, u *User) error {
 
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE users
-		SET display_name = ?, weight_unit = ?, distance_unit = ?, height_cm = ?, avatar_key = ?, oauth_avatar_url = ?, updated_at = ?
+		SET display_name = ?, weight_unit = ?, distance_unit = ?, height_cm = ?, avatar_key = ?, oauth_avatar_url = ?, timezone = ?, calendar_default_detail = ?, updated_at = ?
 		WHERE id = ? AND deleted_at IS NULL
-	`, u.DisplayName, u.WeightUnit, u.DistanceUnit, u.HeightCm, u.AvatarKey, u.OAuthAvatarURL, u.UpdatedAt, u.ID)
+	`, u.DisplayName, u.WeightUnit, u.DistanceUnit, u.HeightCm, u.AvatarKey, u.OAuthAvatarURL, u.Timezone, u.CalendarDefaultDetail, u.UpdatedAt, u.ID)
 
 	if err != nil {
 		return err

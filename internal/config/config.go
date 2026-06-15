@@ -40,6 +40,16 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
+	// GoogleCalendarRedirectURL is the OAuth redirect URI for the SECOND,
+	// incremental Google consent flow that grants the calendar.events scope
+	// (offline access), read from GOOGLE_CALENDAR_REDIRECT_URL. It is distinct
+	// from GoogleRedirectURL (the login flow) because Google matches the
+	// redirect_uri exactly. Empty (the default) disables the calendar OAuth
+	// connect/callback routes — the rest of the planned-workout feature still
+	// works without it. Together with CalendarTokenEncKey it gates whether
+	// /auth/google/calendar/* and /me/calendar/connection are mounted.
+	GoogleCalendarRedirectURL string
+
 	// DevAuth, when true, mounts POST /auth/dev/token, which mints a JWT
 	// for an arbitrary email without going through Google. Intended for
 	// local development and testing against deployed environments that
@@ -119,6 +129,13 @@ type Config struct {
 	// same degradation pattern as the FatSecret pair above.
 	USDAFDCAPIKey string
 
+	// CalendarTokenEncKey is the base64-encoded 32-byte AES-256-GCM key used to
+	// encrypt stored Google refresh tokens, read from CALENDAR_TOKEN_ENC_KEY.
+	// Empty (the default) disables Google Calendar sync entirely — the planned-
+	// workout feature still works without it. Provided via the same secret
+	// delivery as JWT_SIGNING_KEY/GOOGLE_CLIENT_SECRET.
+	CalendarTokenEncKey string
+
 	// LogLevel gates the structured (slog) loggers, read from LOG_LEVEL
 	// ("debug", "info", "warn", "error"; case-insensitive; default
 	// "info"). Currently consumed only by the nutrition lookup logger —
@@ -133,24 +150,26 @@ type Config struct {
 // Returns an error when a required value is missing.
 func Load() (Config, error) {
 	cfg := Config{
-		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		TelemetryDatabaseURL:   os.Getenv("TELEMETRY_DATABASE_URL"),
-		ServerAddr:             os.Getenv("SERVER_ADDR"),
-		JWTSigningKey:          os.Getenv("JWT_SIGNING_KEY"),
-		GoogleClientID:         os.Getenv("GOOGLE_CLIENT_ID"),
-		GoogleClientSecret:     os.Getenv("GOOGLE_CLIENT_SECRET"),
-		GoogleRedirectURL:      os.Getenv("GOOGLE_REDIRECT_URL"),
-		DevAuth:                os.Getenv("DEV_AUTH") == "true",
-		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
-		ReturnToAllowedOrigins: splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
-		DailyUsageCapUSD:       parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
-		UsagePriceTableJSON:    os.Getenv("USAGE_PRICE_TABLE_JSON"),
-		BetaAllowedEmails:      splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
-		AdminEmails:            splitCSV(os.Getenv("ADMIN_EMAILS")),
-		AvatarBucketName:       os.Getenv("AVATAR_BUCKET_NAME"),
-		FatSecretClientID:      os.Getenv("FATSECRET_CLIENT_ID"),
-		FatSecretClientSecret:  os.Getenv("FATSECRET_CLIENT_SECRET"),
-		USDAFDCAPIKey:          os.Getenv("USDA_FDC_API_KEY"),
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		TelemetryDatabaseURL:      os.Getenv("TELEMETRY_DATABASE_URL"),
+		ServerAddr:                os.Getenv("SERVER_ADDR"),
+		JWTSigningKey:             os.Getenv("JWT_SIGNING_KEY"),
+		GoogleClientID:            os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret:        os.Getenv("GOOGLE_CLIENT_SECRET"),
+		GoogleRedirectURL:         os.Getenv("GOOGLE_REDIRECT_URL"),
+		GoogleCalendarRedirectURL: os.Getenv("GOOGLE_CALENDAR_REDIRECT_URL"),
+		DevAuth:                   os.Getenv("DEV_AUTH") == "true",
+		CORSAllowedOrigin:         os.Getenv("CORS_ALLOWED_ORIGIN"),
+		ReturnToAllowedOrigins:    splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
+		DailyUsageCapUSD:          parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
+		UsagePriceTableJSON:       os.Getenv("USAGE_PRICE_TABLE_JSON"),
+		BetaAllowedEmails:         splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
+		AdminEmails:               splitCSV(os.Getenv("ADMIN_EMAILS")),
+		AvatarBucketName:          os.Getenv("AVATAR_BUCKET_NAME"),
+		FatSecretClientID:         os.Getenv("FATSECRET_CLIENT_ID"),
+		FatSecretClientSecret:     os.Getenv("FATSECRET_CLIENT_SECRET"),
+		USDAFDCAPIKey:             os.Getenv("USDA_FDC_API_KEY"),
+		CalendarTokenEncKey:       os.Getenv("CALENDAR_TOKEN_ENC_KEY"),
 	}
 
 	level, err := parseLogLevel(os.Getenv("LOG_LEVEL"))

@@ -52,14 +52,16 @@ func (h *Handler) Mount(r chi.Router) {
 // the client always gets the same DTO. avatar_url is a freshly presigned S3 GET
 // (when an avatar is uploaded), the OAuth avatar URL fallback, or null.
 type meResponse struct {
-	ID           string   `json:"id"`
-	Email        string   `json:"email"`
-	DisplayName  string   `json:"display_name"`
-	Username     *string  `json:"username"`
-	WeightUnit   string   `json:"weight_unit"`
-	DistanceUnit string   `json:"distance_unit"`
-	HeightCm     *float64 `json:"height_cm"`
-	AvatarURL    *string  `json:"avatar_url"`
+	ID                    string   `json:"id"`
+	Email                 string   `json:"email"`
+	DisplayName           string   `json:"display_name"`
+	Username              *string  `json:"username"`
+	WeightUnit            string   `json:"weight_unit"`
+	DistanceUnit          string   `json:"distance_unit"`
+	HeightCm              *float64 `json:"height_cm"`
+	Timezone              string   `json:"timezone"`
+	CalendarDefaultDetail string   `json:"calendar_default_detail"`
+	AvatarURL             *string  `json:"avatar_url"`
 }
 
 // resolveMe builds the resolved profile DTO for a user. The avatar_url is, in
@@ -68,13 +70,15 @@ type meResponse struct {
 // fallback (or null) rather than failing the whole profile response.
 func (h *Handler) resolveMe(r *http.Request, u *User) meResponse {
 	resp := meResponse{
-		ID:           u.ID,
-		Email:        u.Email,
-		DisplayName:  u.DisplayName,
-		Username:     u.Username,
-		WeightUnit:   string(u.WeightUnit),
-		DistanceUnit: string(u.DistanceUnit),
-		HeightCm:     u.HeightCm,
+		ID:                    u.ID,
+		Email:                 u.Email,
+		DisplayName:           u.DisplayName,
+		Username:              u.Username,
+		WeightUnit:            string(u.WeightUnit),
+		DistanceUnit:          string(u.DistanceUnit),
+		HeightCm:              u.HeightCm,
+		Timezone:              u.Timezone,
+		CalendarDefaultDetail: u.CalendarDefaultDetail,
 	}
 	switch {
 	case u.AvatarKey != nil && h.store != nil:
@@ -104,11 +108,13 @@ func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
 // making the update additive/partial. This endpoint deliberately does NOT
 // touch avatar_key; avatar mutation goes through POST/DELETE /me/avatar.
 type updateMeRequest struct {
-	DisplayName  *string       `json:"display_name"`
-	Username     *string       `json:"username"`
-	WeightUnit   *WeightUnit   `json:"weight_unit"`
-	DistanceUnit *DistanceUnit `json:"distance_unit"`
-	HeightCm     *float64      `json:"height_cm"`
+	DisplayName           *string       `json:"display_name"`
+	Username              *string       `json:"username"`
+	WeightUnit            *WeightUnit   `json:"weight_unit"`
+	DistanceUnit          *DistanceUnit `json:"distance_unit"`
+	HeightCm              *float64      `json:"height_cm"`
+	Timezone              *string       `json:"timezone"`
+	CalendarDefaultDetail *string       `json:"calendar_default_detail"`
 }
 
 // updateMe is the preferences/profile write path. It loads the current user,
@@ -156,14 +162,23 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	if req.HeightCm != nil {
 		u.HeightCm = req.HeightCm
 	}
+	if req.Timezone != nil {
+		u.Timezone = *req.Timezone
+	}
+	if req.CalendarDefaultDetail != nil {
+		u.CalendarDefaultDetail = *req.CalendarDefaultDetail
+	}
 
 	// Validate at the boundary: a blank/over-long display name, an unknown
-	// enum, or an out-of-range height is a client error (400), not a 500.
+	// enum, an out-of-range height, an invalid timezone, or a bad calendar
+	// detail is a client error (400), not a 500.
 	if err := u.Validate(); err != nil {
 		var enumErr *InvalidEnumError
 		if errors.Is(err, ErrDisplayNameRequired) ||
 			errors.Is(err, ErrDisplayNameTooLong) ||
 			errors.Is(err, ErrHeightOutOfRange) ||
+			errors.Is(err, ErrInvalidTimezone) ||
+			errors.Is(err, ErrInvalidCalendarDetail) ||
 			errors.As(err, &enumErr) {
 			httpresp.Error(w, http.StatusBadRequest, err.Error())
 			return

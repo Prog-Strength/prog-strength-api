@@ -30,8 +30,8 @@ func TestMemory_EnsurePostIdempotent(t *testing.T) {
 	if second.ID != first.ID || !second.OccurredAt.Equal(first.OccurredAt) {
 		t.Fatalf("idempotency broken: %+v vs %+v", first, second)
 	}
-	if first.Visibility != VisibilityPrivate {
-		t.Fatalf("visibility = %q, want private", first.Visibility)
+	if first.Visibility != VisibilityFriends {
+		t.Fatalf("visibility = %q, want friends", first.Visibility)
 	}
 }
 
@@ -41,6 +41,17 @@ func TestMemory_ListFeedKeysetPagination(t *testing.T) {
 	ctx := context.Background()
 	seedFeed(t, repo, ctx)
 	assertFeedPagination(t, repo, ctx)
+}
+
+func TestMemory_FeedVisibilityFanOut(t *testing.T) {
+	t.Parallel()
+	repo := newMemoryRepo()
+	ctx := context.Background()
+	assertFeedVisibilityFanOut(t, repo, ctx, func(postID string, v Visibility) {
+		repo.mu.Lock()
+		repo.posts[postID].Visibility = v
+		repo.mu.Unlock()
+	})
 }
 
 func TestMemory_ReactionStackingAndToggle(t *testing.T) {

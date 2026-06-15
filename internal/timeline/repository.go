@@ -31,12 +31,17 @@ type Repository interface {
 	// the backfill share one path and a re-run never double-posts.
 	EnsurePost(ctx context.Context, ref PostRef) (Post, error)
 
-	// ListFeed returns the author's posts newest-first (occurred_at DESC, id
-	// DESC), capped at limit. When before != nil, only posts strictly before
-	// that keyset position are returned. The returned cursor points at the
-	// last post on the page for the next request, and is nil when the feed is
-	// exhausted (fewer than limit rows remained).
-	ListFeed(ctx context.Context, userID string, limit int, before *Cursor) ([]Post, *Cursor, error)
+	// ListFeed returns posts authored by any user in userIDs, newest-first
+	// (occurred_at DESC, id DESC), capped at limit. A post is included only when
+	// it is the viewer's own (user_id == viewerID, any visibility) or its
+	// visibility is not 'private' — so the same query serves both the
+	// multi-author feed (userIDs = viewer ∪ accepted-followees) and the
+	// ?user-scoped feed (userIDs = [authorID]). When before != nil, only posts
+	// strictly before that keyset position are returned. The returned cursor
+	// points at the last post on the page for the next request, and is nil when
+	// the page is exhausted (fewer than limit rows remained). An empty userIDs
+	// returns an empty page.
+	ListFeed(ctx context.Context, userIDs []string, viewerID string, limit int, before *Cursor) ([]Post, *Cursor, error)
 
 	// GetPost returns one post by id, or ErrNotFound. Visibility is the
 	// handler's concern; this is a raw lookup.
@@ -86,6 +91,21 @@ type Repository interface {
 // never surface it to the user — the backfill repairs any gap.
 type Publisher interface {
 	EnsurePost(ctx context.Context, ref PostRef) error
+}
+
+// AcceptedFollowees yields the user ids whose non-private posts the viewer may
+// see. Provided by internal/follow; the timeline package never imports it (the
+// follow Repository satisfies this interface structurally).
+type AcceptedFollowees interface {
+	AcceptedFollowees(ctx context.Context, viewerID string) ([]string, error)
+}
+
+// UserResolver maps a username to a user id for the ?user= scoped feed.
+// Provided by the wiring layer (the follow profile provider satisfies it). A
+// not-found username is signaled by the provider's own not-found error, which
+// the handler maps to a 404.
+type UserResolver interface {
+	ResolveUsername(ctx context.Context, username string) (userID string, err error)
 }
 
 // SourceHydrator renders post content from the live source tables at read

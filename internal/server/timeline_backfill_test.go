@@ -63,7 +63,7 @@ func TestBackfillTimeline(t *testing.T) {
 		t.Fatalf("backfillTimeline: %v", err)
 	}
 
-	posts, _, err := repo.ListFeed(ctx, "u1", 100, nil)
+	posts, _, err := repo.ListFeed(ctx, []string{"u1"}, "u1", 100, nil)
 	if err != nil {
 		t.Fatalf("ListFeed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestBackfillTimeline(t *testing.T) {
 	if err = backfillTimeline(ctx, database, repo); err != nil {
 		t.Fatalf("backfillTimeline (re-run): %v", err)
 	}
-	posts2, _, err := repo.ListFeed(ctx, "u1", 100, nil)
+	posts2, _, err := repo.ListFeed(ctx, []string{"u1"}, "u1", 100, nil)
 	if err != nil {
 		t.Fatalf("ListFeed (re-run): %v", err)
 	}

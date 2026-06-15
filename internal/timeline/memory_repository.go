@@ -54,7 +54,7 @@ func (r *MemoryRepository) EnsurePost(ctx context.Context, ref PostRef) (Post, e
 		SourceType: ref.SourceType,
 		SourceID:   ref.SourceID,
 		OccurredAt: ref.OccurredAt.UTC(),
-		Visibility: VisibilityPrivate,
+		Visibility: VisibilityFriends,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
@@ -62,13 +62,26 @@ func (r *MemoryRepository) EnsurePost(ctx context.Context, ref PostRef) (Post, e
 	return *p, nil
 }
 
-func (r *MemoryRepository) ListFeed(ctx context.Context, userID string, limit int, before *Cursor) ([]Post, *Cursor, error) {
+func (r *MemoryRepository) ListFeed(ctx context.Context, userIDs []string, viewerID string, limit int, before *Cursor) ([]Post, *Cursor, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	if len(userIDs) == 0 {
+		return nil, nil, nil
+	}
+	want := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		want[uid] = true
+	}
+
 	var out []Post
 	for _, p := range r.posts {
-		if p.UserID != userID {
+		if !want[p.UserID] {
+			continue
+		}
+		// Mirror the SQLite visibility clause: own posts at any visibility,
+		// others' posts only when not private.
+		if p.UserID != viewerID && p.Visibility == VisibilityPrivate {
 			continue
 		}
 		if before != nil && !cursorBefore(p, before) {

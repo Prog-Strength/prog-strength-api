@@ -28,7 +28,7 @@ func newTimelinePublisher(repo timeline.Repository) *timelinePublisher {
 var _ timeline.Publisher = (*timelinePublisher)(nil)
 
 // EnsurePost idempotently records ref in the feed index. On failure it logs
-// and increments the publish-failure counter (labelled by source_type) so a
+// and increments the publish-failure counter (labeled by source_type) so a
 // silently-degrading feed index is observable, then returns the error.
 // Callers ignore the return value; it is surfaced only so the publisher is
 // unit-testable and the interface contract is truthful.

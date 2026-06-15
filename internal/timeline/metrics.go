@@ -13,7 +13,7 @@ import "github.com/prometheus/client_golang/prometheus"
 // Safe at any traffic.
 
 // publishFailuresTotal counts EnsurePost failures from the write-path
-// publisher, labelled by the source_type that failed to publish. A nonzero
+// publisher, labeled by the source_type that failed to publish. A nonzero
 // rate means posts are missing from the feed until the next backfill/reconcile.
 var publishFailuresTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{

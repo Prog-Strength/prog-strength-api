@@ -7,7 +7,7 @@ import (
 )
 
 // TestObservePublishFailure verifies the exported metering seam increments
-// the publish-failure counter for the labelled source_type. This is the
+// the publish-failure counter for the labeled source_type. This is the
 // counter the server-package publisher bumps on a swallowed EnsurePost error.
 func TestObservePublishFailure(t *testing.T) {
 	before := testutil.ToFloat64(publishFailuresTotal.WithLabelValues(string(SourceBestEffort)))

@@ -36,6 +36,12 @@ type Handler struct {
 	// SetPublisher rather than through NewHandler so the constructor
 	// signature — and the tests that call it — stay untouched.
 	publisher timeline.Publisher
+	// planMatcher best-effort links a freshly-created lift (or a deleted one)
+	// to the planned workout it completes. Optional and nil-safe, mirroring
+	// publisher: existing constructions leave it nil and skip matching. The
+	// implementation lives in server wiring so this package never imports
+	// planned_workout. Injected post-construction via SetPlanMatcher.
+	planMatcher PlanMatcher
 }
 
 // NewHandler builds a Handler backed by the given repositories. The
@@ -50,6 +56,30 @@ func NewHandler(repo Repository, exerciseRepo exercise.Repository) *Handler {
 // from server wiring after construction. Safe to never call — publishing
 // is best-effort and nil-guarded.
 func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
+
+// SetPlanMatcher wires the plan matcher in so a created workout is best-effort
+// linked to the planned workout it completes (and unlinked on delete). Called
+// from server wiring after construction. Safe to never call — matching is
+// best-effort and nil-guarded.
+func (h *Handler) SetPlanMatcher(m PlanMatcher) { h.planMatcher = m }
+
+// matchSession best-effort-notifies the plan matcher that ref was logged. It
+// NEVER affects the HTTP response: a nil matcher is a no-op.
+func (h *Handler) matchSession(ctx context.Context, userID string, ref SessionRef) {
+	if h.planMatcher == nil {
+		return
+	}
+	h.planMatcher.OnSessionLogged(ctx, userID, ref)
+}
+
+// unmatchSession best-effort-notifies the plan matcher that sessionID was
+// deleted so any plan link is reverted. Nil matcher is a no-op.
+func (h *Handler) unmatchSession(ctx context.Context, userID, sessionID string) {
+	if h.planMatcher == nil {
+		return
+	}
+	h.planMatcher.OnSessionDeleted(ctx, userID, sessionID)
+}
 
 // publish best-effort-publishes ref into the timeline feed index. It NEVER
 // affects the HTTP response: a nil publisher is a no-op, and the publisher
@@ -486,6 +516,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// the timeline. Never affects this response.
 	h.publishWorkoutPosts(r.Context(), workout)
 
+	// Best-effort: link this lift to the planned workout it completes. Never
+	// affects this response.
+	h.matchSession(r.Context(), workout.UserID, SessionRef{SessionID: workout.ID, StartUTC: workout.PerformedAt})
+
 	httpresp.Created(w, "created workout", workout)
 }
 
@@ -633,6 +667,10 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "delete workout", err)
 		return
 	}
+
+	// Best-effort: revert any plan link for the deleted workout. Never
+	// affects this response.
+	h.unmatchSession(r.Context(), userID, workoutID)
 
 	httpresp.OK(w, "deleted workout", nil)
 }

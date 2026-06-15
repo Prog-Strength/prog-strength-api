@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -12,7 +13,7 @@ import (
 // signing involved in that path).
 func newFindOrCreateHandler() (*Handler, *user.MemoryRepository) {
 	repo := user.NewMemoryRepository()
-	h := NewHandler(Config{JWTSecret: []byte("test-secret")}, repo)
+	h := NewHandler(Config{JWTSecret: []byte("test-secret")}, repo, beta.NewMemoryRepository())
 	return h, repo
 }
 

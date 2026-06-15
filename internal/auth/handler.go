@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
@@ -42,9 +42,6 @@ type Config struct {
 	// the URL fragment. Empty disables the return_to feature and the
 	// callback responds with JSON (legacy curl/test behavior).
 	ReturnToAllowedOrigins []string
-	// BetaAllowedEmails: only these emails receive a JWT after OAuth.
-	// Empty means open access (no beta gate). Case-insensitive.
-	BetaAllowedEmails []string
 }
 
 // Handler exposes authentication endpoints. It mounts Google OAuth routes
@@ -56,23 +53,20 @@ type Handler struct {
 	users                  user.Repository
 	devAuth                bool
 	returnToAllowedOrigins []string
-	// Lowercased + trimmed beta allowlist, looked up via map for O(1)
-	// containment. nil means "no gate, everyone allowed."
-	betaAllowedEmails map[string]struct{}
+	// betaChecker decides whether an email passes the closed-beta gate. It
+	// is consulted per login (an infrequent, human-paced event), so a single
+	// indexed lookup is free and there is no in-memory cache to invalidate.
+	// An empty allowlist disables the gate (the checker returns true for
+	// everyone).
+	betaChecker beta.Checker
 }
 
-// NewHandler constructs a Handler. users is required (find-or-create on login).
-func NewHandler(cfg Config, users user.Repository) *Handler {
+// NewHandler constructs a Handler. users is required (find-or-create on
+// login); betaChecker gates which emails receive a JWT after OAuth.
+func NewHandler(cfg Config, users user.Repository, betaChecker beta.Checker) *Handler {
 	var googleCfg *oauth2.Config
 	if cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" && cfg.GoogleRedirectURL != "" {
 		googleCfg = newGoogleConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
-	}
-	var beta map[string]struct{}
-	if len(cfg.BetaAllowedEmails) > 0 {
-		beta = make(map[string]struct{}, len(cfg.BetaAllowedEmails))
-		for _, e := range cfg.BetaAllowedEmails {
-			beta[strings.ToLower(strings.TrimSpace(e))] = struct{}{}
-		}
 	}
 	return &Handler{
 		googleConfig:           googleCfg,
@@ -80,7 +74,7 @@ func NewHandler(cfg Config, users user.Repository) *Handler {
 		users:                  users,
 		devAuth:                cfg.DevAuth,
 		returnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
-		betaAllowedEmails:      beta,
+		betaChecker:            betaChecker,
 	}
 }
 
@@ -186,13 +180,21 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 	// the contact-the-admins screen.
 	returnTo := h.readAndClearReturnTo(w, r)
 
-	// Beta gate: when BETA_ALLOWED_EMAILS is configured, only those
-	// emails get a JWT. Anyone else completes OAuth (their user row
-	// already exists from findOrCreateUser above — visibility into
-	// sign-up attempts) but bounces back to the frontend with
-	// error=beta_required so the UI can show a "request access"
-	// screen. Empty allowlist = open access.
-	if !h.isBetaAllowed(u.Email) {
+	// Beta gate: the allowlist lives in the beta_allowed_emails table
+	// (consulted here via betaChecker). Only allowed emails get a JWT.
+	// Anyone else completes OAuth (their user row already exists from
+	// findOrCreateUser above — visibility into sign-up attempts) but
+	// bounces back to the frontend with error=beta_required so the UI
+	// can show a "request access" screen. Empty allowlist = open access.
+	//
+	// Fail closed on a checker error: a DB hiccup must not mint a token for
+	// a non-allowed email, so a 500 here is preferable to leaking access.
+	allowed, err := h.betaChecker.IsAllowed(r.Context(), u.Email)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "beta allowlist check", err)
+		return
+	}
+	if !allowed {
 		if returnTo != "" {
 			h.redirectBetaRequired(w, r, returnTo, u.Email)
 			return
@@ -387,19 +389,6 @@ func (h *Handler) readAndClearReturnTo(w http.ResponseWriter, r *http.Request) s
 		return ""
 	}
 	return cookie.Value
-}
-
-// isBetaAllowed reports whether the given email is allowed past the
-// beta gate. An empty allowlist (nil map) means the gate is disabled
-// entirely — every authenticated user is allowed through. The
-// comparison is case-insensitive; emails are normalized to lowercase
-// on both sides.
-func (h *Handler) isBetaAllowed(email string) bool {
-	if h.betaAllowedEmails == nil {
-		return true
-	}
-	_, ok := h.betaAllowedEmails[strings.ToLower(strings.TrimSpace(email))]
-	return ok
 }
 
 // redirectBetaRequired bounces the user back to the frontend's

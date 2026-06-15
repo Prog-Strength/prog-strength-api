@@ -14,6 +14,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
@@ -139,6 +140,7 @@ func New(cfg config.Config) (*Server, error) {
 	var nutritionLookupRepo nutritionlookup.Repository
 	var timelineRepo timeline.Repository
 	var followRepo follow.Repository
+	var betaRepo beta.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
@@ -181,6 +183,8 @@ func New(cfg config.Config) (*Server, error) {
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 		timelineRepo = timeline.NewSQLiteRepository(database)
 		followRepo = follow.NewSQLiteRepository(database)
+		betaSQLiteRepo := beta.NewSQLiteRepository(database)
+		betaRepo = betaSQLiteRepo
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -213,6 +217,16 @@ func New(cfg config.Config) (*Server, error) {
 		// runs once after migration 019 ships and is a no-op thereafter.
 		if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
 			return nil, err
+		}
+
+		// One-time seed of the beta allowlist from BETA_ALLOWED_EMAILS.
+		// Guarded by an empty-table check inside SeedFromEnv, so it carries
+		// the live env list into the DB on the first boot after this feature
+		// ships and is a no-op thereafter (never overwriting admin edits).
+		if n, err := betaSQLiteRepo.SeedFromEnv(context.Background(), cfg.BetaAllowedEmails); err != nil {
+			return nil, err
+		} else if n > 0 {
+			log.Printf("seeded %d beta allowed email(s) from BETA_ALLOWED_EMAILS", n)
 		}
 
 		// Telemetry uses its own SQLite file so high-volume agent
@@ -258,6 +272,7 @@ func New(cfg config.Config) (*Server, error) {
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
 		timelineRepo = timeline.NewMemoryRepository()
 		followRepo = follow.NewMemoryRepository()
+		betaRepo = beta.NewMemoryRepository()
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),
@@ -291,8 +306,7 @@ func New(cfg config.Config) (*Server, error) {
 		GoogleRedirectURL:      cfg.GoogleRedirectURL,
 		DevAuth:                cfg.DevAuth,
 		ReturnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
-		BetaAllowedEmails:      cfg.BetaAllowedEmails,
-	}, userRepo)
+	}, userRepo, betaRepo)
 	authHandler.Mount(r)
 	log.Printf("auth: google=%v dev_token=%v", authHandler.HasGoogle(), cfg.DevAuth)
 
@@ -389,6 +403,18 @@ func New(cfg config.Config) (*Server, error) {
 		// FollowReader seam (followRepo satisfies it directly). Mounted after
 		// the follow handler in the same JWT-gated group.
 		user.NewDiscoveryHandler(userRepo, followRepo, avatarStore).Mount(r)
+
+		// Admin beta-allowlist surface — manage the closed-beta allowlist at
+		// runtime (GET/POST/DELETE /admin/beta-emails). Wrapped in its own
+		// RequireAdmin group (inside the JWT-gated group) so the admin gate
+		// applies only to these routes. An empty ADMIN_EMAILS makes the whole
+		// surface inert (every route 403s, fail-closed). The middleware lives
+		// in auth (not beta) to avoid an import cycle — beta exposes Checker
+		// to auth, so beta must not import auth.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.RequireAdmin(userRepo, cfg.AdminEmails))
+			beta.NewHandler(betaRepo, userRepo).Mount(r)
+		})
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

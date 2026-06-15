@@ -96,8 +96,10 @@ true. The reality:
   `WeightUnit`. Email is immutable; changing it requires a re-verify
   flow that doesn't exist. Soft-deleted.
 - **`auth`** — Google OAuth + HS256 JWT, mounted at `/auth`.
-  `RequireUser(secret)` is the middleware that gates user-scoped routes.
-  Beta gate via email allowlist. Dev-auth backdoor (`POST /auth/dev/token`)
+  `RequireUser(secret)` is the middleware that gates user-scoped routes;
+  `RequireAdmin(users, ADMIN_EMAILS)` gates the admin surface. Beta gate
+  via the DB-backed `internal/beta` allowlist (table `beta_allowed_emails`,
+  managed at `/admin/beta-emails`). Dev-auth backdoor (`POST /auth/dev/token`)
   gated by `DEV_AUTH=true`.
 - **`running`** — TCX import (Garmin), session CRUD, downsampled
   trackpoints, dashboard metrics. Raw TCX archived via the `Archiver`
@@ -237,9 +239,14 @@ reason; raise it in a separate discussion before implementing.
   required at startup; the process fails to boot without it.
 - **Dev-auth backdoor** (`POST /auth/dev/token`) gated by
   `DEV_AUTH=true`. Mints a JWT for any email; local-dev only.
-- **Beta gate** via `BETA_ALLOWED_EMAILS`. Users outside the list
+- **Beta gate** via the `internal/beta` allowlist, stored in the
+  `beta_allowed_emails` table (migration `021`). Users outside the list
   complete OAuth and get a user row but are redirected with
-  `#error=beta_required` rather than a token.
+  `#error=beta_required` rather than a token; an empty table opens the gate.
+  Operators manage the list at runtime through `/admin/beta-emails`
+  (`GET`/`POST`/`DELETE`), gated by `ADMIN_EMAILS` (empty = fail-closed,
+  all `403`). `BETA_ALLOWED_EMAILS` is now seed-only — it one-time-seeds the
+  table on first boot and is slated for removal.
 - **Config** lives in `internal/config/`. README.md has the full env-var
   table with defaults; do not duplicate it here.
 

@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 )
 
 // Handler exposes HTTP endpoints for workout logging.
@@ -28,6 +29,13 @@ import (
 type Handler struct {
 	repo         Repository
 	exerciseRepo exercise.Repository
+	// publisher pushes completed workouts and the PR breaks they set into
+	// the timeline feed index. Optional and nil-safe: existing handler
+	// constructions (incl. every test) leave it nil and skip publishing, so
+	// wiring it is a zero-blast-radius opt-in. Injected post-construction via
+	// SetPublisher rather than through NewHandler so the constructor
+	// signature — and the tests that call it — stay untouched.
+	publisher timeline.Publisher
 }
 
 // NewHandler builds a Handler backed by the given repositories. The
@@ -35,6 +43,55 @@ type Handler struct {
 // muscle-group filter into a list of catalog exercises.
 func NewHandler(repo Repository, exerciseRepo exercise.Repository) *Handler {
 	return &Handler{repo: repo, exerciseRepo: exerciseRepo}
+}
+
+// SetPublisher wires the timeline publisher into the handler so workout
+// completion (and the PR breaks it produces) appears in the feed. Called
+// from server wiring after construction. Safe to never call — publishing
+// is best-effort and nil-guarded.
+func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
+
+// publish best-effort-publishes ref into the timeline feed index. It NEVER
+// affects the HTTP response: a nil publisher is a no-op, and the publisher
+// itself logs + meters any EnsurePost error and swallows it. The backfill
+// repairs any gap, so a feed-index hiccup must never fail a workout save.
+func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
+	if h.publisher == nil {
+		return
+	}
+	_ = h.publisher.EnsurePost(ctx, ref)
+}
+
+// publishWorkoutPosts publishes the timeline posts a freshly-persisted
+// workout produces: one `workout` post for the session itself, plus one
+// `pr` post per PR break it set (looked up by workout id). All best-effort
+// and non-blocking — a failure here can never fail the workout write.
+func (h *Handler) publishWorkoutPosts(ctx context.Context, w *Workout) {
+	if h.publisher == nil {
+		return
+	}
+	h.publish(ctx, timeline.PostRef{
+		UserID:     w.UserID,
+		SourceType: timeline.SourceWorkout,
+		SourceID:   w.ID,
+		OccurredAt: w.PerformedAt,
+	})
+	// PR breaks set by this workout each get their own `pr` post, keyed by
+	// the PersonalRecordEvent id with the achievement date as occurred_at.
+	events, err := h.repo.ListPersonalRecordEventsByWorkouts(ctx, []string{w.ID})
+	if err != nil {
+		// Best-effort: a failed lookup just means the PR posts wait for the
+		// next backfill/reconcile. Never surfaced to the caller.
+		return
+	}
+	for _, e := range events {
+		h.publish(ctx, timeline.PostRef{
+			UserID:     e.UserID,
+			SourceType: timeline.SourcePR,
+			SourceID:   e.ID,
+			OccurredAt: e.AchievedAt,
+		})
+	}
 }
 
 // Mount registers workout routes on the given router. Callers are expected
@@ -425,6 +482,10 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Best-effort: publish the workout post and any PR posts it set into
+	// the timeline. Never affects this response.
+	h.publishWorkoutPosts(r.Context(), workout)
+
 	httpresp.Created(w, "created workout", workout)
 }
 
@@ -523,6 +584,10 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "update workout", err)
 		return
 	}
+
+	// Best-effort: an edit can newly set PRs (and EnsurePost is idempotent
+	// for the workout post itself), so republish. Never affects this response.
+	h.publishWorkoutPosts(r.Context(), workout)
 
 	httpresp.OK(w, "updated workout", workout)
 }

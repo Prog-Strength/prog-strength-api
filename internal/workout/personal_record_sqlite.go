@@ -320,6 +320,70 @@ func (r *SQLiteRepository) ListPersonalRecordEventsByWorkouts(
 	return out, rows.Err()
 }
 
+// GetPersonalRecordEventsByIDs returns every event whose id is in the
+// given slice. Empty input → empty result. Used by the timeline hydrator
+// to render `pr` posts (keyed by event id) in a single batch read.
+func (r *SQLiteRepository) GetPersonalRecordEventsByIDs(
+	ctx context.Context,
+	ids []string,
+) ([]PersonalRecordEvent, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	query := `
+		SELECT id, user_id, exercise_id, workout_id,
+		       weight, reps, unit,
+		       previous_weight, previous_reps, previous_unit,
+		       achieved_at, created_at
+		FROM personal_record_events
+		WHERE id IN (` + placeholders + `)
+		ORDER BY achieved_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []PersonalRecordEvent
+	for rows.Next() {
+		var e PersonalRecordEvent
+		var unitStr string
+		var prevWeight sql.NullFloat64
+		var prevReps sql.NullInt64
+		var prevUnit sql.NullString
+		if err := rows.Scan(
+			&e.ID, &e.UserID, &e.ExerciseID, &e.WorkoutID,
+			&e.Weight, &e.Reps, &unitStr,
+			&prevWeight, &prevReps, &prevUnit,
+			&e.AchievedAt, &e.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		e.Unit = user.WeightUnit(unitStr)
+		if prevWeight.Valid {
+			v := prevWeight.Float64
+			e.PreviousWeight = &v
+		}
+		if prevReps.Valid {
+			v := int(prevReps.Int64)
+			e.PreviousReps = &v
+		}
+		if prevUnit.Valid {
+			v := user.WeightUnit(prevUnit.String)
+			e.PreviousUnit = &v
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // BackfillPersonalRecords populates both PR tables from existing
 // workouts when both are empty. Idempotent and safe to call on every
 // startup — same pattern as BackfillOneRepMaxHistory.

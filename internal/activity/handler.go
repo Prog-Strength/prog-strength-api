@@ -18,6 +18,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 )
 
 // maxTCXBytes caps the multipart upload size. A typical activity TCX is
@@ -39,9 +40,32 @@ type Handler struct {
 	// now supplies the current time; defaulted to time.Now and overridable
 	// in tests for deterministic recency weighting and back-test dates.
 	now func() time.Time
+	// publisher pushes newly-ingested runs and their best efforts into the
+	// timeline feed index. Optional and nil-safe: existing constructions
+	// (incl. tests) leave it nil and skip publishing. Injected
+	// post-construction via SetPublisher so NewHandler's signature — and the
+	// tests that call it — stay untouched.
+	publisher timeline.Publisher
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
+
+// SetPublisher wires the timeline publisher in so an ingested run (and its
+// best efforts) appears in the feed. Called from server wiring after
+// construction. Safe to never call — publishing is best-effort and
+// nil-guarded.
+func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
+
+// publish best-effort-publishes ref into the timeline feed index. It NEVER
+// affects the HTTP response: a nil publisher is a no-op, and the publisher
+// logs + meters any EnsurePost error and swallows it. The backfill repairs
+// any gap, so a feed-index hiccup must never fail an activity import.
+func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
+	if h.publisher == nil {
+		return
+	}
+	_ = h.publisher.EnsurePost(ctx, ref)
+}
 
 // Mount registers routes under /activities. Callers are expected to
 // have already wrapped the router in auth.RequireUser — these handlers
@@ -219,6 +243,26 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		log.Printf("activity import: request_id=%s user_id=%s source=%s source_activity_id=%s activity_type=%s outcome=imported",
 			rid, userID, a.IngestSource, a.SourceActivityID, a.ActivityType)
+		// Best-effort: publish the run and its best efforts into the
+		// timeline. Only running activities are feed sources; never affects
+		// this response. (The ErrDuplicate branch deliberately doesn't
+		// publish — the post already exists from the original ingest.)
+		if a.ActivityType == ActivityRunning {
+			h.publish(r.Context(), timeline.PostRef{
+				UserID:     a.UserID,
+				SourceType: timeline.SourceRun,
+				SourceID:   a.ID,
+				OccurredAt: a.StartTime,
+			})
+			for _, be := range a.BestEfforts {
+				h.publish(r.Context(), timeline.PostRef{
+					UserID:     a.UserID,
+					SourceType: timeline.SourceBestEffort,
+					SourceID:   a.ID + ":" + be.DistanceKey,
+					OccurredAt: a.StartTime,
+				})
+			}
+		}
 		httpresp.Created(w, "imported activity", toActivityDTO(a, true))
 	case errors.Is(err, ErrDuplicate):
 		// IngestTCX returns the existing live row alongside ErrDuplicate

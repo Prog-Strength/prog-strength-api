@@ -299,6 +299,33 @@ func (r *MemoryRepository) ListPersonalRecordEventsByWorkouts(
 	return out, nil
 }
 
+func (r *MemoryRepository) GetPersonalRecordEventsByIDs(
+	ctx context.Context,
+	ids []string,
+) ([]PersonalRecordEvent, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []PersonalRecordEvent
+	for _, e := range r.personalRecordEvents {
+		if _, ok := want[e.ID]; ok {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AchievedAt.After(out[j].AchievedAt)
+	})
+	return out, nil
+}
+
 // affectedExercisesLocked returns exercise IDs touched by any data
 // keyed on the given workout — same union as the SQLite repo's
 // affectedExercisesForRecomputeTx.

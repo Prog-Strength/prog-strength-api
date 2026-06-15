@@ -24,6 +24,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
@@ -135,6 +136,7 @@ func New(cfg config.Config) (*Server, error) {
 	var chatRepo chat.Repository
 	var activityRepo activity.Repository
 	var nutritionLookupRepo nutritionlookup.Repository
+	var timelineRepo timeline.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
@@ -175,6 +177,7 @@ func New(cfg config.Config) (*Server, error) {
 		chatRepo = chat.NewSQLiteRepository(database)
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
+		timelineRepo = timeline.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -199,6 +202,13 @@ func New(cfg config.Config) (*Server, error) {
 		// archived TCX. Gated on activity_best_efforts being empty, so it
 		// runs once after migration 016 ships and is a no-op thereafter.
 		if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityBestEfforts(context.Background()); err != nil {
+			return nil, err
+		}
+
+		// Seed the timeline feed index from existing workouts, runs, PR
+		// events, and best efforts. Gated on timeline_post being empty, so it
+		// runs once after migration 019 ships and is a no-op thereafter.
+		if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
 			return nil, err
 		}
 
@@ -243,6 +253,7 @@ func New(cfg config.Config) (*Server, error) {
 		chatRepo = chat.NewMemoryRepository()
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
+		timelineRepo = timeline.NewMemoryRepository()
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),
@@ -289,9 +300,21 @@ func New(cfg config.Config) (*Server, error) {
 	// only applies to routes mounted inside it, leaving /health and
 	// /exercises public. The progression endpoint needs the exercise
 	// catalog to resolve a muscle_group filter to its member exercises.
+	// Timeline wiring: a publisher (best-effort feed-index writes injected
+	// into the workout/activity handlers) and a hydrator (renders post
+	// content from the live workout/activity repos at read time). Both adapt
+	// the cross-domain repos so the timeline package stays import-clean.
+	timelinePublisher := newTimelinePublisher(timelineRepo)
+	timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo)
+
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser(jwtSecret))
-		workout.NewHandler(workoutRepo, exerciseRepo).Mount(r)
+		// Capture the workout + activity handlers so the timeline publisher
+		// can be injected before mounting — best-effort publishing of
+		// workouts/PRs (workout) and runs/best efforts (activity).
+		workoutHandler := workout.NewHandler(workoutRepo, exerciseRepo)
+		workoutHandler.SetPublisher(timelinePublisher)
+		workoutHandler.Mount(r)
 		// Nutrition + pantry routes share the JWT-gated group with
 		// workouts. Phase 1 mounts pantry items and the nutrition
 		// log + daily-macros aggregate; recipes and bodyweight ship
@@ -316,7 +339,9 @@ func New(cfg config.Config) (*Server, error) {
 		// context and archives the raw TCX through activityArchiver.
 		// Generalized from the prior running-only domain — see migration
 		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
-		activity.NewHandler(activityRepo).Mount(r)
+		activityHandler := activity.NewHandler(activityRepo)
+		activityHandler.SetPublisher(timelinePublisher)
+		activityHandler.Mount(r)
 		// Chat session persistence. Agent stays stateless; this
 		// surface is just CRUD for sessions + a turn-append endpoint
 		// the clients write to after each completed stream. See
@@ -333,6 +358,11 @@ func New(cfg config.Config) (*Server, error) {
 		if usageLedger != nil {
 			usage.NewHandler(usageLedger, cfg.DailyUsageCapUSD).Mount(r)
 		}
+		// Timeline — the reverse-chronological feed of the user's own
+		// training events, with comments + reactions. Shares the JWT-gated
+		// group; the handler reads the viewer's id from context and hydrates
+		// post content from the live source repos via timelineHydrator.
+		timeline.NewHandler(timelineRepo, timelineHydrator).Mount(r)
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

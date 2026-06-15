@@ -49,6 +49,20 @@ var (
 
 	// ErrInvalidRPE is returned when target_rpe is set but outside [1,10].
 	ErrInvalidRPE = errors.New("plannedworkout: target_rpe must be between 1 and 10")
+
+	// ErrCalendarNotConnected is returned by the calendar scheduler when a sync
+	// is attempted but the user has no calendar connection. The handler maps it
+	// to a 409 prompting the user to connect first. Declared here (not in the
+	// calendarsync package) so the handler can errors.Is it without importing
+	// calendarsync — that package already imports plannedworkout, so putting the
+	// sentinel here avoids an import cycle while letting the service reuse it.
+	ErrCalendarNotConnected = errors.New("plannedworkout: calendar not connected")
+
+	// ErrCalendarReconnectNeeded is returned when the calendar grant is no
+	// longer usable (revoked, or Google rejected the token). The handler maps it
+	// to a 409 prompting re-consent. Same import-cycle rationale as
+	// ErrCalendarNotConnected.
+	ErrCalendarReconnectNeeded = errors.New("plannedworkout: calendar reconnect needed")
 )
 
 // isValidationError reports whether err is one of the package's clean-400

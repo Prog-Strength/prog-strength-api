@@ -1,8 +1,10 @@
 package plannedworkout
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -24,11 +26,36 @@ import (
 type Handler struct {
 	repo     Repository
 	userRepo user.Repository
+	// calendar pushes plans to Google Calendar. Optional and nil-safe:
+	// constructions that don't wire it (every test, and the server when
+	// calendar sync isn't configured) leave it nil. The /schedule and /resync
+	// endpoints then return 503; create/update/delete simply skip the
+	// best-effort push. Injected post-construction via SetCalendarSync so
+	// NewHandler's signature — and its existing callers — stay untouched
+	// (mirrors workoutHandler.SetPublisher).
+	calendar CalendarScheduler
+}
+
+// CalendarScheduler is the planned-workout view of the calendar sync service:
+// push a plan to Google (Schedule/Resync) or remove its event (Delete). Kept as
+// an interface here so the handler stays decoupled from the calendarsync
+// package (which itself imports plannedworkout — wiring the concrete type in
+// would create an import cycle).
+type CalendarScheduler interface {
+	Schedule(ctx context.Context, userID, planID, detailOverride string) error
+	Resync(ctx context.Context, userID, planID string) error
+	Delete(ctx context.Context, userID, planID string) error
 }
 
 func NewHandler(repo Repository, userRepo user.Repository) *Handler {
 	return &Handler{repo: repo, userRepo: userRepo}
 }
+
+// SetCalendarSync wires the Google Calendar scheduler into the handler. Called
+// from server wiring after construction, only when calendar sync is configured.
+// Safe to never call — the /schedule and /resync routes nil-guard to a clear
+// 503 and the create/update/delete push is best-effort.
+func (h *Handler) SetCalendarSync(s CalendarScheduler) { h.calendar = s }
 
 // Mount registers routes on the given router. Callers are expected to have
 // already wrapped the router in auth.RequireUser — these handlers read the
@@ -41,6 +68,8 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
 		r.Post("/{id}/skip", h.skip)
+		r.Post("/{id}/schedule", h.schedule)
+		r.Post("/{id}/resync", h.resync)
 	})
 }
 
@@ -157,6 +186,12 @@ type planRequest struct {
 	Notes          *string        `json:"notes"`
 	CalendarDetail *string        `json:"calendar_detail"`
 	Exercises      *[]exerciseReq `json:"exercises"`
+	// CalendarSync, when true, also pushes the plan to Google Calendar after a
+	// successful DB write. It is the "sync now" toggle, distinct from
+	// calendar_detail (which controls how much agenda the event carries). The
+	// push is best-effort: a Google failure never fails create/update — the
+	// resulting sync status is reflected in the response instead.
+	CalendarSync *bool `json:"calendar_sync"`
 }
 
 type exerciseReq struct {
@@ -258,6 +293,17 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		}
 		httpresp.ServerError(w, r.Context(), "create planned workout", err)
 		return
+	}
+
+	// Optional "sync now": best-effort push to Google Calendar. A write failure
+	// (or a connection problem) never fails the create — the plan is already
+	// persisted. We reflect the resulting sync status by re-reading the plan
+	// (Schedule persists status/event id onto it) before rendering the response.
+	if req.CalendarSync != nil && *req.CalendarSync && h.calendar != nil {
+		_ = h.calendar.Schedule(r.Context(), userID, pw.ID, "")
+		if refreshed, rerr := h.repo.Get(r.Context(), userID, pw.ID); rerr == nil {
+			pw = refreshed
+		}
 	}
 	httpresp.Created(w, "planned workout created", toDTO(pw))
 }
@@ -383,7 +429,17 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "update planned workout", err)
 		return
 	}
-	httpresp.OK(w, "updated planned workout", toDTO(&updated))
+
+	// Optional "sync now" on update — same best-effort semantics as create.
+	// Re-read so the response reflects the persisted sync status/event id.
+	resp := &updated
+	if req.CalendarSync != nil && *req.CalendarSync && h.calendar != nil {
+		_ = h.calendar.Schedule(r.Context(), userID, updated.ID, "")
+		if refreshed, rerr := h.repo.Get(r.Context(), userID, updated.ID); rerr == nil {
+			resp = refreshed
+		}
+	}
+	httpresp.OK(w, "updated planned workout", toDTO(resp))
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
@@ -397,6 +453,14 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "planned workout id is required")
 		return
 	}
+	// Best-effort: remove the Google Calendar event BEFORE the soft-delete so
+	// the plan (and its event id) is still loadable by the scheduler. A failure
+	// here never blocks the plan delete — an orphaned event is recoverable, a
+	// lost delete is not. Skipped entirely when calendar sync isn't wired.
+	if h.calendar != nil {
+		_ = h.calendar.Delete(r.Context(), userID, id)
+	}
+
 	if err := h.repo.Delete(r.Context(), userID, id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
@@ -428,6 +492,107 @@ func (h *Handler) skip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.OK(w, "planned workout skipped", nil)
+}
+
+// scheduleRequest is the body for POST /{id}/schedule and /{id}/resync. The
+// detail level is optional; "" means use the plan's calendar_detail, then the
+// user's default.
+type scheduleRequest struct {
+	DetailLevel *string `json:"detail_level"`
+}
+
+// schedule (POST /{id}/schedule) pushes the plan to Google Calendar at the
+// requested (or defaulted) detail level. The Google write is best-effort: a
+// missing/revoked connection maps to 409 (the user must act), but an actual
+// write failure does NOT 5xx and does NOT lose the plan — we re-read the plan
+// and return 200 with its (now "failed") sync status so the client can show it.
+func (h *Handler) schedule(w http.ResponseWriter, r *http.Request) {
+	h.syncEndpoint(w, r, false)
+}
+
+// resync (POST /{id}/resync) re-attempts the last write for a plan. Same shape
+// and mapping as schedule.
+func (h *Handler) resync(w http.ResponseWriter, r *http.Request) {
+	h.syncEndpoint(w, r, true)
+}
+
+// syncEndpoint is the shared body of schedule/resync. When isResync is false it
+// honors the optional detail_level override; resync ignores the body (the
+// render is deterministic from the plan) and just re-runs the write.
+func (h *Handler) syncEndpoint(w http.ResponseWriter, r *http.Request, isResync bool) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		httpresp.Error(w, http.StatusBadRequest, "planned workout id is required")
+		return
+	}
+	if h.calendar == nil {
+		httpresp.ErrorWithCode(w, http.StatusServiceUnavailable, "calendar sync not configured", "calendar_sync_unconfigured")
+		return
+	}
+
+	// Optional detail override (schedule only). An empty body is fine.
+	detail := ""
+	if !isResync {
+		var req scheduleRequest
+		// An empty body (EOF) is valid: detail defaults to the plan/user
+		// preference. Only a malformed non-empty body is a 400.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if req.DetailLevel != nil {
+			detail = *req.DetailLevel
+		}
+	}
+
+	// Confirm the plan exists/is owned before attempting a write, so a bad id
+	// is a clean 404 rather than surfacing through the scheduler.
+	if _, err := h.repo.Get(r.Context(), userID, id); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get planned workout", err)
+		return
+	}
+
+	var syncErr error
+	if isResync {
+		syncErr = h.calendar.Resync(r.Context(), userID, id)
+	} else {
+		syncErr = h.calendar.Schedule(r.Context(), userID, id, detail)
+	}
+
+	// Connection problems require the user to act → 409 with a code. These are
+	// NOT best-effort: there's nothing to retry until the user reconnects.
+	if errors.Is(syncErr, ErrCalendarNotConnected) {
+		httpresp.ErrorWithCode(w, http.StatusConflict, "calendar not connected; connect your Google Calendar first", "calendar_not_connected")
+		return
+	}
+	if errors.Is(syncErr, ErrCalendarReconnectNeeded) {
+		httpresp.ErrorWithCode(w, http.StatusConflict, "calendar connection needs to be reconnected", "calendar_reconnect_needed")
+		return
+	}
+
+	// Any other outcome (success OR a best-effort write failure): re-read the
+	// plan and return 200 with its current sync status. The Google write being
+	// best-effort means a failed write is reflected in google_sync_status =
+	// "failed", NOT a 5xx — the plan is never lost.
+	pw, err := h.repo.Get(r.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get planned workout", err)
+		return
+	}
+	httpresp.OK(w, "planned workout calendar sync attempted", toDTO(pw))
 }
 
 // --- helpers -------------------------------------------------------

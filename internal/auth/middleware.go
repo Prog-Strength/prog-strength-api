@@ -9,16 +9,25 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// RequireUser returns middleware that validates the bearer token on the
-// Authorization header and injects the user ID into the request context.
-// Requests without a valid token are rejected with 401.
+// RequireUser returns middleware that validates the caller's token and
+// injects the user ID into the request context. Requests without a valid
+// token are rejected with 401.
+//
+// The token is read from the Authorization header first, then from the
+// auth_token cookie set at login. The cookie fallback exists because
+// top-level browser navigations (e.g. the Google Calendar /connect redirect)
+// can't attach an Authorization header but do carry the SameSite=Lax cookie;
+// without it those endpoints would be unreachable from the browser. SameSite=Lax
+// keeps the CSRF surface low: the browser withholds the cookie on cross-site
+// POST/PUT/DELETE and cross-site fetches, sending it only on top-level GET
+// navigations.
 //
 // Handlers behind this middleware should read the user ID with
 // auth.UserIDFrom(r.Context()).
 func RequireUser(secret []byte) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tokenStr := bearerToken(r)
+			tokenStr := requestToken(r)
 			if tokenStr == "" {
 				httpresp.Error(w, http.StatusUnauthorized, "missing bearer token")
 				return
@@ -74,6 +83,20 @@ func RequireAdmin(users user.Repository, adminEmails []string) func(http.Handler
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// requestToken extracts the caller's JWT, preferring the Authorization header
+// (the API/fetch path) and falling back to the auth_token cookie (the browser
+// top-level-navigation path). An explicit header always wins, so a caller can
+// override a stale cookie.
+func requestToken(r *http.Request) string {
+	if tok := bearerToken(r); tok != "" {
+		return tok
+	}
+	if c, err := r.Cookie(authCookieName); err == nil {
+		return strings.TrimSpace(c.Value)
+	}
+	return ""
 }
 
 func bearerToken(r *http.Request) string {

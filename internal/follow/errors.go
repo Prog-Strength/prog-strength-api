@@ -5,7 +5,7 @@ import "errors"
 var (
 	// ErrNotFound is returned when a mutation finds no row matching the actor's
 	// expected side of the relationship: accepting/rejecting with no pending
-	// request addressed to the actor, cancelling/unfollowing/removing with no
+	// request addressed to the actor, canceling/unfollowing/removing with no
 	// matching row, or a Get with no edge. The handler maps it to 404.
 	ErrNotFound = errors.New("follow: not found")
 

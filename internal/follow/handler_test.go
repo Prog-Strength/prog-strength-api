@@ -292,7 +292,7 @@ func TestHandler_DeleteFollowCancelsPending(t *testing.T) {
 		t.Fatalf("status = %d, want 204; body=%s", w.Code, w.Body.String())
 	}
 	if _, err := repo.Get(context.Background(), "actor", "bob"); err == nil {
-		t.Fatal("pending edge should be cancelled")
+		t.Fatal("pending edge should be canceled")
 	}
 }
 

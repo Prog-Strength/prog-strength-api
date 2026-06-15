@@ -61,7 +61,7 @@ func TestContract_RequestAcceptTransitions(t *testing.T) {
 			}
 
 			// Accept by the followee (b) of the request authored by a.
-			if err := b.repo.Accept(ctx(), "b", "a"); err != nil {
+			if err = b.repo.Accept(ctx(), "b", "a"); err != nil {
 				t.Fatalf("Accept: %v", err)
 			}
 			got, err := b.repo.Get(ctx(), "a", "b")

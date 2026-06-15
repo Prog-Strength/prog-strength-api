@@ -68,8 +68,8 @@ func TestSQLite_EnsurePostIdempotent(t *testing.T) {
 	if first.ID == "" {
 		t.Fatal("expected generated id")
 	}
-	if first.Visibility != VisibilityPrivate {
-		t.Fatalf("visibility = %q, want private", first.Visibility)
+	if first.Visibility != VisibilityFriends {
+		t.Fatalf("visibility = %q, want friends", first.Visibility)
 	}
 
 	// Re-ensuring the same (user, source_type, source_id) — even with a
@@ -102,6 +102,19 @@ func TestSQLite_ListFeedKeysetPagination(t *testing.T) {
 	ctx := context.Background()
 	seedFeed(t, repo, ctx)
 	assertFeedPagination(t, repo, ctx)
+}
+
+// --- Feed fan-out + per-post visibility -------------------------------------
+
+func TestSQLite_FeedVisibilityFanOut(t *testing.T) {
+	t.Parallel()
+	repo := newSQLiteRepo(t)
+	ctx := context.Background()
+	assertFeedVisibilityFanOut(t, repo, ctx, func(postID string, v Visibility) {
+		if _, err := repo.db.ExecContext(ctx, `UPDATE timeline_post SET visibility = ? WHERE id = ?`, string(v), postID); err != nil {
+			t.Fatalf("set visibility: %v", err)
+		}
+	})
 }
 
 // --- Reactions: UNIQUE stacking + toggle + idempotency ----------------------
@@ -229,7 +242,7 @@ func assertFeedPagination(t *testing.T, repo Repository, ctx context.Context) {
 	t.Helper()
 
 	// Full feed, newest-first, u2's post excluded.
-	all, cur, err := repo.ListFeed(ctx, "u1", 10, nil)
+	all, cur, err := repo.ListFeed(ctx, []string{"u1"}, "u1", 10, nil)
 	if err != nil {
 		t.Fatalf("ListFeed all: %v", err)
 	}
@@ -255,7 +268,7 @@ func assertFeedPagination(t *testing.T, repo Repository, ctx context.Context) {
 	var paged []Post
 	var before *Cursor
 	for {
-		page, next, err := repo.ListFeed(ctx, "u1", 2, before)
+		page, next, err := repo.ListFeed(ctx, []string{"u1"}, "u1", 2, before)
 		if err != nil {
 			t.Fatalf("ListFeed page: %v", err)
 		}
@@ -275,6 +288,61 @@ func assertFeedPagination(t *testing.T, repo Repository, ctx context.Context) {
 		if paged[i].ID != all[i].ID {
 			t.Fatalf("page order diverged at %d: %s != %s", i, paged[i].ID, all[i].ID)
 		}
+	}
+}
+
+// assertFeedVisibilityFanOut holds both backends to the multi-author +
+// per-post visibility contract of ListFeed. setVis forces a post's visibility
+// in a backend-specific way (raw UPDATE for SQLite, field set for memory),
+// since EnsurePost always writes 'friends'. The contract: the viewer sees
+// their own posts at any visibility, others' posts only when not private, only
+// authors in the userIDs set, and an empty userIDs returns an empty page.
+func assertFeedVisibilityFanOut(t *testing.T, repo Repository, ctx context.Context, setVis func(postID string, v Visibility)) {
+	t.Helper()
+	t1 := mustTime(t, "2026-06-01T07:00:00Z")
+	t2 := mustTime(t, "2026-06-02T07:00:00Z")
+	t3 := mustTime(t, "2026-06-03T07:00:00Z")
+	t4 := mustTime(t, "2026-06-04T07:00:00Z")
+
+	ownPriv, _ := repo.EnsurePost(ctx, ref("viewer", "own-private", t1))
+	setVis(ownPriv.ID, VisibilityPrivate)
+	otherFriends, _ := repo.EnsurePost(ctx, ref("other", "other-friends", t2))
+	setVis(otherFriends.ID, VisibilityFriends)
+	otherPriv, _ := repo.EnsurePost(ctx, ref("other", "other-private", t3))
+	setVis(otherPriv.ID, VisibilityPrivate)
+	strangerFriends, _ := repo.EnsurePost(ctx, ref("stranger", "stranger-friends", t4))
+	setVis(strangerFriends.ID, VisibilityFriends)
+
+	// viewer ∪ {other}: viewer's own private (own), other's friends (visible),
+	// other's private (hidden), stranger excluded (not in set).
+	posts, _, err := repo.ListFeed(ctx, []string{"viewer", "other"}, "viewer", 10, nil)
+	if err != nil {
+		t.Fatalf("ListFeed fan-out: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range posts {
+		got[p.SourceID] = true
+	}
+	if !got["own-private"] {
+		t.Errorf("viewer should see own private post; got %v", got)
+	}
+	if !got["other-friends"] {
+		t.Errorf("viewer should see other's friends post; got %v", got)
+	}
+	if got["other-private"] {
+		t.Errorf("viewer must NOT see other's private post; got %v", got)
+	}
+	if got["stranger-friends"] {
+		t.Errorf("stranger not in userIDs set must be excluded; got %v", got)
+	}
+
+	// Empty userIDs → empty page, nil cursor.
+	empty, cur, err := repo.ListFeed(ctx, nil, "viewer", 10, nil)
+	if err != nil {
+		t.Fatalf("ListFeed empty: %v", err)
+	}
+	if len(empty) != 0 || cur != nil {
+		t.Fatalf("empty userIDs should return empty page + nil cursor; got %d posts cur=%v", len(empty), cur)
 	}
 }
 

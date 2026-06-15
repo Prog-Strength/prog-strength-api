@@ -53,7 +53,7 @@ func (r *SQLiteRepository) EnsurePost(ctx context.Context, ref PostRef) (Post, e
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(user_id, source_type, source_id) DO NOTHING
 	`, newID, ref.UserID, ref.SourceType, ref.SourceID, ref.OccurredAt.UTC(),
-		string(VisibilityPrivate), now, now); err != nil {
+		string(VisibilityFriends), now, now); err != nil {
 		return Post{}, err
 	}
 
@@ -70,12 +70,23 @@ func (r *SQLiteRepository) EnsurePost(ctx context.Context, ref PostRef) (Post, e
 	return *p, nil
 }
 
-// ListFeed returns the author's posts newest-first (occurred_at DESC, id
-// DESC), capped at limit, using a keyset cursor. It fetches limit+1 rows to
-// detect a further page and returns a non-nil cursor only when one exists.
-func (r *SQLiteRepository) ListFeed(ctx context.Context, userID string, limit int, before *Cursor) ([]Post, *Cursor, error) {
-	args := []any{userID}
-	clauses := []string{"user_id = ?"}
+// ListFeed returns posts authored by any user in userIDs, newest-first
+// (occurred_at DESC, id DESC), capped at limit, using a keyset cursor. A post
+// is admitted only when it is the viewer's own or its visibility is not
+// 'private'. It fetches limit+1 rows to detect a further page and returns a
+// non-nil cursor only when one exists. An empty userIDs returns an empty page
+// (guarding against an invalid `IN ()`).
+func (r *SQLiteRepository) ListFeed(ctx context.Context, userIDs []string, viewerID string, limit int, before *Cursor) ([]Post, *Cursor, error) {
+	if len(userIDs) == 0 {
+		return nil, nil, nil
+	}
+	placeholders, idArgs := inPlaceholders(userIDs)
+	args := append([]any{}, idArgs...)
+	args = append(args, viewerID)
+	clauses := []string{
+		"user_id IN (" + placeholders + ")",
+		"(user_id = ? OR visibility <> 'private')",
+	}
 	if before != nil {
 		clauses = append(clauses, "(occurred_at < ? OR (occurred_at = ? AND id < ?))")
 		args = append(args, before.OccurredAt.UTC(), before.OccurredAt.UTC(), before.ID)

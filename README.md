@@ -211,8 +211,37 @@ works with everything unset; production uses the secrets listed in
 | `DEV_AUTH`              | `false`            | Gates `POST /auth/dev/token`. Must be `false` in prod. |
 | `CORS_ALLOWED_ORIGIN`   | —                  | Frontend origin allowed by CORS.                 |
 | `RETURN_TO_ALLOWED_ORIGINS` | —              | OAuth `return_to` allow-list.                    |
-| `BETA_ALLOWED_EMAILS`   | —                  | Comma-separated allow-list during closed beta.   |
+| `BETA_ALLOWED_EMAILS`   | —                  | Seed-only: one-time boot seed for the DB-backed beta allow-list (slated for removal). See below. |
+| `ADMIN_EMAILS`          | —                  | Comma-separated operator allow-list gating `/admin/beta-emails`. Empty = admin surface disabled (fail-closed). |
 | `APP_VERSION`           | `dev`              | Released version, baked in by the Dockerfile.    |
+
+### Beta allowlist
+
+The closed-beta gate (which emails may obtain a JWT at the Google OAuth
+callback) is backed by the `beta_allowed_emails` SQLite table, not by an
+env var. An **empty table disables the gate** — every authenticated user
+gets a token (pre-beta / local dev). Adding an email grants access on that
+user's next login; removing one blocks future logins (an already-issued
+token lives until it expires — there is no session revocation).
+
+`BETA_ALLOWED_EMAILS` is now **seed-only**: on the first boot where the
+table is empty, its comma-separated values are inserted into the table
+(`added_by = "seed:BETA_ALLOWED_EMAILS"`) so the live list carries over
+with no manual step. After that boot it no longer affects the gate and is
+slated for removal in a follow-up.
+
+Operators manage the list at runtime via three admin endpoints, all behind
+`RequireUser` + an admin gate (the caller's email must be in `ADMIN_EMAILS`;
+an empty `ADMIN_EMAILS` makes the whole surface return `403`). Admin calls
+use the operator's ordinary user JWT — no separate token.
+
+| Method & path                       | Behavior                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `GET /admin/beta-emails`            | List entries (`email`, `added_at`, `added_by`, `note`), sorted by `added_at` asc. |
+| `POST /admin/beta-emails`           | Body `{ "email": "...", "note": "optional" }`. `201` when added, `200` if already present (idempotent), `400` on a malformed/empty email. `added_by` is the calling admin's email. |
+| `DELETE /admin/beta-emails/{email}` | `204` on removal, `404` if the email was not on the list.                 |
+
+Non-admin callers get `403` on every verb.
 
 ## Coding Practices
 

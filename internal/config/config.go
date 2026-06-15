@@ -89,15 +89,22 @@ type Config struct {
 	// Public rates live in source so price changes are reviewable diffs.
 	UsagePriceTableJSON string
 
-	// BetaAllowedEmails is the closed-beta allowlist: only these email
-	// addresses receive a JWT after Google OAuth. Anyone else completes
-	// the OAuth flow (and gets a user row created — useful for
-	// visibility into sign-up attempts) but is redirected back to the
-	// frontend with #error=beta_required instead of an access token,
-	// so they can't reach the agent and burn Anthropic credits.
-	// Comparison is case-insensitive. Empty disables the gate entirely
-	// — every authenticated user gets a token (pre-beta / local dev).
+	// BetaAllowedEmails is the one-time seed source for the DB-backed beta
+	// allowlist. The live gate now reads the beta_allowed_emails table (see
+	// internal/beta); on first boot, if that table is empty and this is
+	// non-empty, the values are seeded into it (internal/beta.SeedFromEnv,
+	// added_by="seed:BETA_ALLOWED_EMAILS"). Once the table is populated this
+	// var no longer affects the gate and is slated for removal. Comparison
+	// (in the table) is case-insensitive; an empty table disables the gate
+	// entirely — every authenticated user gets a token (pre-beta / local dev).
 	BetaAllowedEmails []string
+
+	// AdminEmails is the comma-separated operator allowlist that gates the
+	// /admin/beta-emails surface (manage the beta allowlist at runtime).
+	// Parsed from ADMIN_EMAILS via splitCSV; comparison is case-insensitive.
+	// Empty disables the admin surface entirely (fail-closed) — every admin
+	// route returns 403 until an operator is configured.
+	AdminEmails []string
 
 	// AvatarBucketName is the S3 bucket for user-uploaded avatars, read from
 	// AVATAR_BUCKET_NAME. Empty (the default) means avatar storage is
@@ -157,6 +164,7 @@ func Load() (Config, error) {
 		DailyUsageCapUSD:          parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
 		UsagePriceTableJSON:       os.Getenv("USAGE_PRICE_TABLE_JSON"),
 		BetaAllowedEmails:         splitCSV(os.Getenv("BETA_ALLOWED_EMAILS")),
+		AdminEmails:               splitCSV(os.Getenv("ADMIN_EMAILS")),
 		AvatarBucketName:          os.Getenv("AVATAR_BUCKET_NAME"),
 		FatSecretClientID:         os.Getenv("FATSECRET_CLIENT_ID"),
 		FatSecretClientSecret:     os.Getenv("FATSECRET_CLIENT_SECRET"),

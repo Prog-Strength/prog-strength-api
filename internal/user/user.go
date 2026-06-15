@@ -18,9 +18,15 @@ const (
 // no password fields. Email is the OAuth identifier and is immutable through
 // the Update path (changing email requires re-verification, not yet implemented).
 type User struct {
-	ID           string       `json:"id"`
-	Email        string       `json:"email"`
-	DisplayName  string       `json:"display_name"`
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	// Username is the user-settable public handle, stored canonicalized
+	// (lowercased) so uniqueness is case-insensitive. nil until first set.
+	// Validation happens at the write edge (ValidateUsername), not in
+	// Validate(): the stored value is already canonical, and a nil handle is
+	// legal for existing/unset users.
+	Username     *string      `json:"username"`
 	WeightUnit   WeightUnit   `json:"weight_unit"`
 	DistanceUnit DistanceUnit `json:"distance_unit"`
 	// HeightCm is an optional static body metric in canonical centimeters.

@@ -32,6 +32,101 @@ func seedUser(t *testing.T, repo *user.MemoryRepository, email string) string {
 	return u.ID
 }
 
+func TestRequireUser_BearerHeaderPasses(t *testing.T) {
+	secret := []byte("test-secret")
+	token, err := Sign("user-123", secret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	var reached bool
+	h := RequireUser(secret)(okHandler(&reached))
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !reached {
+		t.Fatal("valid bearer header was rejected, want pass")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// A top-level browser navigation (e.g. the Google Calendar connect redirect)
+// can't attach an Authorization header, but it does carry the SameSite=Lax
+// auth_token cookie set at login. RequireUser must accept that cookie as a
+// fallback so those endpoints aren't unreachable from the browser.
+func TestRequireUser_AuthCookieFallbackPasses(t *testing.T) {
+	secret := []byte("test-secret")
+	token, err := Sign("user-123", secret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	var reached bool
+	h := RequireUser(secret)(okHandler(&reached))
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/google/calendar/connect", nil)
+	req.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !reached {
+		t.Fatal("valid auth_token cookie was rejected, want pass")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// The Authorization header wins over the cookie when both are present, so a
+// caller can always override a stale cookie by sending an explicit token.
+func TestRequireUser_HeaderTakesPrecedenceOverCookie(t *testing.T) {
+	secret := []byte("test-secret")
+	headerToken, err := Sign("header-user", secret)
+	if err != nil {
+		t.Fatalf("sign header token: %v", err)
+	}
+
+	var gotUserID string
+	h := RequireUser(secret)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserID, _ = UserIDFrom(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+headerToken)
+	req.AddCookie(&http.Cookie{Name: authCookieName, Value: "garbage-cookie-value"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotUserID != "header-user" {
+		t.Fatalf("user id = %q, want header-user (header should win)", gotUserID)
+	}
+}
+
+func TestRequireUser_NoTokenRejected(t *testing.T) {
+	var reached bool
+	h := RequireUser([]byte("test-secret"))(okHandler(&reached))
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if reached {
+		t.Fatal("request with no token reached handler, want 401")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
 func TestRequireAdmin_AdminPasses(t *testing.T) {
 	repo := user.NewMemoryRepository()
 	id := seedUser(t, repo, "Admin@Example.com")

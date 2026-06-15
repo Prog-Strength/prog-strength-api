@@ -32,7 +32,7 @@ func NewMemoryRepository() *MemoryRepository {
 }
 
 // entryKey is the composite map key enforcing one row per (user, date) —
-// the in-memory analogue of the UNIQUE (user_id, date) constraint.
+// the in-memory analog of the UNIQUE (user_id, date) constraint.
 func entryKey(userID, date string) string {
 	return userID + "|" + date
 }
@@ -81,7 +81,7 @@ func (r *MemoryRepository) List(ctx context.Context, userID string, since, until
 			continue
 		}
 		if keyset {
-			if before != nil && !(e.Date < *before) {
+			if before != nil && e.Date >= *before {
 				continue
 			}
 		} else {

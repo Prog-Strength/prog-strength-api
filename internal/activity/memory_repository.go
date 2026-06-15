@@ -257,9 +257,10 @@ func (r *MemoryRepository) GetRunningBestEffortHistory(ctx context.Context, user
 				continue
 			}
 			out = append(out, BestEffortPoint{
-				ActivityID:        a.ID,
-				ActivityStartTime: a.StartTime,
-				DurationSeconds:   e.DurationSeconds,
+				ActivityID:             a.ID,
+				ActivityStartTime:      a.StartTime,
+				DurationSeconds:        e.DurationSeconds,
+				ActivityDistanceMeters: a.DistanceMeters,
 			})
 		}
 	}

@@ -335,6 +335,93 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("ClearCompletion_RevertsStatusAndClearsLink", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+			t.Fatalf("SetCompletion: %v", err)
+		}
+		if err := repo.ClearCompletion(ctx, "u1", pw.ID); err != nil {
+			t.Fatalf("ClearCompletion: %v", err)
+		}
+		got, err := repo.Get(ctx, "u1", pw.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.Status != StatusPlanned {
+			t.Errorf("status = %q, want planned", got.Status)
+		}
+		if got.CompletedSessionID != nil {
+			t.Errorf("session id should be cleared, got %v", *got.CompletedSessionID)
+		}
+		if got.CompletedSessionKind != nil {
+			t.Errorf("session kind should be cleared, got %v", *got.CompletedSessionKind)
+		}
+	})
+
+	t.Run("ClearCompletion_CrossUser", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := repo.ClearCompletion(ctx, "u2", pw.ID); !errors.Is(err, ErrNotFound) {
+			t.Errorf("cross-user ClearCompletion: want ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("GetByCompletedSession_FindsLinkingPlan", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+			t.Fatalf("SetCompletion: %v", err)
+		}
+		got, err := repo.GetByCompletedSession(ctx, "u1", "sess-123", SessionKindWorkout)
+		if err != nil {
+			t.Fatalf("GetByCompletedSession: %v", err)
+		}
+		if got.ID != pw.ID {
+			t.Errorf("got plan %q, want %q", got.ID, pw.ID)
+		}
+	})
+
+	t.Run("GetByCompletedSession_NoMatch", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+			t.Fatalf("SetCompletion: %v", err)
+		}
+		// Wrong kind → no match.
+		if _, err := repo.GetByCompletedSession(ctx, "u1", "sess-123", SessionKindActivity); !errors.Is(err, ErrNotFound) {
+			t.Errorf("wrong kind: want ErrNotFound, got %v", err)
+		}
+		// Wrong session id → no match.
+		if _, err := repo.GetByCompletedSession(ctx, "u1", "nope", SessionKindWorkout); !errors.Is(err, ErrNotFound) {
+			t.Errorf("wrong session id: want ErrNotFound, got %v", err)
+		}
+		// Cross-user → no match.
+		if _, err := repo.GetByCompletedSession(ctx, "u2", "sess-123", SessionKindWorkout); !errors.Is(err, ErrNotFound) {
+			t.Errorf("cross-user: want ErrNotFound, got %v", err)
+		}
+	})
+
 	t.Run("SetGoogleSync_RoundTripsAndNilClears", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()

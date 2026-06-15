@@ -1,12 +1,116 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// newEmptyDB opens a fresh database file in a t.TempDir() using the same DSN as
+// newMigratedDB but without running any migrations, so tests can drive
+// migrateWith directly with synthetic Go migrations.
+func newEmptyDB(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	conn, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// TestGoMigration_AppliesOnceAndRecordsVersion verifies a Go migration runs in
+// its transaction, records its version in the shared ledger, and is skipped on
+// a subsequent run.
+func TestGoMigration_AppliesOnceAndRecordsVersion(t *testing.T) {
+	t.Parallel()
+	conn := newEmptyDB(t)
+
+	runs := 0
+	gm := goMigration{
+		Version: 9001,
+		Name:    "marker",
+		Run: func(ctx context.Context, tx *sql.Tx) error {
+			runs++
+			_, err := tx.ExecContext(ctx, `CREATE TABLE go_marker (id INTEGER PRIMARY KEY)`)
+			return err
+		},
+	}
+
+	if err := migrateWith(conn, []goMigration{gm}); err != nil {
+		t.Fatalf("first migrateWith: %v", err)
+	}
+	if runs != 1 {
+		t.Fatalf("want runs == 1 after first run, got %d", runs)
+	}
+
+	var count int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 9001`).Scan(&count); err != nil {
+		t.Fatalf("query schema_migrations: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("want version 9001 recorded once, got count %d", count)
+	}
+
+	// The Go migration's table exists.
+	if _, err := conn.Exec(`INSERT INTO go_marker (id) VALUES (1)`); err != nil {
+		t.Fatalf("go migration table should exist: %v", err)
+	}
+
+	// Re-running skips the already-applied migration.
+	if err := migrateWith(conn, []goMigration{gm}); err != nil {
+		t.Fatalf("second migrateWith: %v", err)
+	}
+	if runs != 1 {
+		t.Fatalf("want runs == 1 after re-run (skipped), got %d", runs)
+	}
+}
+
+// TestGoMigration_RunsInVersionOrderWithSQL verifies the runner sorts Go
+// migrations by version regardless of registration order.
+func TestGoMigration_RunsInVersionOrderWithSQL(t *testing.T) {
+	t.Parallel()
+	conn := newEmptyDB(t)
+
+	var order []int
+	record := func(v int) func(ctx context.Context, tx *sql.Tx) error {
+		return func(ctx context.Context, tx *sql.Tx) error {
+			order = append(order, v)
+			return nil
+		}
+	}
+
+	migs := []goMigration{
+		{Version: 9003, Name: "third", Run: record(9003)},
+		{Version: 9002, Name: "second", Run: record(9002)},
+	}
+	if err := migrateWith(conn, migs); err != nil {
+		t.Fatalf("migrateWith: %v", err)
+	}
+
+	if len(order) != 2 || order[0] != 9002 || order[1] != 9003 {
+		t.Fatalf("want order [9002 9003], got %v", order)
+	}
+}
+
+// TestCollectMigrations_RejectsDuplicateVersion verifies a Go migration whose
+// version collides with an existing SQL migration is rejected.
+func TestCollectMigrations_RejectsDuplicateVersion(t *testing.T) {
+	t.Parallel()
+
+	_, err := collectMigrations([]goMigration{{
+		Version: 27,
+		Name:    "dup",
+		Run:     func(ctx context.Context, tx *sql.Tx) error { return nil },
+	}})
+	if err == nil {
+		t.Fatal("want error for duplicate version 27 (already a SQL migration), got nil")
+	}
+}
 
 // newMigratedDB opens a fresh database file in a t.TempDir(), runs all
 // migrations, and returns the handle. Each test gets its own file so

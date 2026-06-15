@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
@@ -35,6 +34,9 @@ type Handler struct {
 	// NewHandler's signature — and its existing callers — stay untouched
 	// (mirrors workoutHandler.SetPublisher).
 	calendar CalendarScheduler
+	// svc owns the single completion code path (LinkCompletion) and its
+	// inverse (Unlink). Always non-nil — NewHandler constructs it.
+	svc *Service
 }
 
 // CalendarScheduler is the planned-workout view of the calendar sync service:
@@ -54,14 +56,23 @@ type CalendarScheduler interface {
 }
 
 func NewHandler(repo Repository, userRepo user.Repository) *Handler {
-	return &Handler{repo: repo, userRepo: userRepo}
+	h := &Handler{repo: repo, userRepo: userRepo}
+	h.svc = NewService(repo)
+	return h
 }
+
+// Service exposes the completion service so server wiring can hand it to the
+// auto-matcher (the other caller of the single completion code path).
+func (h *Handler) Service() *Service { return h.svc }
 
 // SetCalendarSync wires the Google Calendar scheduler into the handler. Called
 // from server wiring after construction, only when calendar sync is configured.
 // Safe to never call — the /schedule and /resync routes nil-guard to a clear
 // 503 and the create/update/delete push is best-effort.
-func (h *Handler) SetCalendarSync(s CalendarScheduler) { h.calendar = s }
+func (h *Handler) SetCalendarSync(s CalendarScheduler) {
+	h.calendar = s
+	h.svc.SetCalendar(s)
+}
 
 // Mount registers routes on the given router. Callers are expected to have
 // already wrapped the router in auth.RequireUser — these handlers read the
@@ -70,11 +81,15 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Route("/planned-workouts", func(r chi.Router) {
 		r.Post("/", h.create)
 		r.Get("/", h.list)
+		// by-session is a literal path; register it before the /{id} wildcard
+		// so chi matches it first.
+		r.Get("/by-session", h.bySession)
 		r.Get("/{id}", h.get)
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
 		r.Post("/{id}/skip", h.skip)
 		r.Post("/{id}/complete", h.complete)
+		r.Post("/{id}/unlink", h.unlink)
 		r.Post("/{id}/schedule", h.schedule)
 		r.Post("/{id}/resync", h.resync)
 	})
@@ -576,19 +591,11 @@ func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Confirm the plan exists/is owned before mutating, so a bad id is a clean
-	// 404 (and the same for cross-user, which the repo collapses to ErrNotFound).
-	plan, err := h.repo.Get(r.Context(), userID, id)
+	// The service owns the completion path: confirm ownership (404 guard), mark
+	// completed, and — when the plan is Google-synced — best-effort rewrite the
+	// event. It re-reads so the response reflects status, link, and sync state.
+	updated, err := h.svc.LinkCompletion(r.Context(), userID, id, req.SessionID, kind)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "get planned workout", err)
-		return
-	}
-
-	if err = h.repo.SetCompletion(r.Context(), userID, id, req.SessionID, kind); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
 			return
@@ -600,27 +607,64 @@ func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "complete planned workout", err)
 		return
 	}
+	httpresp.OK(w, "planned workout completed", toDTO(updated))
+}
 
-	// If the plan was pushed to Google, rewrite the event to reflect completion.
-	// Best-effort: a Google failure is logged but never fails the request — the
-	// plan is already marked completed in our store. v1 actualText is a concise
-	// marker referencing the linked session; the handler only has the session
-	// id/kind, not the full logged details (see SOW note).
-	if plan.GoogleEventID != nil && *plan.GoogleEventID != "" && h.calendar != nil {
-		actualText := "Completed — logged " + req.SessionKind + " session " + req.SessionID
-		if err = h.calendar.RewriteCompleted(r.Context(), userID, id, actualText); err != nil {
-			log.Printf("complete planned workout: rewrite google event (plan %s): %v", id, err)
-		}
-	}
-
-	// Re-read so the response reflects the completed status, the populated link,
-	// and any sync status the rewrite persisted.
-	updated, err := h.repo.Get(r.Context(), userID, id)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "get planned workout", err)
+// unlink (POST /{id}/unlink) is the inverse of complete: it reverts a plan to
+// "planned", clears its completion link, and — when the plan is Google-synced —
+// best-effort re-renders the (now non-completed) calendar event.
+func (h *Handler) unlink(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	httpresp.OK(w, "planned workout completed", toDTO(updated))
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		httpresp.Error(w, http.StatusBadRequest, "planned workout id is required")
+		return
+	}
+	updated, err := h.svc.Unlink(r.Context(), userID, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "unlink planned workout", err)
+		return
+	}
+	httpresp.OK(w, "planned workout unlinked", toDTO(updated))
+}
+
+// bySession (GET /by-session?session_id=&session_kind=) is the reverse lookup:
+// given a logged session, return the plan it completed, or 404 when none does.
+func (h *Handler) bySession(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	sessionID := r.URL.Query().Get("session_id")
+	kindStr := r.URL.Query().Get("session_kind")
+	if sessionID == "" || kindStr == "" {
+		httpresp.Error(w, http.StatusBadRequest, "session_id and session_kind are required")
+		return
+	}
+	kind := SessionKind(kindStr)
+	if kind != SessionKindWorkout && kind != SessionKindActivity {
+		httpresp.Error(w, http.StatusBadRequest, "session_kind must be 'workout' or 'activity'")
+		return
+	}
+	plan, err := h.repo.GetByCompletedSession(r.Context(), userID, sessionID, kind)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "no planned workout completed by this session")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "lookup planned workout by session", err)
+		return
+	}
+	httpresp.OK(w, "planned workout found", toDTO(plan))
 }
 
 // scheduleRequest is the body for POST /{id}/schedule and /{id}/resync. The

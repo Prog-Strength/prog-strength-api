@@ -438,6 +438,14 @@ func New(cfg config.Config) (*Server, error) {
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
 		activityHandler.Mount(r)
+		// Wire the shared planned-workout service into the activity + workout
+		// plan-matcher seams so a logged run/lift best-effort completes a
+		// matching planned workout. One service instance backs both adapters;
+		// SetCalendarSync above (if configured) already set the calendar on the
+		// same struct, so plan-completion calendar pushes flow through it.
+		planService := plannedWorkoutHandler.Service()
+		activityHandler.SetPlanMatcher(&activityPlanMatcher{svc: planService})
+		workoutHandler.SetPlanMatcher(&workoutPlanMatcher{svc: planService})
 		// Chat session persistence. Agent stays stateless; this
 		// surface is just CRUD for sessions + a turn-append endpoint
 		// the clients write to after each completed stream. See

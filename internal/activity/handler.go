@@ -46,6 +46,12 @@ type Handler struct {
 	// post-construction via SetPublisher so NewHandler's signature — and the
 	// tests that call it — stay untouched.
 	publisher timeline.Publisher
+	// planMatcher best-effort links a freshly-ingested run (or a deleted one)
+	// to the planned workout it completes. Optional and nil-safe, mirroring
+	// publisher: existing constructions leave it nil and skip matching. The
+	// implementation lives in server wiring so this package never imports
+	// planned_workout. Injected post-construction via SetPlanMatcher.
+	planMatcher PlanMatcher
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -55,6 +61,30 @@ func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: tim
 // construction. Safe to never call — publishing is best-effort and
 // nil-guarded.
 func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
+
+// SetPlanMatcher wires the plan matcher in so an ingested run is best-effort
+// linked to the planned workout it completes (and unlinked on delete). Called
+// from server wiring after construction. Safe to never call — matching is
+// best-effort and nil-guarded.
+func (h *Handler) SetPlanMatcher(m PlanMatcher) { h.planMatcher = m }
+
+// matchSession best-effort-notifies the plan matcher that ref was logged. It
+// NEVER affects the HTTP response: a nil matcher is a no-op.
+func (h *Handler) matchSession(ctx context.Context, userID string, ref SessionRef) {
+	if h.planMatcher == nil {
+		return
+	}
+	h.planMatcher.OnSessionLogged(ctx, userID, ref)
+}
+
+// unmatchSession best-effort-notifies the plan matcher that sessionID was
+// deleted so any plan link is reverted. Nil matcher is a no-op.
+func (h *Handler) unmatchSession(ctx context.Context, userID, sessionID string) {
+	if h.planMatcher == nil {
+		return
+	}
+	h.planMatcher.OnSessionDeleted(ctx, userID, sessionID)
+}
 
 // publish best-effort-publishes ref into the timeline feed index. It NEVER
 // affects the HTTP response: a nil publisher is a no-op, and the publisher
@@ -262,6 +292,9 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 					OccurredAt: a.StartTime,
 				})
 			}
+			// Best-effort: link this run to the planned workout it completes.
+			// Never affects this response.
+			h.matchSession(r.Context(), a.UserID, SessionRef{SessionID: a.ID, StartUTC: a.StartTime})
 		}
 		httpresp.Created(w, "imported activity", toActivityDTO(a, true))
 	case errors.Is(err, ErrDuplicate):
@@ -468,6 +501,9 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "delete activity", err)
 		return
 	}
+	// Best-effort: revert any plan link for the deleted activity. Never
+	// affects this response.
+	h.unmatchSession(r.Context(), userID, activityID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

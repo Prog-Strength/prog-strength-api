@@ -230,6 +230,32 @@ func (r *SQLiteRepository) SetCompletion(ctx context.Context, userID, planID, se
 	return affectedOrNotFound(res, err)
 }
 
+func (r *SQLiteRepository) ClearCompletion(ctx context.Context, userID, planID string) error {
+	now := r.now().UTC()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE planned_workouts SET
+			status = ?, completed_session_id = NULL, completed_session_kind = NULL, updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, string(StatusPlanned), now, planID, userID)
+	return affectedOrNotFound(res, err)
+}
+
+func (r *SQLiteRepository) GetByCompletedSession(ctx context.Context, userID, sessionID string, kind SessionKind) (*PlannedWorkout, error) {
+	var id string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id FROM planned_workouts
+		WHERE user_id = ? AND completed_session_id = ? AND completed_session_kind = ? AND deleted_at IS NULL
+		LIMIT 1
+	`, userID, sessionID, string(kind)).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, userID, id)
+}
+
 func (r *SQLiteRepository) SetGoogleSync(ctx context.Context, userID, planID string, eventID *string, status GoogleSyncStatus, lastErr *string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `

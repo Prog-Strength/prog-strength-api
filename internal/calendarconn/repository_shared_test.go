@@ -163,7 +163,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if exists {
 			t.Fatal("Exists before upsert = true, want false")
 		}
-		if err := repo.Upsert(ctx, "u1", enc, nonce, "primary", "s", t0); err != nil {
+		if err = repo.Upsert(ctx, "u1", enc, nonce, "primary", "s", t0); err != nil {
 			t.Fatalf("Upsert: %v", err)
 		}
 		exists, err = repo.Exists(ctx, "u1")

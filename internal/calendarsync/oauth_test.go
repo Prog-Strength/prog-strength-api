@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -135,7 +136,7 @@ func TestExchangeCodeNoRefreshToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("exchangeCode: want error, got nil")
 	}
-	if err != ErrNoRefreshToken {
+	if !errors.Is(err, ErrNoRefreshToken) {
 		t.Errorf("err = %v, want ErrNoRefreshToken", err)
 	}
 }

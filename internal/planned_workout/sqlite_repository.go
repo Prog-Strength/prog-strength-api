@@ -273,33 +273,40 @@ func insertAgendaTx(ctx context.Context, tx *sql.Tx, pw *PlannedWorkout) error {
 // hydrateAgenda loads the plan's exercises (ordered) and each exercise's sets
 // (ordered) via secondary queries.
 func (r *SQLiteRepository) hydrateAgenda(ctx context.Context, pw *PlannedWorkout) error {
-	exRows, err := r.db.QueryContext(ctx, `
-		SELECT id, exercise_id, order_index, notes
-		FROM planned_workout_exercises
-		WHERE planned_workout_id = ?
-		ORDER BY order_index ASC
-	`, pw.ID)
+	// Read the exercise rows in a closure so the deferred Close fires before
+	// the per-exercise loadSets queries below, freeing the read connection.
+	exercises, err := func() ([]PlannedExercise, error) {
+		exRows, err := r.db.QueryContext(ctx, `
+			SELECT id, exercise_id, order_index, notes
+			FROM planned_workout_exercises
+			WHERE planned_workout_id = ?
+			ORDER BY order_index ASC
+		`, pw.ID)
+		if err != nil {
+			return nil, err
+		}
+		defer exRows.Close()
+
+		var exercises []PlannedExercise
+		for exRows.Next() {
+			var ex PlannedExercise
+			var notes sql.NullString
+			if err := exRows.Scan(&ex.ID, &ex.ExerciseID, &ex.OrderIndex, &notes); err != nil {
+				return nil, err
+			}
+			if notes.Valid {
+				ex.Notes = &notes.String
+			}
+			exercises = append(exercises, ex)
+		}
+		if err := exRows.Err(); err != nil {
+			return nil, err
+		}
+		return exercises, nil
+	}()
 	if err != nil {
 		return err
 	}
-	var exercises []PlannedExercise
-	for exRows.Next() {
-		var ex PlannedExercise
-		var notes sql.NullString
-		if err := exRows.Scan(&ex.ID, &ex.ExerciseID, &ex.OrderIndex, &notes); err != nil {
-			exRows.Close()
-			return err
-		}
-		if notes.Valid {
-			ex.Notes = &notes.String
-		}
-		exercises = append(exercises, ex)
-	}
-	if err := exRows.Err(); err != nil {
-		exRows.Close()
-		return err
-	}
-	exRows.Close()
 
 	for i := range exercises {
 		sets, err := r.loadSets(ctx, exercises[i].ID)

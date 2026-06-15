@@ -167,14 +167,7 @@ func toDTO(pw *PlannedWorkout) planDTO {
 			Sets:       make([]setDTO, 0, len(ex.Sets)),
 		}
 		for _, s := range ex.Sets {
-			edto.Sets = append(edto.Sets, setDTO{
-				ID:           s.ID,
-				OrderIndex:   s.OrderIndex,
-				TargetReps:   s.TargetReps,
-				TargetWeight: s.TargetWeight,
-				Unit:         s.Unit,
-				TargetRPE:    s.TargetRPE,
-			})
+			edto.Sets = append(edto.Sets, setDTO(s))
 		}
 		dto.Exercises = append(dto.Exercises, edto)
 	}
@@ -553,7 +546,7 @@ func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.repo.SetCompletion(r.Context(), userID, id, req.SessionID, kind); err != nil {
+	if err = h.repo.SetCompletion(r.Context(), userID, id, req.SessionID, kind); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
 			return
@@ -573,7 +566,7 @@ func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 	// id/kind, not the full logged details (see SOW note).
 	if plan.GoogleEventID != nil && *plan.GoogleEventID != "" && h.calendar != nil {
 		actualText := "Completed — logged " + req.SessionKind + " session " + req.SessionID
-		if err := h.calendar.RewriteCompleted(r.Context(), userID, id, actualText); err != nil {
+		if err = h.calendar.RewriteCompleted(r.Context(), userID, id, actualText); err != nil {
 			log.Printf("complete planned workout: rewrite google event (plan %s): %v", id, err)
 		}
 	}

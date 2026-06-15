@@ -195,7 +195,7 @@ func (s *Service) recordFailure(ctx context.Context, userID string, plan *planne
 
 	if errors.Is(cause, ErrTokenRejected) {
 		_ = s.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
-		return fmt.Errorf("%w: %v", ErrReconnectNeeded, cause)
+		return fmt.Errorf("%w: %w", ErrReconnectNeeded, cause)
 	}
 	return fmt.Errorf("calendarsync: write google event: %w", cause)
 }
@@ -233,7 +233,7 @@ func (s *Service) connect(ctx context.Context, userID string) (calendarID, acces
 		// A refresh that Google rejects (revoked/expired grant) reads as
 		// reconnect-needed; flip the connection so the UI prompts re-consent.
 		_ = s.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
-		return "", "", fmt.Errorf("%w: %v", ErrReconnectNeeded, err)
+		return "", "", fmt.Errorf("%w: %w", ErrReconnectNeeded, err)
 	}
 
 	calendarID = conn.GoogleCalendarID

@@ -174,7 +174,7 @@ func TestSQLite_TimezoneAndCalendarDetailDefaultsAndUpdate(t *testing.T) {
 
 	got.Timezone = "America/New_York"
 	got.CalendarDefaultDetail = "full_agenda"
-	if err := repo.Update(ctx, got); err != nil {
+	if err = repo.Update(ctx, got); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 

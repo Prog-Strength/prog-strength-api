@@ -332,7 +332,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 
 		// Success path: nil event id clears it, error cleared.
-		if err := repo.SetGoogleSync(ctx, "u1", pw.ID, nil, SyncSynced, nil); err != nil {
+		if err = repo.SetGoogleSync(ctx, "u1", pw.ID, nil, SyncSynced, nil); err != nil {
 			t.Fatalf("SetGoogleSync synced-path: %v", err)
 		}
 		got, err = repo.Get(ctx, "u1", pw.ID)

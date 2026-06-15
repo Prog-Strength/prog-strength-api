@@ -15,6 +15,8 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarsync"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
@@ -139,6 +141,7 @@ func New(cfg config.Config) (*Server, error) {
 	var activityRepo activity.Repository
 	var nutritionLookupRepo nutritionlookup.Repository
 	var timelineRepo timeline.Repository
+	var calendarConnRepo calendarconn.Repository
 
 	// usageLedger is non-nil only when telemetry is enabled (the ledger
 	// reads telemetry.db). The usage handler is mounted in the JWT-gated
@@ -181,6 +184,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 		timelineRepo = timeline.NewSQLiteRepository(database)
+		calendarConnRepo = calendarconn.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
@@ -258,6 +262,7 @@ func New(cfg config.Config) (*Server, error) {
 		activityRepo = activity.NewMemoryRepository(activityArchiver)
 		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
 		timelineRepo = timeline.NewMemoryRepository()
+		calendarConnRepo = calendarconn.NewMemoryRepository()
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),
@@ -295,6 +300,35 @@ func New(cfg config.Config) (*Server, error) {
 	}, userRepo)
 	authHandler.Mount(r)
 	log.Printf("auth: google=%v dev_token=%v", authHandler.HasGoogle(), cfg.DevAuth)
+
+	// Calendar sync: the incremental Google OAuth flow (calendar.events scope,
+	// offline access) plus connection-status endpoints. It stays DORMANT unless
+	// BOTH a valid token-encryption key (CALENDAR_TOKEN_ENC_KEY) AND a calendar
+	// redirect URL (GOOGLE_CALENDAR_REDIRECT_URL) are configured, mirroring how
+	// avatar storage is optional. An empty or invalid key logs and skips the
+	// mount rather than failing boot — the rest of the API is unaffected. The
+	// authed half is mounted inside the JWT-gated group below.
+	var calendarSyncHandler *calendarsync.Handler
+	if cfg.CalendarTokenEncKey != "" && cfg.GoogleCalendarRedirectURL != "" && cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
+		key, keyErr := calendarsync.KeyFromEnv(cfg.CalendarTokenEncKey)
+		if keyErr != nil {
+			log.Printf("calendar-sync: disabled (invalid CALENDAR_TOKEN_ENC_KEY): %v", keyErr)
+		} else if cipher, cipherErr := calendarsync.NewCipher(key); cipherErr != nil {
+			log.Printf("calendar-sync: disabled (cipher init failed): %v", cipherErr)
+		} else {
+			calendarOAuthConfig := calendarsync.NewCalendarConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleCalendarRedirectURL)
+			// Dedicated client with a timeout so a slow Google token/revoke
+			// call can't stall a request indefinitely (mirrors lookupClient).
+			calendarClient := &http.Client{Timeout: 8 * time.Second}
+			calendarSyncHandler = calendarsync.NewHandler(calendarOAuthConfig, calendarConnRepo, cipher, calendarClient, cfg.ReturnToAllowedOrigins)
+			// Public callback — Google redirects here; the user id rides in the
+			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
+			calendarSyncHandler.MountPublic(r)
+			log.Println("calendar-sync: enabled (google calendar oauth + connection endpoints)")
+		}
+	} else {
+		log.Println("calendar-sync: disabled (CALENDAR_TOKEN_ENC_KEY / GOOGLE_CALENDAR_REDIRECT_URL / google client not configured)")
+	}
 
 	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)
@@ -372,6 +406,14 @@ func New(cfg config.Config) (*Server, error) {
 		// group; the handler reads the viewer's id from context and hydrates
 		// post content from the live source repos via timelineHydrator.
 		timeline.NewHandler(timelineRepo, timelineHydrator).Mount(r)
+		// Calendar sync (authed half): GET /auth/google/calendar/connect plus
+		// GET/DELETE /me/calendar/connection. Only present when calendar sync
+		// is enabled (cipher + redirect URL configured above). /connect reads
+		// the user id from context and encodes it into the OAuth state so the
+		// public callback can recover it.
+		if calendarSyncHandler != nil {
+			calendarSyncHandler.MountAuthed(r)
+		}
 	})
 
 	// Internal chat routes (read-only intent lookup for the agent).

@@ -59,6 +59,12 @@ type Repository interface {
 	// `personal_records_set` per workout in a single bulk query.
 	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]PersonalRecordEvent, error)
 
+	// GetPersonalRecordEventsByIDs returns the PR break events whose id is
+	// in the given slice. Empty input returns an empty slice. Used by the
+	// timeline hydrator to render `pr` posts (source_id = event id) in a
+	// single batch read rather than one query per post.
+	GetPersonalRecordEventsByIDs(ctx context.Context, ids []string) ([]PersonalRecordEvent, error)
+
 	// ListUserHeadlineExercises returns the user's custom headline-
 	// exercise selection in display order (position ASC). Empty slice
 	// means the user has never customized — callers fall back to

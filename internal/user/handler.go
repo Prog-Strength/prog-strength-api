@@ -55,6 +55,7 @@ type meResponse struct {
 	ID           string   `json:"id"`
 	Email        string   `json:"email"`
 	DisplayName  string   `json:"display_name"`
+	Username     *string  `json:"username"`
 	WeightUnit   string   `json:"weight_unit"`
 	DistanceUnit string   `json:"distance_unit"`
 	HeightCm     *float64 `json:"height_cm"`
@@ -70,6 +71,7 @@ func (h *Handler) resolveMe(r *http.Request, u *User) meResponse {
 		ID:           u.ID,
 		Email:        u.Email,
 		DisplayName:  u.DisplayName,
+		Username:     u.Username,
 		WeightUnit:   string(u.WeightUnit),
 		DistanceUnit: string(u.DistanceUnit),
 		HeightCm:     u.HeightCm,
@@ -103,6 +105,7 @@ func (h *Handler) getMe(w http.ResponseWriter, r *http.Request) {
 // touch avatar_key; avatar mutation goes through POST/DELETE /me/avatar.
 type updateMeRequest struct {
 	DisplayName  *string       `json:"display_name"`
+	Username     *string       `json:"username"`
 	WeightUnit   *WeightUnit   `json:"weight_unit"`
 	DistanceUnit *DistanceUnit `json:"distance_unit"`
 	HeightCm     *float64      `json:"height_cm"`
@@ -130,6 +133,19 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	// out-of-range one) is validated below.
 	if req.DisplayName != nil {
 		u.DisplayName = *req.DisplayName
+	}
+	// Username is validated and canonicalized here at the write edge (not in
+	// User.Validate, which sees an already-canonical stored value). Charset /
+	// length / shape and reserved-name rejections are client errors (400); a
+	// uniqueness collision can only be detected at persist time (mapped to 409
+	// after Update below).
+	if req.Username != nil {
+		canonical, err := ValidateUsername(*req.Username)
+		if err != nil {
+			httpresp.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		u.Username = &canonical
 	}
 	if req.WeightUnit != nil {
 		u.WeightUnit = *req.WeightUnit
@@ -159,6 +175,10 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	if err := h.repo.Update(r.Context(), u); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "user not found")
+			return
+		}
+		if errors.Is(err, ErrUsernameTaken) {
+			httpresp.Error(w, http.StatusConflict, err.Error())
 			return
 		}
 		httpresp.ServerError(w, r.Context(), "update user", err)

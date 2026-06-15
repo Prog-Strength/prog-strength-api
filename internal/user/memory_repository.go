@@ -46,6 +46,12 @@ func (r *MemoryRepository) Create(ctx context.Context, u *User) error {
 		}
 	}
 
+	// Enforce case-insensitive username uniqueness (mirrors the SQLite unique
+	// index). A nil username is "unset" and never collides.
+	if collidesUsername(r.users, u.Username, "") {
+		return ErrUsernameTaken
+	}
+
 	now := r.now().UTC()
 	u.ID = id.New()
 	u.Email = normalizedEmail
@@ -84,6 +90,19 @@ func (r *MemoryRepository) GetByEmail(ctx context.Context, email string) (*User,
 	return nil, ErrNotFound
 }
 
+func (r *MemoryRepository) GetByUsername(ctx context.Context, username string) (*User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, u := range r.users {
+		if u.DeletedAt == nil && u.Username != nil && *u.Username == username {
+			out := *u
+			return &out, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (r *MemoryRepository) Update(ctx context.Context, u *User) error {
 	if err := u.Validate(); err != nil {
 		return err
@@ -95,6 +114,12 @@ func (r *MemoryRepository) Update(ctx context.Context, u *User) error {
 	existing, ok := r.users[u.ID]
 	if !ok || existing.DeletedAt != nil {
 		return ErrNotFound
+	}
+
+	// Enforce case-insensitive username uniqueness against every OTHER user
+	// (a user keeping their own handle is not a collision).
+	if collidesUsername(r.users, u.Username, u.ID) {
+		return ErrUsernameTaken
 	}
 
 	// Email is immutable through Update; preserve it from existing record.
@@ -118,6 +143,27 @@ func (r *MemoryRepository) Delete(ctx context.Context, id string) error {
 	u.DeletedAt = &now
 	u.UpdatedAt = now
 	return nil
+}
+
+// collidesUsername reports whether a non-deleted user other than excludeID
+// already holds the given (case-insensitively compared) username. A nil
+// username never collides — it represents an unset handle, matching SQLite's
+// multiple-NULLs-allowed unique index. Stored usernames are already canonical
+// (lowercased), but the comparison lowercases defensively.
+func collidesUsername(users map[string]*User, username *string, excludeID string) bool {
+	if username == nil {
+		return false
+	}
+	want := strings.ToLower(*username)
+	for id, existing := range users {
+		if id == excludeID || existing.DeletedAt != nil || existing.Username == nil {
+			continue
+		}
+		if strings.ToLower(*existing.Username) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // normalizeEmail lowercases and trims an email address.

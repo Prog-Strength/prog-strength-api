@@ -17,6 +17,12 @@ type Repository interface {
 	// user exists with that ID, or if they have been soft-deleted.
 	GetByID(ctx context.Context, id string) (*User, error)
 
+	// GetByUsername returns a user by their canonical (lowercased) username.
+	// The caller is responsible for canonicalizing the argument (e.g. via
+	// ValidateUsername) — the lookup is exact against the stored value.
+	// Returns ErrNotFound if no non-deleted user holds that username.
+	GetByUsername(ctx context.Context, username string) (*User, error)
+
 	// GetByEmail returns a user by their email address. Email lookup
 	// is required for OAuth login (find-or-create by email). Returns
 	// ErrNotFound if no user exists with that email, or if they have

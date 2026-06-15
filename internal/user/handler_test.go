@@ -136,6 +136,66 @@ func TestUpdateMe_DisplayNameOnlyLeavesUnitsUnchanged(t *testing.T) {
 	}
 }
 
+func TestUpdateMe_SetsUsernameCanonicalized(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"username":"@JimLifts"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+
+	var got envelope
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Data == nil || got.Data.Username == nil || *got.Data.Username != "jimlifts" {
+		t.Fatalf("username not canonicalized: %+v", got.Data)
+	}
+}
+
+func TestUpdateMe_InvalidUsername(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"username":"jim-lifts"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+	after, _ := repo.GetByID(context.Background(), u.ID)
+	if after.Username != nil {
+		t.Fatalf("username should not be set on invalid update: %v", *after.Username)
+	}
+}
+
+func TestUpdateMe_ReservedUsername(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"username":"admin"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdateMe_UsernameTakenConflict(t *testing.T) {
+	repo := NewMemoryRepository()
+	a := seedUser(t, repo)
+	b := &User{Email: "b@example.com", DisplayName: "B", WeightUnit: WeightUnitPounds, DistanceUnit: DistanceUnitMiles}
+	if err := repo.Create(context.Background(), b); err != nil {
+		t.Fatalf("seed b: %v", err)
+	}
+
+	if w := patchMe(repo, a.ID, `{"username":"taken"}`); w.Code != http.StatusOK {
+		t.Fatalf("set a username: got %d, body=%s", w.Code, w.Body.String())
+	}
+	// B tries the case-variant of A's handle -> 409.
+	w := patchMe(repo, b.ID, `{"username":"TAKEN"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d want 409, body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestGetMe_NotFound(t *testing.T) {
 	repo := NewMemoryRepository()
 

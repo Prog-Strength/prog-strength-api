@@ -1,3 +1,10 @@
+# [0.51.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.50.0...v0.51.0) (2026-06-15)
+
+
+### Features
+
+* **beta:** dynamic DB-backed beta allowlist with admin endpoints ([#31](https://github.com/Prog-Strength/prog-strength-api/issues/31)) ([0ccac90](https://github.com/Prog-Strength/prog-strength-api/commit/0ccac90b7a2f34178ae03c3d09cbfe64891ad659))
+
 # [0.50.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.49.0...v0.50.0) (2026-06-15)
 
 

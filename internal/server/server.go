@@ -477,7 +477,11 @@ func New(cfg config.Config) (*Server, error) {
 		// timeline.AcceptedFollowees), and resolves usernames via followProvider.
 		var _ timeline.AcceptedFollowees = followRepo
 		var _ timeline.UserResolver = followProvider
-		timeline.NewHandler(timelineRepo, timelineHydrator, followRepo, followProvider).Mount(r)
+		// The author resolver embeds each post/comment author's identity,
+		// batch-resolved over the follow profile provider (reusing its avatar
+		// presigning + OAuth fallback) so the feed has no N+1 over authors.
+		timelineProfiles := newTimelineProfileResolver(followProvider)
+		timeline.NewHandler(timelineRepo, timelineHydrator, followRepo, followProvider, timelineProfiles).Mount(r)
 		// Follow graph — the request/accept state machine, teardown verbs, and
 		// the requests inbox. Shares the JWT-gated group; the handler reads the
 		// actor's id from context and renders profile summaries via the user

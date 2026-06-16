@@ -4,8 +4,23 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
 )
+
+// divider is the horizontal rule used to frame the branded event body.
+const divider = "━━━━━━━━━━━━━━━━━━━━━━━━"
+
+// exerciseNameByID resolves a catalog exercise id (e.g. "barbell-bench-press")
+// to its display name ("Barbell Bench Press") for the event body. Built once
+// from the canonical catalog.
+var exerciseNameByID = func() map[string]string {
+	m := make(map[string]string, len(exercise.Catalog))
+	for _, e := range exercise.Catalog {
+		m[e.ID] = e.Name
+	}
+	return m
+}()
 
 // CalendarDetail is the calendar event detail level. It mirrors the
 // plannedworkout domain's CalendarDetail (time_block / full_agenda) but is
@@ -92,24 +107,43 @@ func RenderEvent(plan *plannedworkout.PlannedWorkout, detail CalendarDetail, app
 		Timezone: plan.Timezone,
 	}
 
-	// Description sections, top to bottom: notes, then the agenda. A plan with
-	// neither falls back to a generic reserved-slot line so the event is never
-	// blank.
-	var sections []string
+	// Branded header: "PROG STRENGTH · Planned Lift/Run" over a divider.
+	kind := "Lift"
+	if plan.ActivityKind == plannedworkout.ActivityKindRun {
+		kind = "Run"
+	}
+	var b strings.Builder
+	b.WriteString("PROG STRENGTH · Planned ")
+	b.WriteString(kind)
+	b.WriteString("\n")
+	b.WriteString(divider)
+
+	// Body sections: notes, then the agenda. A plan with neither falls back to
+	// a generic reserved-slot line so the event is never blank.
+	hasContent := false
 	if notes := notesBody(plan); notes != "" {
-		sections = append(sections, notes)
+		b.WriteString("\n\n")
+		b.WriteString(notes)
+		hasContent = true
 	}
 	if agenda := agendaBody(plan); agenda != "" {
-		sections = append(sections, agenda)
+		b.WriteString("\n\n")
+		b.WriteString(agenda)
+		hasContent = true
 	}
-	body := strings.Join(sections, "\n\n")
-	if body == "" {
-		body = "Reserved training slot."
+	if !hasContent {
+		b.WriteString("\n\nReserved training slot.")
 	}
+
+	// Footer: divider + the "open in Prog Strength" link, when configured.
 	if link := planLink(plan, appLinkBase); link != "" {
-		body += "\n\n" + link
+		b.WriteString("\n\n")
+		b.WriteString(divider)
+		b.WriteString("\n")
+		b.WriteString(link)
 	}
-	ev.Description = body
+
+	ev.Description = b.String()
 	return ev
 }
 
@@ -191,53 +225,138 @@ func runTypeLabel(rt plannedworkout.RunType) string {
 	}
 }
 
-// renderAgenda renders each exercise and its present target sets, one exercise
-// per block, e.g.:
+// renderAgenda renders a numbered lift agenda with collapsed sets, e.g.:
 //
-//	Bench Press
-//	  3 × 5 @ RPE 8 (135 lb)
+//  1. Barbell Bench Press
+//     • 1 set × 10 reps
+//     • 3 sets × 8 reps @ 135 lb
 //
-// Consecutive exercises sharing a superset group are bracketed under a
-// "Superset:" header and indented one level deeper, so the alternating-set
-// grouping is visible on the calendar:
+//  2. Barbell Bent Over Row
+//     • 3 sets × 8 reps
 //
-//	Superset:
-//	  Bench Press
-//	    5 reps @ 135 lb
-//	  Barbell Row
-//	    8 reps
+// Exercises are numbered sequentially across the whole agenda. Consecutive
+// exercises sharing a superset group are bracketed under a "Superset" header
+// and indented, with numbering continuing through them:
 //
-// Sets with no target fields at all are still listed by their position so the
-// count is visible; nil individual targets are omitted gracefully.
+//	Superset
+//	  3. Incline Dumbbell Bench Press
+//	     • 3 sets × 8 reps
+//	     • 1 set × AMRAP
+//	  4. Dumbbell Tripod Row
+//	     • 4 sets × 8 reps
 func renderAgenda(exercises []plannedworkout.PlannedExercise) string {
-	blocks := make([]string, 0, len(exercises))
-	for _, group := range groupBySuperset(exercises) {
+	var b strings.Builder
+	num := 0
+	for gi, group := range groupBySuperset(exercises) {
+		if gi > 0 {
+			b.WriteString("\n\n")
+		}
 		if len(group) > 1 {
-			var b strings.Builder
-			b.WriteString("Superset:")
+			b.WriteString("Superset")
 			for _, ex := range group {
-				b.WriteString("\n  ")
-				b.WriteString(renderExercise(ex, "    "))
+				num++
+				b.WriteString("\n")
+				b.WriteString(renderNumberedExercise(num, ex, "  "))
 			}
-			blocks = append(blocks, b.String())
 		} else {
-			blocks = append(blocks, renderExercise(group[0], "  "))
+			num++
+			b.WriteString(renderNumberedExercise(num, group[0], ""))
 		}
 	}
-	return strings.Join(blocks, "\n")
+	return b.String()
 }
 
-// renderExercise renders one exercise's label followed by its target sets,
-// each set line prefixed with setIndent.
-func renderExercise(ex plannedworkout.PlannedExercise, setIndent string) string {
+// renderNumberedExercise renders "{indent}{n}. {Name}" plus one bullet line per
+// collapsed set group, each indented under the name.
+func renderNumberedExercise(num int, ex plannedworkout.PlannedExercise, indent string) string {
 	var b strings.Builder
-	b.WriteString(exerciseLabel(ex))
-	for _, s := range ex.Sets {
+	fmt.Fprintf(&b, "%s%d. %s", indent, num, exerciseLabel(ex))
+	for _, g := range groupSets(ex.Sets) {
 		b.WriteString("\n")
-		b.WriteString(setIndent)
-		b.WriteString(renderSet(s))
+		b.WriteString(indent)
+		b.WriteString("   • ")
+		b.WriteString(renderSetGroup(g))
 	}
 	return b.String()
+}
+
+// setGroup is a run of identical consecutive sets collapsed into a count.
+type setGroup struct {
+	count int
+	set   plannedworkout.PlannedSet
+}
+
+// groupSets collapses consecutive identical sets (same reps/weight/unit/RPE
+// and AMRAP flag) into counted groups, so "8,8,8" renders as "3 sets × 8 reps".
+func groupSets(sets []plannedworkout.PlannedSet) []setGroup {
+	var out []setGroup
+	for _, s := range sets {
+		if n := len(out); n > 0 && setsEqual(out[n-1].set, s) {
+			out[n-1].count++
+		} else {
+			out = append(out, setGroup{count: 1, set: s})
+		}
+	}
+	return out
+}
+
+// renderSetGroup renders one collapsed set group, e.g. "3 sets × 8 reps @ 135
+// lb · RPE 8", or "1 set × AMRAP" for an AMRAP target.
+func renderSetGroup(g setGroup) string {
+	setWord := "sets"
+	if g.count == 1 {
+		setWord = "set"
+	}
+	var reps string
+	switch {
+	case g.set.AMRAP:
+		reps = "AMRAP"
+	case g.set.TargetReps != nil:
+		reps = fmt.Sprintf("%d reps", *g.set.TargetReps)
+	default:
+		reps = "—"
+	}
+	line := fmt.Sprintf("%d %s × %s", g.count, setWord, reps)
+	if g.set.TargetWeight != nil {
+		unit := ""
+		if g.set.Unit != nil {
+			unit = " " + *g.set.Unit
+		}
+		line += fmt.Sprintf(" @ %s%s", trimFloat(*g.set.TargetWeight), unit)
+	}
+	if g.set.TargetRPE != nil {
+		line += fmt.Sprintf(" · RPE %s", trimFloat(*g.set.TargetRPE))
+	}
+	return line
+}
+
+func setsEqual(a, b plannedworkout.PlannedSet) bool {
+	return eqIntPtr(a.TargetReps, b.TargetReps) &&
+		eqFloatPtr(a.TargetWeight, b.TargetWeight) &&
+		eqStrPtr(a.Unit, b.Unit) &&
+		eqFloatPtr(a.TargetRPE, b.TargetRPE) &&
+		a.AMRAP == b.AMRAP
+}
+
+func eqIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func eqFloatPtr(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func eqStrPtr(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // groupBySuperset buckets consecutive exercises that share the same non-nil
@@ -260,37 +379,13 @@ func groupBySuperset(exercises []plannedworkout.PlannedExercise) [][]plannedwork
 	return groups
 }
 
-// exerciseLabel is the heading line for an exercise. The plan model carries the
-// exercise id, not a display name, so the id is the stable label here.
+// exerciseLabel is the heading for an exercise: its catalog display name,
+// falling back to the raw id when the id isn't in the catalog.
 func exerciseLabel(ex plannedworkout.PlannedExercise) string {
+	if name, ok := exerciseNameByID[ex.ExerciseID]; ok {
+		return name
+	}
 	return ex.ExerciseID
-}
-
-// renderSet renders one target set, omitting nil fields. Shapes:
-//
-//	"3 × 5"            reps only
-//	"5"               weight/RPE present, reps nil → lead with weight/RPE
-//	"3 × 5 @ RPE 8 (135 lb)"
-func renderSet(s plannedworkout.PlannedSet) string {
-	var parts []string
-
-	if s.TargetReps != nil {
-		parts = append(parts, fmt.Sprintf("%d reps", *s.TargetReps))
-	}
-	if s.TargetWeight != nil {
-		unit := ""
-		if s.Unit != nil {
-			unit = " " + *s.Unit
-		}
-		parts = append(parts, fmt.Sprintf("%s%s", trimFloat(*s.TargetWeight), unit))
-	}
-	if s.TargetRPE != nil {
-		parts = append(parts, fmt.Sprintf("RPE %s", trimFloat(*s.TargetRPE)))
-	}
-	if len(parts) == 0 {
-		return "1 set"
-	}
-	return strings.Join(parts, " @ ")
 }
 
 // trimFloat formats a float without a trailing ".0" so 135.0 renders as "135"
@@ -302,12 +397,12 @@ func trimFloat(f float64) string {
 	return s
 }
 
-// planLink renders the "open in Prog Strength" line, or "" when no base URL is
-// configured.
+// planLink renders the footer link to the plan in Prog Strength, or "" when no
+// base URL is configured.
 func planLink(plan *plannedworkout.PlannedWorkout, appLinkBase string) string {
 	base := strings.TrimRight(appLinkBase, "/")
 	if base == "" {
 		return ""
 	}
-	return fmt.Sprintf("Open in Prog Strength: %s/planned-workouts/%s", base, plan.ID)
+	return fmt.Sprintf("↗ Open in Prog Strength\n%s/planned-workouts/%s", base, plan.ID)
 }

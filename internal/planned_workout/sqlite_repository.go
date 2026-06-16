@@ -288,9 +288,9 @@ func insertAgendaTx(ctx context.Context, tx *sql.Tx, pw *PlannedWorkout) error {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO planned_sets (
 					id, planned_workout_exercise_id, order_index,
-					target_reps, target_weight, unit, target_rpe
-				) VALUES (?, ?, ?, ?, ?, ?, ?)
-			`, s.ID, ex.ID, s.OrderIndex, s.TargetReps, s.TargetWeight, s.Unit, s.TargetRPE); err != nil {
+					target_reps, target_weight, unit, target_rpe, amrap
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			`, s.ID, ex.ID, s.OrderIndex, s.TargetReps, s.TargetWeight, s.Unit, s.TargetRPE, s.AMRAP); err != nil {
 				return err
 			}
 		}
@@ -354,7 +354,7 @@ func (r *SQLiteRepository) hydrateAgenda(ctx context.Context, pw *PlannedWorkout
 
 func (r *SQLiteRepository) loadSets(ctx context.Context, exerciseID string) ([]PlannedSet, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, order_index, target_reps, target_weight, unit, target_rpe
+		SELECT id, order_index, target_reps, target_weight, unit, target_rpe, amrap
 		FROM planned_sets
 		WHERE planned_workout_exercise_id = ?
 		ORDER BY order_index ASC
@@ -373,7 +373,7 @@ func (r *SQLiteRepository) loadSets(ctx context.Context, exerciseID string) ([]P
 			unit   sql.NullString
 			rpe    sql.NullFloat64
 		)
-		if err := rows.Scan(&s.ID, &s.OrderIndex, &reps, &weight, &unit, &rpe); err != nil {
+		if err := rows.Scan(&s.ID, &s.OrderIndex, &reps, &weight, &unit, &rpe, &s.AMRAP); err != nil {
 			return nil, err
 		}
 		if reps.Valid {

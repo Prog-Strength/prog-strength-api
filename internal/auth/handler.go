@@ -16,6 +16,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -385,23 +386,16 @@ func randomState() (string, error) {
 // would be a phishing primitive — attacker sends a victim a login link
 // that bounces to an attacker-controlled page with the JWT in the fragment).
 //
-// Custom URL schemes (e.g. the mobile app's "progstrength:///auth/callback")
-// have an empty Host — Go's url.Parse only populates Host when an authority
-// component is actually present. The whitelist comparison is still strict:
-// `progstrength://` only matches the literal `progstrength://` entry, so
-// an attacker can't smuggle a host like `progstrength://evil.example.com`.
+// A whitelist entry may carry a single "*" wildcard, matched the same way
+// the CORS origin check matches it, so a single project-scoped pattern like
+// "https://prog-strength-web-*-<scope>.vercel.app" admits every Vercel
+// branch-preview origin without a per-branch allowlist entry. Entries
+// without "*" stay exact: custom URL schemes (e.g. the mobile app's
+// "progstrength:///auth/callback") have an empty Host, so the literal
+// "progstrength://" entry matches only itself — an attacker can't smuggle a
+// host like "progstrength://evil.example.com". See internal/originmatch.
 func (h *Handler) isAllowedReturnTo(returnTo string) bool {
-	u, err := url.Parse(returnTo)
-	if err != nil || u.Scheme == "" {
-		return false
-	}
-	origin := u.Scheme + "://" + u.Host
-	for _, allowed := range h.returnToAllowedOrigins {
-		if origin == allowed {
-			return true
-		}
-	}
-	return false
+	return originmatch.AllowReturnTo(returnTo, h.returnToAllowedOrigins)
 }
 
 // readAndClearReturnTo pops the return_to cookie. Returns the value if the

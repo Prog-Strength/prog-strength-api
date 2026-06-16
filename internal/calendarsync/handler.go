@@ -13,6 +13,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
 )
 
 // Cookie names for the calendar OAuth flow. Deliberately distinct from the
@@ -298,19 +299,10 @@ func isHTTPS(r *http.Request) bool {
 
 // isAllowedReturnTo reports whether a return_to URL's origin (scheme + host) is
 // in the configured whitelist. Identical semantics to the login flow's
-// open-redirect guard.
+// open-redirect guard, including single-"*" wildcard entries. See
+// internal/originmatch.
 func (h *Handler) isAllowedReturnTo(returnTo string) bool {
-	u, err := url.Parse(returnTo)
-	if err != nil || u.Scheme == "" {
-		return false
-	}
-	origin := u.Scheme + "://" + u.Host
-	for _, allowed := range h.returnToAllowedOrigins {
-		if origin == allowed {
-			return true
-		}
-	}
-	return false
+	return originmatch.AllowReturnTo(returnTo, h.returnToAllowedOrigins)
 }
 
 // readAndClearReturnTo pops + re-validates the return_to cookie. Always clears

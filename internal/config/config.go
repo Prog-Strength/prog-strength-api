@@ -84,7 +84,17 @@ type Config struct {
 	// a whitelist, return_to would be an open-redirect vulnerability.
 	// Empty disables the return_to feature (callback then responds with
 	// JSON, the legacy behavior).
-	// Example env: "http://localhost:3000,https://app.progstrength.fitness"
+	//
+	// Like CORSAllowedOrigins, each entry may contain a SINGLE "*" wildcard
+	// (see internal/originmatch), which is what lets Vercel preview
+	// deployments complete login: their per-branch hostnames carry one
+	// dynamic segment, so a pattern like
+	//   https://prog-strength-web-*-<scope>.vercel.app
+	// admits every branch preview without a per-branch allowlist entry.
+	// Scope the wildcard to your project + Vercel scope — never a bare
+	// "*.vercel.app", which would reopen the open-redirect hole.
+	// Example env: "http://localhost:3000,https://app.progstrength.fitness,
+	// https://prog-strength-web-*-acme.vercel.app"
 	ReturnToAllowedOrigins []string
 
 	// DailyUsageCapUSD is the per-user daily external-API spend ceiling

@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -105,6 +106,14 @@ func TestGenerateHandle(t *testing.T) {
 		}
 		if _, err := ValidateUsername(got); err != nil {
 			t.Fatalf("GenerateHandle result %q failed ValidateUsername: %v", got, err)
+		}
+	})
+
+	t.Run("exists_error_propagates", func(t *testing.T) {
+		boom := errors.New("boom")
+		exists := func(string) (bool, error) { return false, boom }
+		if _, err := GenerateHandle("Sam Lifter", "id-1", exists); !errors.Is(err, boom) {
+			t.Fatalf("GenerateHandle error = %v, want %v", err, boom)
 		}
 	})
 

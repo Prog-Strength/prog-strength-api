@@ -15,6 +15,9 @@ const maxHandleSuffix = 50
 // rather than transliterating: keeping this dependency-free is worth losing the
 // occasional accented character, since GenerateHandle falls back to the id when
 // the slug is empty.
+//
+// A slug shorter than UsernameMinLen fails ValidateUsername and is treated as
+// unusable (yields ""), so the caller falls back to the id-derived handle.
 func slugifyHandle(displayName string) string {
 	var b strings.Builder
 	b.Grow(len(displayName))
@@ -81,16 +84,11 @@ func fallbackHandle(userID string) string {
 	return "user_" + suffix
 }
 
-// GenerateHandle returns a valid, unique handle for (displayName, userID).
-// exists reports whether a candidate handle is already taken. The returned
-// handle is canonical (already passed ValidateUsername). Any error from exists
-// is propagated unchanged.
-func GenerateHandle(displayName, userID string, exists func(string) (bool, error)) (string, error) {
-	base := slugifyHandle(displayName)
-	if base == "" {
-		base = fallbackHandle(userID)
-	}
-
+// firstFreeHandle tries base, then base+2, base+3, … up to maxHandleSuffix,
+// returning the first canonical candidate that passes ValidateUsername and is
+// not already taken per exists. The bool reports whether a free handle was
+// found; any error from exists is propagated unchanged.
+func firstFreeHandle(base string, exists func(string) (bool, error)) (string, bool, error) {
 	for attempt := 1; attempt <= maxHandleSuffix; attempt++ {
 		candidate := base
 		if attempt > 1 {
@@ -108,13 +106,46 @@ func GenerateHandle(displayName, userID string, exists func(string) (bool, error
 		}
 		taken, err := exists(valid)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		if !taken {
-			return valid, nil
+			return valid, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// GenerateHandle returns a valid handle for (displayName, userID). exists
+// reports whether a candidate handle is already taken. The returned handle is
+// canonical (already passed ValidateUsername). Any error from exists is
+// propagated unchanged.
+//
+// This is best-effort, not unique-by-construction: it tries the name-derived
+// slug (with numeric suffixes), then the id-derived fallback (also with numeric
+// suffixes). The suffix loop on the fallback makes a genuine collision
+// astronomically unlikely at any realistic scale. Only if every fallback
+// variant is somehow taken does it return the bare fallback as a last resort.
+func GenerateHandle(displayName, userID string, exists func(string) (bool, error)) (string, error) {
+	if base := slugifyHandle(displayName); base != "" {
+		handle, found, err := firstFreeHandle(base, exists)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return handle, nil
 		}
 	}
 
-	// Exhausted: the id-derived handle is unique by construction.
-	return fallbackHandle(userID), nil
+	fallback := fallbackHandle(userID)
+	handle, found, err := firstFreeHandle(fallback, exists)
+	if err != nil {
+		return "", err
+	}
+	if found {
+		return handle, nil
+	}
+
+	// Last resort: every fallback variant was taken (practically impossible at
+	// personal scale). Return the bare fallback.
+	return fallback, nil
 }

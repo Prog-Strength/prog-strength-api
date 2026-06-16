@@ -1,3 +1,10 @@
+## [0.59.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.59.0...v0.59.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **auth:** allow single-* wildcard in return_to origin whitelist ([#43](https://github.com/Prog-Strength/prog-strength-api/issues/43)) ([573728b](https://github.com/Prog-Strength/prog-strength-api/commit/573728bdd63c61ecae9f8512b78e45477ca94961))
+
 # [0.59.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.58.0...v0.59.0) (2026-06-16)
 
 

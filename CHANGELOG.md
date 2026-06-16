@@ -1,3 +1,10 @@
+## [0.57.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.57.0...v0.57.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **planned-workouts:** sync Google event on edit; include notes + agenda ([#40](https://github.com/Prog-Strength/prog-strength-api/issues/40)) ([6f193b7](https://github.com/Prog-Strength/prog-strength-api/commit/6f193b79d3896884be57720ed02b3dfe715863d3))
+
 # [0.57.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.56.0...v0.57.0) (2026-06-16)
 
 

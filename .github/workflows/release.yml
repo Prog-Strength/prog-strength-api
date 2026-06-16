@@ -27,7 +27,11 @@ jobs:
         with:
           # semantic-release walks history to find the previous tag.
           fetch-depth: 0
+          # Persist the release bot token (not the default GITHUB_TOKEN) so
+          # the @semantic-release/git push of the changelog commit
+          # authenticates as an identity allowed to write to main.
           persist-credentials: true
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
@@ -40,7 +44,17 @@ jobs:
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # RELEASE_BOT_TOKEN must act as a repo ADMIN: main requires 4
+          # status checks (Lint + format / Test / govulncheck / Conventional
+          # commit PR title) and a freshly pushed release commit has none.
+          # Because branch protection has enforce_admins=false, an admin
+          # identity's push bypasses them — the default github-actions[bot]
+          # GITHUB_TOKEN is not an admin, so it gets rejected (GH006).
+          # Use a fine-grained PAT (Contents: write) from an owner/admin
+          # account, stored as the RELEASE_BOT_TOKEN secret. The git
+          # commit message carries [skip ci] (see release.config.js) so this
+          # push to main doesn't trigger a second, no-op release run.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
 
   # Build the api image on the GitHub runner and push it to ECR under the
   # released version tag. The EC2 host pulls this same tag at deploy time,

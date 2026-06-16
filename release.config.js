@@ -19,7 +19,10 @@ module.exports = {
       '@semantic-release/git',
       {
         assets: ['CHANGELOG.md', 'package.json', 'package-lock.json'],
-        message: 'chore(release): ${nextRelease.version}\n\n${nextRelease.notes}',
+        // [skip ci] keeps this changelog commit — pushed to main by the
+        // release bot via RELEASE_BOT_TOKEN — from triggering a second
+        // release run (it's a chore commit, so that run would be a no-op).
+        message: 'chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}',
       },
     ],
     '@semantic-release/github',

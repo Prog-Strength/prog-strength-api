@@ -59,6 +59,7 @@ type meResponse struct {
 	WeightUnit            string   `json:"weight_unit"`
 	DistanceUnit          string   `json:"distance_unit"`
 	HeightCm              *float64 `json:"height_cm"`
+	Bio                   *string  `json:"bio"`
 	Timezone              string   `json:"timezone"`
 	CalendarDefaultDetail string   `json:"calendar_default_detail"`
 	AvatarURL             *string  `json:"avatar_url"`
@@ -77,6 +78,7 @@ func (h *Handler) resolveMe(r *http.Request, u *User) meResponse {
 		WeightUnit:            string(u.WeightUnit),
 		DistanceUnit:          string(u.DistanceUnit),
 		HeightCm:              u.HeightCm,
+		Bio:                   u.Bio,
 		Timezone:              u.Timezone,
 		CalendarDefaultDetail: u.CalendarDefaultDetail,
 	}
@@ -113,6 +115,7 @@ type updateMeRequest struct {
 	WeightUnit            *WeightUnit   `json:"weight_unit"`
 	DistanceUnit          *DistanceUnit `json:"distance_unit"`
 	HeightCm              *float64      `json:"height_cm"`
+	Bio                   *string       `json:"bio"`
 	Timezone              *string       `json:"timezone"`
 	CalendarDefaultDetail *string       `json:"calendar_default_detail"`
 }
@@ -162,6 +165,15 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	if req.HeightCm != nil {
 		u.HeightCm = req.HeightCm
 	}
+	// Bio uses clear-on-empty semantics: a provided empty string clears the bio
+	// to nil (NULL), a provided non-empty value sets it, and absence leaves it.
+	if req.Bio != nil {
+		if *req.Bio == "" {
+			u.Bio = nil
+		} else {
+			u.Bio = req.Bio
+		}
+	}
 	if req.Timezone != nil {
 		u.Timezone = *req.Timezone
 	}
@@ -170,13 +182,14 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate at the boundary: a blank/over-long display name, an unknown
-	// enum, an out-of-range height, an invalid timezone, or a bad calendar
-	// detail is a client error (400), not a 500.
+	// enum, an out-of-range height, an over-long bio, an invalid timezone, or
+	// a bad calendar detail is a client error (400), not a 500.
 	if err := u.Validate(); err != nil {
 		var enumErr *InvalidEnumError
 		if errors.Is(err, ErrDisplayNameRequired) ||
 			errors.Is(err, ErrDisplayNameTooLong) ||
 			errors.Is(err, ErrHeightOutOfRange) ||
+			errors.Is(err, ErrBioTooLong) ||
 			errors.Is(err, ErrInvalidTimezone) ||
 			errors.Is(err, ErrInvalidCalendarDetail) ||
 			errors.As(err, &enumErr) {

@@ -145,6 +145,60 @@ func TestSQLite_UpdateProfileColumns(t *testing.T) {
 	}
 }
 
+// TestSQLite_BioRoundTrips checks the bio column persists through Create and
+// Update and scans back via GetByID/GetByUsername, including a NULL clear.
+func TestSQLite_BioRoundTrips(t *testing.T) {
+	repo, _ := newSQLiteUserRepo(t)
+	ctx := context.Background()
+
+	u := &User{
+		Email:        "lifter@example.com",
+		DisplayName:  "Lifter",
+		Username:     strPtr("lifter"),
+		WeightUnit:   WeightUnitPounds,
+		DistanceUnit: DistanceUnitMiles,
+		Bio:          strPtr("created with a bio"),
+	}
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Round-trips on create via GetByID.
+	got, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Bio == nil || *got.Bio != "created with a bio" {
+		t.Fatalf("bio after create: got %v want set", got.Bio)
+	}
+
+	// Update the bio and confirm GetByUsername returns the new value.
+	u.Bio = strPtr("updated bio")
+	if err = repo.Update(ctx, u); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	byName, err := repo.GetByUsername(ctx, "lifter")
+	if err != nil {
+		t.Fatalf("GetByUsername: %v", err)
+	}
+	if byName.Bio == nil || *byName.Bio != "updated bio" {
+		t.Fatalf("bio after update: got %v want updated", byName.Bio)
+	}
+
+	// Clear to NULL.
+	byName.Bio = nil
+	if err = repo.Update(ctx, byName); err != nil {
+		t.Fatalf("Update clear: %v", err)
+	}
+	cleared, err := repo.GetByID(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if cleared.Bio != nil {
+		t.Fatalf("bio after clear: got %v want nil", *cleared.Bio)
+	}
+}
+
 // TestSQLite_TimezoneAndCalendarDetailDefaultsAndUpdate checks the two new
 // columns default to UTC/time_block on create and round-trip through Update.
 func TestSQLite_TimezoneAndCalendarDetailDefaultsAndUpdate(t *testing.T) {

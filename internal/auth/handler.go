@@ -292,6 +292,37 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName, avat
 	if err := h.users.Create(ctx, newUser); err != nil {
 		return nil, err
 	}
+	// Create assigns newUser.ID. New accounts have no username yet, so
+	// auto-assign a handle derived from their display name (falling back to
+	// the id) so every user is addressable by a stable, unique handle. The
+	// uniqueness probe consults the same repo the rest of the request uses,
+	// treating ErrNotFound as "free".
+	//
+	// Best-effort, mirroring the avatar-refresh block above: the user is
+	// already persisted, so a transient failure generating or writing the
+	// handle must not turn a valid login into a 500. Log and continue with a
+	// NULL username (migration 029 / a future deploy reconciles it).
+	if newUser.Username == nil {
+		probe := func(c string) (bool, error) {
+			_, e := h.users.GetByUsername(ctx, c)
+			if errors.Is(e, user.ErrNotFound) {
+				return false, nil
+			}
+			if e != nil {
+				return false, e
+			}
+			return true, nil
+		}
+		if assigned, gErr := user.GenerateHandle(newUser.DisplayName, newUser.ID, probe); gErr != nil {
+			log.Printf("handle generation for %s failed: %v", newUser.ID, gErr)
+		} else {
+			newUser.Username = &assigned
+			if err := h.users.Update(ctx, newUser); err != nil {
+				newUser.Username = nil
+				log.Printf("handle assignment for %s failed: %v", newUser.ID, err)
+			}
+		}
+	}
 	return newUser, nil
 }
 

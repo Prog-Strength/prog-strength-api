@@ -199,6 +199,26 @@ func (r *MemoryRepository) RunningMetrics(ctx context.Context, userID string, no
 	return computeMetrics(rows, now, loc), nil
 }
 
+// ListRunningSamplesSince mirrors the SQLite projection: the
+// (StartTime, DistanceMeters) pairs of the user's live ActivityRunning rows
+// starting at/after `since`. Walks/rides are excluded.
+func (r *MemoryRepository) ListRunningSamplesSince(ctx context.Context, userID string, since time.Time) ([]RunSample, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []RunSample
+	for _, a := range r.activities {
+		if a.UserID != userID || a.DeletedAt != nil || a.ActivityType != ActivityRunning {
+			continue
+		}
+		if a.StartTime.Before(since) {
+			continue
+		}
+		out = append(out, RunSample{StartTime: a.StartTime, DistanceMeters: a.DistanceMeters})
+	}
+	return out, nil
+}
+
 // GetUserRunningBestEfforts mirrors the SQLite per-distance MIN with the
 // earliest-start tie-break. Computes the current best at each distance
 // across the user's live running activities.

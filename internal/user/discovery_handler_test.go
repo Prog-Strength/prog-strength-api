@@ -20,7 +20,7 @@ func newDiscoveryFixture(t *testing.T) (chi.Router, Repository, *follow.MemoryRe
 	t.Helper()
 	userRepo := NewMemoryRepository()
 	followRepo := follow.NewMemoryRepository()
-	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore())
+	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), &fakeLiftSource{}, &fakeRunSource{})
 	r := chi.NewRouter()
 	h.Mount(r)
 	return r, userRepo, followRepo
@@ -135,6 +135,38 @@ func TestDiscovery_ProfileRelationship(t *testing.T) {
 	decodeData(t, w, &p)
 	if p.Relationship != follow.RelationshipNone {
 		t.Fatalf("stranger relationship = %s, want none", p.Relationship)
+	}
+}
+
+// TestDiscovery_ProfileBio verifies the public profile carries the bio when set
+// and null when unset.
+func TestDiscovery_ProfileBio(t *testing.T) {
+	r, userRepo, _ := newDiscoveryFixture(t)
+	ctx := context.Background()
+
+	withBio := makeUser(t, userRepo, "bio@example.com")
+	withBio.Username = strPtr("with_bio")
+	withBio.Bio = strPtr("squat enthusiast")
+	if err := userRepo.Update(ctx, withBio); err != nil {
+		t.Fatalf("set bio: %v", err)
+	}
+	noBio := makeUser(t, userRepo, "nobio@example.com")
+	setUsername(t, userRepo, noBio, "no_bio")
+
+	w := doAs(t, r, withBio.ID, "/users/with_bio")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var p publicProfileDTO
+	decodeData(t, w, &p)
+	if p.Bio == nil || *p.Bio != "squat enthusiast" {
+		t.Fatalf("bio = %v, want set", p.Bio)
+	}
+
+	w = doAs(t, r, withBio.ID, "/users/no_bio")
+	decodeData(t, w, &p)
+	if p.Bio != nil {
+		t.Fatalf("bio = %v, want nil", *p.Bio)
 	}
 }
 

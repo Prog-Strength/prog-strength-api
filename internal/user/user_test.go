@@ -91,6 +91,49 @@ func TestValidate_TimezoneAndCalendarDetail(t *testing.T) {
 	}
 }
 
+func TestValidate_Bio(t *testing.T) {
+	base := func(bio *string) *User {
+		return &User{
+			Email:                 "lifter@example.com",
+			DisplayName:           "Lifter",
+			WeightUnit:            WeightUnitPounds,
+			DistanceUnit:          DistanceUnitMiles,
+			Bio:                   bio,
+			Timezone:              "UTC",
+			CalendarDefaultDetail: "time_block",
+		}
+	}
+
+	tests := []struct {
+		name    string
+		bio     *string
+		wantErr error
+	}{
+		{"nil accepted", nil, nil},
+		{"empty accepted", strPtr(""), nil},
+		{"160 runes accepted", strPtr(strings.Repeat("a", BioMaxLen)), nil},
+		{"161 runes rejected", strPtr(strings.Repeat("a", BioMaxLen+1)), ErrBioTooLong},
+		// Rune-counting (not byte-counting): 160 multibyte chars is fine even
+		// though it is well over 160 bytes.
+		{"160 multibyte runes accepted", strPtr(strings.Repeat("é", BioMaxLen)), nil},
+		{"161 multibyte runes rejected", strPtr(strings.Repeat("é", BioMaxLen+1)), ErrBioTooLong},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := base(tt.bio).Validate()
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Validate() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Validate() = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidate_HeightCm(t *testing.T) {
 	base := func(h *float64) *User {
 		return &User{

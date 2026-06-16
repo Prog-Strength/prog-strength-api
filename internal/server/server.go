@@ -481,7 +481,11 @@ func New(cfg config.Config) (*Server, error) {
 		// timeline.AcceptedFollowees), and resolves usernames via followProvider.
 		var _ timeline.AcceptedFollowees = followRepo
 		var _ timeline.UserResolver = followProvider
-		timeline.NewHandler(timelineRepo, timelineHydrator, followRepo, followProvider).Mount(r)
+		// The author resolver embeds each post/comment author's identity,
+		// batch-resolved over the follow profile provider (reusing its avatar
+		// presigning + OAuth fallback) so the feed has no N+1 over authors.
+		timelineProfiles := newTimelineProfileResolver(followProvider)
+		timeline.NewHandler(timelineRepo, timelineHydrator, followRepo, followProvider, timelineProfiles).Mount(r)
 		// Follow graph — the request/accept state machine, teardown verbs, and
 		// the requests inbox. Shares the JWT-gated group; the handler reads the
 		// actor's id from context and renders profile summaries via the user
@@ -492,7 +496,17 @@ func New(cfg config.Config) (*Server, error) {
 		// /me; consumes the follow repo's read methods through the user-side
 		// FollowReader seam (followRepo satisfies it directly). Mounted after
 		// the follow handler in the same JWT-gated group.
-		user.NewDiscoveryHandler(userRepo, followRepo, avatarStore).Mount(r)
+		// The profile-stats sources adapt the workout + activity repos to the
+		// user package's narrow LiftSessionSource/RunningSampleSource seams so
+		// GET /users/{username}/stats can read weekly training data without the
+		// user package importing workout/activity.
+		user.NewDiscoveryHandler(
+			userRepo,
+			followRepo,
+			avatarStore,
+			newLiftSessionSource(workoutRepo),
+			newRunningSampleSource(activityRepo),
+		).Mount(r)
 
 		// Admin beta-allowlist surface — manage the closed-beta allowlist at
 		// runtime (GET/POST/DELETE /admin/beta-emails). Wrapped in its own

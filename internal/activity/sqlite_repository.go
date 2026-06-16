@@ -441,6 +441,37 @@ func (r *SQLiteRepository) RunningMetrics(ctx context.Context, userID string, no
 	return computeMetrics(data, now, loc), nil
 }
 
+// ListRunningSamplesSince returns the (start_time, distance_meters) projection
+// for the user's live ActivityRunning rows starting at/after `since`. Mirrors
+// RunningMetrics' filter (running type, deleted_at IS NULL); the handler
+// buckets the samples into local weeks. The
+// (user_id, activity_type, start_time DESC) WHERE deleted_at IS NULL partial
+// index covers this query.
+func (r *SQLiteRepository) ListRunningSamplesSince(ctx context.Context, userID string, since time.Time) ([]RunSample, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT start_time, distance_meters
+		FROM activities
+		WHERE user_id = ? AND activity_type = ? AND deleted_at IS NULL AND start_time >= ?
+	`, userID, ActivityRunning, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []RunSample
+	for rows.Next() {
+		var rs RunSample
+		if err := rows.Scan(&rs.StartTime, &rs.DistanceMeters); err != nil {
+			return nil, err
+		}
+		out = append(out, rs)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // scanActivity reads one activities row out of a Row or Rows.
 func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	var (

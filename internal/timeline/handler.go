@@ -41,14 +41,19 @@ type Handler struct {
 	// imports them.
 	followees AcceptedFollowees
 	users     UserResolver
+	// profiles batch-resolves the author identity embedded on each post and
+	// comment. It is called once per page over the distinct author id set so
+	// author hydration never becomes an N+1; an id missing from its result is
+	// rendered with a minimal author rather than dropping the post.
+	profiles ProfileResolver
 	// now supplies the current time; defaulted to time.Now and overridable in
 	// tests. Kept for parity with the other domains' handlers even though the
 	// timeline read paths are time-independent.
 	now func() time.Time
 }
 
-func NewHandler(repo Repository, hydrator SourceHydrator, followees AcceptedFollowees, users UserResolver) *Handler {
-	return &Handler{repo: repo, hydrator: hydrator, followees: followees, users: users, now: time.Now}
+func NewHandler(repo Repository, hydrator SourceHydrator, followees AcceptedFollowees, users UserResolver, profiles ProfileResolver) *Handler {
+	return &Handler{repo: repo, hydrator: hydrator, followees: followees, users: users, profiles: profiles, now: time.Now}
 }
 
 // Mount registers routes under /timeline. Callers are expected to have already
@@ -156,6 +161,7 @@ type postDTO struct {
 	SourceID     string       `json:"source_id"`
 	OccurredAt   time.Time    `json:"occurred_at"`
 	Visibility   Visibility   `json:"visibility"`
+	Author       authorDTO    `json:"author"`
 	Content      contentDTO   `json:"content"`
 	Reactions    reactionsDTO `json:"reactions"`
 	CommentCount int          `json:"comment_count"`
@@ -166,6 +172,7 @@ type commentDTO struct {
 	ID        string    `json:"id"`
 	PostID    string    `json:"post_id"`
 	UserID    string    `json:"user_id"`
+	Author    authorDTO `json:"author"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -354,9 +361,15 @@ func (h *Handler) assemblePosts(ctx context.Context, viewerID string, posts []Po
 
 	refs := make([]PostRef, 0, len(posts))
 	ids := make([]string, 0, len(posts))
+	authorIDs := make([]string, 0, len(posts))
+	seenAuthor := make(map[string]bool, len(posts))
 	for _, p := range posts {
 		refs = append(refs, refOf(p))
 		ids = append(ids, p.ID)
+		if !seenAuthor[p.UserID] {
+			seenAuthor[p.UserID] = true
+			authorIDs = append(authorIDs, p.UserID)
+		}
 	}
 
 	content, err := h.hydrator.Hydrate(ctx, refs)
@@ -368,6 +381,11 @@ func (h *Handler) assemblePosts(ctx context.Context, viewerID string, posts []Po
 		return nil, err
 	}
 	counts, err := h.repo.CommentCounts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	// One batch resolve over the page's distinct author ids — the N+1 guard.
+	authors, err := h.profiles.Authors(ctx, authorIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -386,12 +404,27 @@ func (h *Handler) assemblePosts(ctx context.Context, viewerID string, posts []Po
 			SourceID:     p.SourceID,
 			OccurredAt:   p.OccurredAt,
 			Visibility:   p.Visibility,
+			Author:       h.authorOf(p.UserID, authors),
 			Content:      toContentDTO(c),
 			Reactions:    toReactionsDTO(summaries[p.ID]),
 			CommentCount: counts[p.ID],
 		})
 	}
 	return out, nil
+}
+
+// authorOf looks up userID in a batch-resolved author map and shapes it for the
+// wire. A missing author (resolver returned no entry — a deleted or
+// not-yet-resolvable user) is logged and rendered as a minimal author carrying
+// just the known id, mirroring the hydration-missing log style: the content is
+// still useful, so we don't drop the card over an unresolved identity.
+func (h *Handler) authorOf(userID string, authors map[string]Author) authorDTO {
+	a, ok := authors[userID]
+	if !ok {
+		log.Printf("timeline: author missing for user_id=%s — rendering minimal author", userID)
+		return authorDTO{UserID: userID}
+	}
+	return toAuthorDTO(a)
 }
 
 // loadViewablePost fetches a post by its {id} path param and enforces canView.
@@ -470,9 +503,26 @@ func (h *Handler) getPost(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "list comments", err)
 		return
 	}
+	// Resolve every commenter's identity in ONE batch call over the distinct
+	// commenter id set — no per-comment fan-out.
+	commenterIDs := make([]string, 0, len(comments))
+	seenCommenter := make(map[string]bool, len(comments))
+	for _, c := range comments {
+		if !seenCommenter[c.UserID] {
+			seenCommenter[c.UserID] = true
+			commenterIDs = append(commenterIDs, c.UserID)
+		}
+	}
+	commenters, err := h.profiles.Authors(r.Context(), commenterIDs)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "resolve commenters", err)
+		return
+	}
 	commentDTOs := make([]commentDTO, 0, len(comments))
 	for _, c := range comments {
-		commentDTOs = append(commentDTOs, toCommentDTO(c))
+		dto := toCommentDTO(c)
+		dto.Author = h.authorOf(c.UserID, commenters)
+		commentDTOs = append(commentDTOs, dto)
 	}
 
 	httpresp.OK(w, "fetched timeline post", postDetailResponse{

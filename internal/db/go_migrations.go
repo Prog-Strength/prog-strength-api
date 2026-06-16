@@ -7,5 +7,6 @@ package db
 func registeredGoMigrations() []goMigration {
 	return []goMigration{
 		migration028(),
+		migration029(),
 	}
 }

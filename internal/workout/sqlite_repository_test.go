@@ -270,3 +270,84 @@ func nSets(n, reps int, weight float64) []Set {
 	}
 	return out
 }
+
+// TestListCompletedSessionsSince_Filters verifies the projection excludes
+// end-less workouts, soft-deleted workouts, and workouts performed before the
+// since cutoff, returning only live completed sessions in range.
+func TestListCompletedSessionsSince_Filters(t *testing.T) {
+	ctx := context.Background()
+	d, _ := newTestDB(t)
+	repo := NewSQLiteRepository(d)
+	seedExerciseCatalog(t, d, "back-squat")
+
+	since := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := func(start time.Time, mins int) *time.Time {
+		e := start.Add(time.Duration(mins) * time.Minute)
+		return &e
+	}
+
+	// In-range, completed: included.
+	inRangeStart := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	included := &Workout{
+		UserID:      "u1",
+		PerformedAt: inRangeStart,
+		EndedAt:     end(inRangeStart, 75),
+		Exercises:   []WorkoutExercise{{ExerciseID: "back-squat", Order: 0, Sets: nSets(3, 5, 225)}},
+	}
+	mustCreate(t, repo, included)
+
+	// End-less: excluded.
+	endless := &Workout{
+		UserID:      "u1",
+		PerformedAt: time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC),
+		Exercises:   []WorkoutExercise{{ExerciseID: "back-squat", Order: 0, Sets: nSets(3, 5, 225)}},
+	}
+	mustCreate(t, repo, endless)
+
+	// Before since: excluded.
+	beforeStart := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	before := &Workout{
+		UserID:      "u1",
+		PerformedAt: beforeStart,
+		EndedAt:     end(beforeStart, 60),
+		Exercises:   []WorkoutExercise{{ExerciseID: "back-squat", Order: 0, Sets: nSets(3, 5, 225)}},
+	}
+	mustCreate(t, repo, before)
+
+	// Soft-deleted (in range, completed): excluded.
+	delStart := time.Date(2026, 5, 12, 12, 0, 0, 0, time.UTC)
+	deleted := &Workout{
+		UserID:      "u1",
+		PerformedAt: delStart,
+		EndedAt:     end(delStart, 90),
+		Exercises:   []WorkoutExercise{{ExerciseID: "back-squat", Order: 0, Sets: nSets(3, 5, 225)}},
+	}
+	mustCreate(t, repo, deleted)
+	if err := repo.Delete(ctx, deleted.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// Other user (in range, completed): excluded by user scoping.
+	otherStart := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
+	other := &Workout{
+		UserID:      "u2",
+		PerformedAt: otherStart,
+		EndedAt:     end(otherStart, 45),
+		Exercises:   []WorkoutExercise{{ExerciseID: "back-squat", Order: 0, Sets: nSets(3, 5, 225)}},
+	}
+	mustCreate(t, repo, other)
+
+	got, err := repo.ListCompletedSessionsSince(ctx, "u1", since)
+	if err != nil {
+		t.Fatalf("ListCompletedSessionsSince: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d sessions, want 1: %+v", len(got), got)
+	}
+	if !got[0].PerformedAt.Equal(inRangeStart) {
+		t.Fatalf("PerformedAt = %v, want %v", got[0].PerformedAt, inRangeStart)
+	}
+	if got := got[0].EndedAt.Sub(got[0].PerformedAt).Minutes(); got != 75 {
+		t.Fatalf("duration = %v min, want 75", got)
+	}
+}

@@ -458,3 +458,23 @@ func (r *MemoryRepository) ReplaceUserHeadlineExercises(
 	r.userHeadlineExercises[userID] = rows
 	return nil
 }
+
+// ListCompletedSessionsSince mirrors the SQLite projection: the
+// (PerformedAt, EndedAt) pairs of the user's live workouts that have a
+// non-nil EndedAt at/after `since`. End-less workouts are excluded.
+func (r *MemoryRepository) ListCompletedSessionsSince(ctx context.Context, userID string, since time.Time) ([]SessionDuration, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []SessionDuration
+	for _, w := range r.workouts {
+		if w.UserID != userID || w.DeletedAt != nil || w.EndedAt == nil {
+			continue
+		}
+		if w.PerformedAt.Before(since) {
+			continue
+		}
+		out = append(out, SessionDuration{PerformedAt: w.PerformedAt, EndedAt: *w.EndedAt})
+	}
+	return out, nil
+}

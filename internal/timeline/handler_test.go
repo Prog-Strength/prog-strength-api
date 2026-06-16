@@ -75,6 +75,45 @@ func (f *fakeUsers) ResolveUsername(ctx context.Context, username string) (strin
 	return id, nil
 }
 
+// --- fake profile resolver -----------------------------------------------
+
+// fakeProfiles is a deterministic in-test ProfileResolver. authors maps a user
+// id to its resolved Author; an id absent from the map is absent from the
+// returned result (the missing-author path). It records each call's input ids
+// and counts invocations so a test can assert the batch contract — one call per
+// page over the deduped id set, never an N+1.
+type fakeProfiles struct {
+	authors map[string]Author
+	calls   int
+	lastIDs []string
+}
+
+func (f *fakeProfiles) Authors(ctx context.Context, userIDs []string) (map[string]Author, error) {
+	f.calls++
+	f.lastIDs = append([]string(nil), userIDs...)
+	out := make(map[string]Author, len(userIDs))
+	for _, id := range userIDs {
+		if a, ok := f.authors[id]; ok {
+			out[id] = a
+		}
+	}
+	return out, nil
+}
+
+// strptr is a small helper for the optional *string author fields.
+func strptr(s string) *string { return &s }
+
+// authorFor builds a deterministic Author for a user id so tests can pin exact
+// values against the fake's data.
+func authorFor(userID string) Author {
+	return Author{
+		UserID:      userID,
+		Username:    strptr("u-" + userID),
+		DisplayName: "Display " + userID,
+		AvatarURL:   strptr("https://avatars.test/" + userID),
+	}
+}
+
 // --- envelopes for assertions --------------------------------------------
 
 type feedEnvelope struct {
@@ -100,19 +139,26 @@ type reactionsEnvelope struct {
 // --- helpers -------------------------------------------------------------
 
 func newTestHandler() (*Handler, *MemoryRepository, *fakeHydrator) {
-	h, repo, hyd, _, _ := newSocialTestHandler()
+	h, repo, hyd, _, _, _ := newSocialTestHandler()
 	return h, repo, hyd
 }
 
 // newSocialTestHandler additionally exposes the follow/user fakes for the
-// fan-out and ?user= scoped-feed tests. The fakes start empty (no followees,
-// no resolvable usernames); tests populate them.
-func newSocialTestHandler() (*Handler, *MemoryRepository, *fakeHydrator, *fakeFollowees, *fakeUsers) {
+// fan-out and ?user= scoped-feed tests, plus the profile resolver fake for the
+// author-embedding tests. The fakes start empty (no followees, no resolvable
+// usernames); the profile resolver is pre-seeded with authors for userA/userB
+// so the common posts have a resolvable identity. Tests populate/override as
+// needed.
+func newSocialTestHandler() (*Handler, *MemoryRepository, *fakeHydrator, *fakeFollowees, *fakeUsers, *fakeProfiles) {
 	repo := NewMemoryRepository()
 	hyd := &fakeHydrator{missing: map[string]bool{}}
 	followees := &fakeFollowees{accepted: map[string][]string{}}
 	users := &fakeUsers{byUsername: map[string]string{}}
-	return NewHandler(repo, hyd, followees, users), repo, hyd, followees, users
+	profiles := &fakeProfiles{authors: map[string]Author{
+		userA: authorFor(userA),
+		userB: authorFor(userB),
+	}}
+	return NewHandler(repo, hyd, followees, users, profiles), repo, hyd, followees, users, profiles
 }
 
 // seedPost inserts a feed-index row for userID via the repo's EnsurePost and
@@ -585,7 +631,7 @@ func sourceIDSet(posts []postDTO) map[string]bool {
 // posts; own-post visibility is unchanged (the viewer sees their own private +
 // friends). Removing the edge immediately revokes visibility.
 func TestFeedFanOutAcceptedFollower(t *testing.T) {
-	h, repo, _, followees, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// B's posts: one friends (visible to an accepted follower), one private (not).
@@ -622,7 +668,7 @@ func TestFeedFanOutAcceptedFollower(t *testing.T) {
 // A non-accepted (e.g. pending) follower has an empty accepted set, so they see
 // nothing of the other author.
 func TestFeedFanOutPendingSeesNothing(t *testing.T) {
-	h, repo, _, _, _ := newSocialTestHandler()
+	h, repo, _, _, _, _ := newSocialTestHandler()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userB, "b-friends", base, VisibilityFriends)
 	// followees.accepted[userA] left empty — A's request to B is pending.
@@ -636,7 +682,7 @@ func TestFeedFanOutPendingSeesNothing(t *testing.T) {
 // The multi-author keyset page orders correctly across authors with interleaved
 // occurred_at, paginating without gaps or repeats.
 func TestFeedFanOutKeysetAcrossAuthors(t *testing.T) {
-	h, repo, _, followees, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	// Interleave A and B by occurred_at: a0 < b1 < a2 < b3 (all friends/own).
 	seedPostVis(t, repo, userA, "a0", base, VisibilityFriends)
@@ -675,7 +721,7 @@ func TestFeedFanOutKeysetAcrossAuthors(t *testing.T) {
 // --- canView via getPost (single post) -----------------------------------
 
 func TestGetPostFollowerVisibility(t *testing.T) {
-	h, repo, _, followees, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler()
 	now := time.Now().UTC()
 	friends := seedPostVis(t, repo, userA, "a-friends", now, VisibilityFriends)
 	private := seedPostVis(t, repo, userA, "a-private", now, VisibilityPrivate)
@@ -709,7 +755,7 @@ func TestGetPostFollowerVisibility(t *testing.T) {
 // --- ?user= scoped feed --------------------------------------------------
 
 func TestScopedFeedAuthorSeesOwnIncludingPrivate(t *testing.T) {
-	h, repo, _, _, users := newSocialTestHandler()
+	h, repo, _, _, users, _ := newSocialTestHandler()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
 	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
@@ -726,7 +772,7 @@ func TestScopedFeedAuthorSeesOwnIncludingPrivate(t *testing.T) {
 }
 
 func TestScopedFeedAcceptedFollowerSeesFriendsOnly(t *testing.T) {
-	h, repo, _, followees, users := newSocialTestHandler()
+	h, repo, _, followees, users, _ := newSocialTestHandler()
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
 	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
@@ -747,7 +793,7 @@ func TestScopedFeedAcceptedFollowerSeesFriendsOnly(t *testing.T) {
 }
 
 func TestScopedFeedNonFollowerLocked(t *testing.T) {
-	h, repo, _, _, users := newSocialTestHandler()
+	h, repo, _, _, users, _ := newSocialTestHandler()
 	seedPostVis(t, repo, userA, "a-friends", time.Now().UTC(), VisibilityFriends)
 	users.byUsername["alice"] = userA
 	// userB does not follow A → gated locked-empty 200.
@@ -765,10 +811,172 @@ func TestScopedFeedNonFollowerLocked(t *testing.T) {
 }
 
 func TestScopedFeedUnknownUsername(t *testing.T) {
-	h, _, _, _, _ := newSocialTestHandler()
+	h, _, _, _, _, _ := newSocialTestHandler()
 	w := httptest.NewRecorder()
 	h.listFeed(w, req(t, "GET", "/timeline?user=ghost", userA, ""))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown username status = %d, want 404; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// --- embedded author identity --------------------------------------------
+
+// Every feed post carries a populated author matching the resolver's data, and
+// the resolver is invoked exactly ONCE for the page over the DEDUPED author id
+// set — the N+1 guard. Two posts by userA + one by userB (an accepted followee)
+// must dedupe to {userA, userB} in a single resolver call.
+func TestFeedEmbedsAuthorBatchedOnce(t *testing.T) {
+	h, repo, _, followees, _, profiles := newSocialTestHandler()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	seedPostVis(t, repo, userA, "a1", base, VisibilityFriends)
+	seedPostVis(t, repo, userA, "a2", base.Add(time.Hour), VisibilityFriends)
+	seedPostVis(t, repo, userB, "b1", base.Add(2*time.Hour), VisibilityFriends)
+	followees.accepted[userA] = []string{userB}
+
+	data := fetchFeed(t, h, userA, "")
+	if len(data.Posts) != 3 {
+		t.Fatalf("want 3 posts, got %d", len(data.Posts))
+	}
+	for _, p := range data.Posts {
+		var owner string
+		switch p.SourceID {
+		case "a1", "a2":
+			owner = userA
+		case "b1":
+			owner = userB
+		}
+		exp := authorFor(owner)
+		if p.Author.UserID != owner {
+			t.Errorf("post %s author.user_id = %q, want %q", p.SourceID, p.Author.UserID, owner)
+		}
+		if p.Author.DisplayName != exp.DisplayName {
+			t.Errorf("post %s author.display_name = %q, want %q", p.SourceID, p.Author.DisplayName, exp.DisplayName)
+		}
+		if p.Author.AvatarURL == nil || *p.Author.AvatarURL != *exp.AvatarURL {
+			t.Errorf("post %s author.avatar_url = %v, want %q", p.SourceID, p.Author.AvatarURL, *exp.AvatarURL)
+		}
+		if p.Author.Username == nil || *p.Author.Username != *exp.Username {
+			t.Errorf("post %s author.username = %v, want %q", p.SourceID, p.Author.Username, *exp.Username)
+		}
+	}
+
+	// N+1 guard: one resolver call for the whole page, with the deduped id set.
+	if profiles.calls != 1 {
+		t.Fatalf("resolver invoked %d times, want exactly 1 (no N+1)", profiles.calls)
+	}
+	got := map[string]int{}
+	for _, id := range profiles.lastIDs {
+		got[id]++
+	}
+	if len(profiles.lastIDs) != 2 || got[userA] != 1 || got[userB] != 1 {
+		t.Errorf("resolver ids = %v, want deduped {userA, userB}", profiles.lastIDs)
+	}
+}
+
+// A single post detail embeds the post author AND every comment author, with
+// commenters resolved in ONE batch call. Two comments from the same user dedupe
+// to a single id in that call.
+func TestGetPostEmbedsCommentAuthorsBatchedOnce(t *testing.T) {
+	h, repo, _, _, _, profiles := newSocialTestHandler()
+	p := seedPost(t, repo, userA, "p", time.Now().UTC())
+	// Two comments from userA (dedupe) + one from userB.
+	if _, err := repo.AddComment(context.Background(), p.ID, userA, "first"); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	if _, err := repo.AddComment(context.Background(), p.ID, userA, "second"); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+	if _, err := repo.AddComment(context.Background(), p.ID, userB, "third"); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.getPost(w, req(t, "GET", "/timeline/posts/"+p.ID, userA, "", "id", p.ID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env postDetailEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	// Post author embedded.
+	if env.Data.Author.UserID != userA || env.Data.Author.DisplayName != authorFor(userA).DisplayName {
+		t.Errorf("post author = %+v, want userA's", env.Data.Author)
+	}
+	// Every comment has an author matching its commenter.
+	if len(env.Data.Comments) != 3 {
+		t.Fatalf("want 3 comments, got %d", len(env.Data.Comments))
+	}
+	for _, c := range env.Data.Comments {
+		exp := authorFor(c.UserID)
+		if c.Author.UserID != c.UserID {
+			t.Errorf("comment %s author.user_id = %q, want %q", c.ID, c.Author.UserID, c.UserID)
+		}
+		if c.Author.DisplayName != exp.DisplayName {
+			t.Errorf("comment %s author.display_name = %q, want %q", c.ID, c.Author.DisplayName, exp.DisplayName)
+		}
+		// Delete affordance: the raw user_id must still be present.
+		if c.UserID == "" {
+			t.Errorf("comment %s lost its user_id (delete affordance)", c.ID)
+		}
+	}
+
+	// One call for the post (assemblePosts) + one for the comment thread.
+	if profiles.calls != 2 {
+		t.Fatalf("resolver invoked %d times, want 2 (one post page + one comment batch)", profiles.calls)
+	}
+	// The comment batch (last call) deduped userA's two comments to a single id.
+	got := map[string]int{}
+	for _, id := range profiles.lastIDs {
+		got[id]++
+	}
+	if len(profiles.lastIDs) != 2 || got[userA] != 1 || got[userB] != 1 {
+		t.Errorf("comment resolver ids = %v, want deduped {userA, userB}", profiles.lastIDs)
+	}
+}
+
+// A missing author (resolver returns no entry for the post's owner) renders the
+// post with a minimal author carrying just the UserID — the post is NOT dropped,
+// and there is no panic.
+func TestFeedMissingAuthorRendersMinimal(t *testing.T) {
+	h, repo, _, _, _, profiles := newSocialTestHandler()
+	// Resolver knows nobody.
+	profiles.authors = map[string]Author{}
+	seedPost(t, repo, userA, "orphan", time.Now().UTC())
+
+	data := fetchFeed(t, h, userA, "")
+	if len(data.Posts) != 1 {
+		t.Fatalf("missing author must not drop the post; got %d posts", len(data.Posts))
+	}
+	a := data.Posts[0].Author
+	if a.UserID != userA {
+		t.Errorf("minimal author.user_id = %q, want %q", a.UserID, userA)
+	}
+	if a.DisplayName != "" || a.Username != nil || a.AvatarURL != nil {
+		t.Errorf("minimal author should carry only the user id, got %+v", a)
+	}
+}
+
+// The comment's user_id field survives author embedding (the delete affordance
+// depends on it), even when its author resolves successfully.
+func TestCommentRetainsUserIDForDeleteAffordance(t *testing.T) {
+	h, repo, _, _, _, _ := newSocialTestHandler()
+	p := seedPost(t, repo, userA, "p", time.Now().UTC())
+	if _, err := repo.AddComment(context.Background(), p.ID, userA, "mine"); err != nil {
+		t.Fatalf("seed comment: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.getPost(w, req(t, "GET", "/timeline/posts/"+p.ID, userA, "", "id", p.ID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env postDetailEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Comments) != 1 || env.Data.Comments[0].UserID != userA {
+		t.Fatalf("comment user_id must remain %q, got %+v", userA, env.Data.Comments)
 	}
 }

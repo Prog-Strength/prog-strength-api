@@ -422,6 +422,51 @@ func TestRunningMetrics(t *testing.T) {
 	}
 }
 
+// TestListRunningSamplesSince_Filters verifies the projection returns only
+// running activities, excluding walks, soft-deleted rows, before-since rows,
+// and other users' rows.
+func TestListRunningSamplesSince_Filters(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	since := mustTime(t, "2026-05-01T00:00:00Z")
+
+	run := newActivity("u1", IngestManualTCX, "run", mustTime(t, "2026-05-10T07:00:00Z"), 5000, 1500)
+
+	walk := newActivity("u1", IngestManualTCX, "walk", mustTime(t, "2026-05-11T07:00:00Z"), 6000, 1800)
+	walk.ActivityType = ActivityWalking
+
+	beforeSince := newActivity("u1", IngestManualTCX, "old", mustTime(t, "2026-04-20T07:00:00Z"), 4000, 1200)
+
+	deleted := newActivity("u1", IngestManualTCX, "del", mustTime(t, "2026-05-12T07:00:00Z"), 7000, 2100)
+
+	other := newActivity("u2", IngestManualTCX, "other", mustTime(t, "2026-05-13T07:00:00Z"), 8000, 2400)
+
+	for _, a := range []*Activity{run, walk, beforeSince, deleted, other} {
+		if err := repo.Create(ctx, a, []byte("x")); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+	if err := repo.SoftDelete(ctx, "u1", deleted.ID); err != nil {
+		t.Fatalf("SoftDelete: %v", err)
+	}
+
+	got, err := repo.ListRunningSamplesSince(ctx, "u1", since)
+	if err != nil {
+		t.Fatalf("ListRunningSamplesSince: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d samples, want 1: %+v", len(got), got)
+	}
+	if got[0].DistanceMeters != 5000 {
+		t.Fatalf("distance = %v, want 5000", got[0].DistanceMeters)
+	}
+	if !got[0].StartTime.Equal(run.StartTime) {
+		t.Fatalf("start = %v, want %v", got[0].StartTime, run.StartTime)
+	}
+}
+
 // --- Running best efforts ----------------------------------------------
 
 // newActivityWithEfforts builds a running activity carrying the given

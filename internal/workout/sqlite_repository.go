@@ -707,3 +707,32 @@ func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Wo
 	}
 	return workouts, nil
 }
+
+// ListCompletedSessionsSince returns the (performed_at, ended_at) projection
+// for the user's live workouts that have an ended_at at/after `since`. End-less
+// workouts are filtered out in SQL (ended_at IS NOT NULL) — their duration is
+// unknown. Ordering is unspecified; the handler buckets into local weeks.
+func (r *SQLiteRepository) ListCompletedSessionsSince(ctx context.Context, userID string, since time.Time) ([]SessionDuration, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT performed_at, ended_at
+		FROM workouts
+		WHERE user_id = ? AND deleted_at IS NULL AND ended_at IS NOT NULL AND performed_at >= ?
+	`, userID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SessionDuration
+	for rows.Next() {
+		var sd SessionDuration
+		if err := rows.Scan(&sd.PerformedAt, &sd.EndedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, sd)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

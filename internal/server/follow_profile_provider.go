@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -73,6 +74,42 @@ func (p *followProfileProvider) ProfileSummaries(ctx context.Context, userIDs []
 			DisplayName: u.DisplayName,
 			Username:    u.Username,
 			AvatarURL:   p.avatarURL(ctx, u),
+		}
+	}
+	return out, nil
+}
+
+// timelineProfileResolver adapts followProfileProvider to
+// timeline.ProfileResolver so the timeline can embed author identity on each
+// post and comment. It reuses ProfileSummaries — same batch read, same avatar
+// presigning + OAuth fallback — and maps follow.ProfileSummary into the
+// timeline-local Author shape, keeping the timeline package import-clean.
+type timelineProfileResolver struct {
+	provider *followProfileProvider
+}
+
+var _ timeline.ProfileResolver = (*timelineProfileResolver)(nil)
+
+// newTimelineProfileResolver wraps the follow profile provider.
+func newTimelineProfileResolver(provider *followProfileProvider) *timelineProfileResolver {
+	return &timelineProfileResolver{provider: provider}
+}
+
+// Authors batch-resolves user summaries via the provider's ProfileSummaries and
+// maps each into a timeline.Author. Missing ids stay absent (the provider skips
+// them), which the timeline renders as a minimal author.
+func (r *timelineProfileResolver) Authors(ctx context.Context, userIDs []string) (map[string]timeline.Author, error) {
+	summaries, err := r.provider.ProfileSummaries(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]timeline.Author, len(summaries))
+	for id, s := range summaries {
+		out[id] = timeline.Author{
+			UserID:      s.UserID,
+			Username:    s.Username,
+			DisplayName: s.DisplayName,
+			AvatarURL:   s.AvatarURL,
 		}
 	}
 	return out, nil

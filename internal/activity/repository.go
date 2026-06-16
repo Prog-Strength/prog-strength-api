@@ -76,6 +76,21 @@ type Repository interface {
 	// activity start_time ascending. The full series (not just record
 	// breakers) so the progression chart shows real density.
 	GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error)
+
+	// ListRunningSamplesSince returns the (StartTime, DistanceMeters)
+	// projection for the user's live ActivityRunning rows starting at/after
+	// `since`. Walks/rides are excluded — the profile-stats distance series is
+	// running-specific, mirroring RunningMetrics' filter. Bucketing into local
+	// weeks happens in the handler.
+	ListRunningSamplesSince(ctx context.Context, userID string, since time.Time) ([]RunSample, error)
+}
+
+// RunSample is the minimal (start, distance) projection for one running
+// activity, used to compute the weekly running-distance series in the
+// profile-stats handler.
+type RunSample struct {
+	StartTime      time.Time
+	DistanceMeters float64
 }
 
 // RunningBestEffort is one row of the per-user current-bests query: the

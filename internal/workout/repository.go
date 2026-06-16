@@ -81,6 +81,23 @@ type Repository interface {
 	// and that the slice respects MaxHeadlineExercises — the repo
 	// trusts the input it's given.
 	ReplaceUserHeadlineExercises(ctx context.Context, userID string, exerciseIDs []string, now time.Time) error
+
+	// ListCompletedSessionsSince returns (PerformedAt, EndedAt) for the
+	// user's non-deleted workouts that HAVE an EndedAt occurring at/after
+	// `since`. End-less workouts are excluded — their duration is unknown,
+	// so they can't contribute a session-minutes value. This is the raw
+	// projection for the weekly profile-stats series; bucketing into local
+	// weeks happens in the handler (a "week" is a user-local concept SQLite
+	// date() can't bucket correctly across DST).
+	ListCompletedSessionsSince(ctx context.Context, userID string, since time.Time) ([]SessionDuration, error)
+}
+
+// SessionDuration is the minimal (start, end) projection for one completed
+// workout, used to compute weekly lift-session minutes in the profile-stats
+// handler. Only workouts with a non-nil EndedAt are returned.
+type SessionDuration struct {
+	PerformedAt time.Time
+	EndedAt     time.Time
 }
 
 // ListOptions controls pagination and filtering for list operations.

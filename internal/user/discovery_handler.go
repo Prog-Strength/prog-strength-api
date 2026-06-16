@@ -51,12 +51,19 @@ type DiscoveryHandler struct {
 	// store is the avatar object store; may be nil (no presign attempted — the
 	// avatar_url falls back to the OAuth URL or null), matching the /me handler.
 	store AvatarStore
+	// lifts / runs are the cross-domain read seams the profile-stats endpoint
+	// consumes: a user's completed lift sessions and running samples. They are
+	// declared as narrow interfaces local to this package so user never imports
+	// workout/activity; the server passes thin adapters over the real repos.
+	lifts LiftSessionSource
+	runs  RunningSampleSource
 }
 
 // NewDiscoveryHandler constructs the discovery handler over the user repository,
-// the follow read seam, and the (possibly nil) avatar store.
-func NewDiscoveryHandler(repo Repository, follows FollowReader, store AvatarStore) *DiscoveryHandler {
-	return &DiscoveryHandler{repo: repo, follows: follows, store: store}
+// the follow read seam, the (possibly nil) avatar store, and the lift/running
+// stat sources that back GET /users/{username}/stats.
+func NewDiscoveryHandler(repo Repository, follows FollowReader, store AvatarStore, lifts LiftSessionSource, runs RunningSampleSource) *DiscoveryHandler {
+	return &DiscoveryHandler{repo: repo, follows: follows, store: store, lifts: lifts, runs: runs}
 }
 
 // Mount registers the discovery routes on the JWT-gated group. /users/search is
@@ -68,6 +75,7 @@ func (h *DiscoveryHandler) Mount(r chi.Router) {
 	r.Get("/users/{username}", h.getProfile)
 	r.Get("/users/{username}/followers", h.listFollowers)
 	r.Get("/users/{username}/following", h.listFollowing)
+	r.Get("/users/{username}/stats", h.getStats)
 }
 
 // --- DTOs ----------------------------------------------------------------

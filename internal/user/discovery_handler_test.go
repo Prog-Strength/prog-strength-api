@@ -20,7 +20,7 @@ func newDiscoveryFixture(t *testing.T) (chi.Router, Repository, *follow.MemoryRe
 	t.Helper()
 	userRepo := NewMemoryRepository()
 	followRepo := follow.NewMemoryRepository()
-	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore())
+	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), &fakeLiftSource{}, &fakeRunSource{})
 	r := chi.NewRouter()
 	h.Mount(r)
 	return r, userRepo, followRepo

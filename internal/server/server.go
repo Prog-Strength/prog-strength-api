@@ -488,7 +488,17 @@ func New(cfg config.Config) (*Server, error) {
 		// /me; consumes the follow repo's read methods through the user-side
 		// FollowReader seam (followRepo satisfies it directly). Mounted after
 		// the follow handler in the same JWT-gated group.
-		user.NewDiscoveryHandler(userRepo, followRepo, avatarStore).Mount(r)
+		// The profile-stats sources adapt the workout + activity repos to the
+		// user package's narrow LiftSessionSource/RunningSampleSource seams so
+		// GET /users/{username}/stats can read weekly training data without the
+		// user package importing workout/activity.
+		user.NewDiscoveryHandler(
+			userRepo,
+			followRepo,
+			avatarStore,
+			newLiftSessionSource(workoutRepo),
+			newRunningSampleSource(activityRepo),
+		).Mount(r)
 
 		// Admin beta-allowlist surface — manage the closed-beta allowlist at
 		// runtime (GET/POST/DELETE /admin/beta-emails). Wrapped in its own

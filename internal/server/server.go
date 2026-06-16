@@ -59,16 +59,20 @@ func New(cfg config.Config) (*Server, error) {
 
 	// CORS: only matters for cross-origin browser fetches. curl/Postman/
 	// server-to-server calls are unaffected (no browser, no CORS check).
-	// Empty CORSAllowedOrigin disables cross-origin browser access entirely.
+	// An empty CORSAllowedOrigins disables cross-origin browser access
+	// entirely. Each entry may carry a single "*" wildcard — go-chi matches
+	// the pattern and reflects the concrete origin, so Vercel preview URLs
+	// work via e.g. "https://prog-strength-web-*-<scope>.vercel.app" while
+	// credentialed requests stay valid (see config.CORSAllowedOrigins).
 	//
 	// IMPORTANT: this conditional r.Use must run BEFORE any route is
 	// registered. chi enforces "all middleware before any route" — if a
 	// route registration intervenes, this Use panics at startup. Hidden
 	// failure mode in local dev where CORS_ALLOWED_ORIGIN is unset
 	// (the block is skipped, no panic); only fires in prod.
-	if cfg.CORSAllowedOrigin != "" {
+	if len(cfg.CORSAllowedOrigins) > 0 {
 		r.Use(cors.Handler(cors.Options{
-			AllowedOrigins: []string{cfg.CORSAllowedOrigin},
+			AllowedOrigins: cfg.CORSAllowedOrigins,
 			// PATCH is on the list because /chat-sessions/{id} uses it
 			// for title updates. Without it the browser preflight
 			// blocks the request silently — the agent /title generates
@@ -80,7 +84,7 @@ func New(cfg config.Config) (*Server, error) {
 			AllowCredentials: true,
 			MaxAge:           300,
 		}))
-		log.Printf("cors: allowing origin %s", cfg.CORSAllowedOrigin)
+		log.Printf("cors: allowing origins %v", cfg.CORSAllowedOrigins)
 	}
 
 	// --- All r.Use() calls must be above this line. ---

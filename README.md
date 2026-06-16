@@ -209,7 +209,7 @@ works with everything unset; production uses the secrets listed in
 | `GOOGLE_CLIENT_SECRET`  | —                  | OAuth client secret.                             |
 | `GOOGLE_REDIRECT_URL`   | —                  | OAuth callback URL.                              |
 | `DEV_AUTH`              | `false`            | Gates `POST /auth/dev/token`. Must be `false` in prod. |
-| `CORS_ALLOWED_ORIGIN`   | —                  | Frontend origin allowed by CORS.                 |
+| `CORS_ALLOWED_ORIGIN`   | —                  | Comma-separated frontend origins allowed by CORS. Each entry may use a single `*` wildcard (e.g. `https://prog-strength-web-*-<scope>.vercel.app` for Vercel branch previews). |
 | `RETURN_TO_ALLOWED_ORIGINS` | —              | OAuth `return_to` allow-list.                    |
 | `BETA_ALLOWED_EMAILS`   | —                  | Seed-only: one-time boot seed for the DB-backed beta allow-list (slated for removal). See below. |
 | `ADMIN_EMAILS`          | —                  | Comma-separated operator allow-list gating `/admin/beta-emails`. Empty = admin surface disabled (fail-closed). |

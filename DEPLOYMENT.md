@@ -81,7 +81,7 @@ preserves it), so DNS doesn't need to change on a host rebuild.
 | `GOOGLE_CLIENT_SECRET`  | OAuth client secret.                                   |
 | `GOOGLE_REDIRECT_URL`   | OAuth callback URL (must match Google console).        |
 | `DEV_AUTH`              | `true`/`false` — gates `POST /auth/dev/token`. Keep `false` in prod. |
-| `CORS_ALLOWED_ORIGIN`   | Frontend origin allowed by CORS.                       |
+| `CORS_ALLOWED_ORIGIN`   | Comma-separated frontend origins allowed by CORS. Each entry may use a single `*` wildcard, e.g. `https://progstrength.fitness,https://prog-strength-web-*-<vercel-scope>.vercel.app` to also allow Vercel branch previews. |
 | `LITESTREAM_REPLICA_BUCKET` | S3 bucket for SQLite replicas. Output by infra repo's Terraform as `litestream_bucket_name`. |
 | `LITESTREAM_REPLICA_REGION` | AWS region of the bucket. Matches `aws.region` in infra. |
 

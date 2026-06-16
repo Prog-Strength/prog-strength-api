@@ -1,3 +1,10 @@
+# [0.57.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.56.0...v0.57.0) (2026-06-16)
+
+
+### Features
+
+* **social:** handle reachability, bio, profile stats, and timeline author identity ([#39](https://github.com/Prog-Strength/prog-strength-api/issues/39)) ([08f0fd9](https://github.com/Prog-Strength/prog-strength-api/commit/08f0fd9d2ffb841e65e20509bc295889152543e5))
+
 # [0.56.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.55.0...v0.56.0) (2026-06-16)
 
 

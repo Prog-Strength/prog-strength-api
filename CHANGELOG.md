@@ -1,3 +1,10 @@
+# [0.59.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.58.0...v0.59.0) (2026-06-16)
+
+
+### Features
+
+* **planned-workouts:** branded calendar event body + AMRAP support ([#42](https://github.com/Prog-Strength/prog-strength-api/issues/42)) ([ce61b0b](https://github.com/Prog-Strength/prog-strength-api/commit/ce61b0be0f22e4d4dfe46b1c4f39628398c986fc))
+
 # [0.58.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.57.1...v0.58.0) (2026-06-16)
 
 

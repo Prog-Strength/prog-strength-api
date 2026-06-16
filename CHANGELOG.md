@@ -1,3 +1,15 @@
+# [0.56.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.55.0...v0.56.0) (2026-06-16)
+
+
+### Bug Fixes
+
+* **release:** push changelog to protected main via an admin bypass token ([#38](https://github.com/Prog-Strength/prog-strength-api/issues/38)) ([77f10d7](https://github.com/Prog-Strength/prog-strength-api/commit/77f10d783ba3d54fbe508ba75f12549db4b5b11c))
+
+
+### Features
+
+* **cors:** allow multiple origins incl. a wildcard for Vercel previews ([#37](https://github.com/Prog-Strength/prog-strength-api/issues/37)) ([8f15757](https://github.com/Prog-Strength/prog-strength-api/commit/8f1575712fd97e11e73e72d4c26179bfafdd8c97))
+
 # [0.55.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.54.0...v0.55.0) (2026-06-15)
 
 

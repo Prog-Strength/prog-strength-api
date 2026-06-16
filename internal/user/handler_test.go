@@ -318,6 +318,84 @@ func TestUpdateMe_SetsHeight(t *testing.T) {
 	}
 }
 
+func TestUpdateMe_SetsBio(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+
+	w := patchMe(repo, u.ID, `{"bio":"I lift things up and put them down."}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+	got := decodeMe(t, w)
+	if got.Bio == nil || *got.Bio != "I lift things up and put them down." {
+		t.Fatalf("bio echo: got %v want set", got.Bio)
+	}
+	// Persisted.
+	after, err := repo.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if after.Bio == nil || *after.Bio != "I lift things up and put them down." {
+		t.Fatalf("bio persisted: got %v", after.Bio)
+	}
+}
+
+func TestUpdateMe_EmptyBioClears(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+	u.Bio = ptrString("existing bio")
+	if err := repo.Update(context.Background(), u); err != nil {
+		t.Fatalf("seed bio: %v", err)
+	}
+
+	w := patchMe(repo, u.ID, `{"bio":""}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+	got := decodeMe(t, w)
+	if got.Bio != nil {
+		t.Fatalf("bio should be cleared: got %v", *got.Bio)
+	}
+	after, _ := repo.GetByID(context.Background(), u.ID)
+	if after.Bio != nil {
+		t.Fatalf("bio not cleared in store: got %v", *after.Bio)
+	}
+}
+
+func TestUpdateMe_OmittedBioUnchanged(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+	u.Bio = ptrString("keep me")
+	if err := repo.Update(context.Background(), u); err != nil {
+		t.Fatalf("seed bio: %v", err)
+	}
+
+	// PATCH without a bio field must leave the existing bio untouched.
+	w := patchMe(repo, u.ID, `{"display_name":"New Name"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+	got := decodeMe(t, w)
+	if got.Bio == nil || *got.Bio != "keep me" {
+		t.Fatalf("bio changed on omission: got %v", got.Bio)
+	}
+}
+
+func TestUpdateMe_OverlongBioRejected(t *testing.T) {
+	repo := NewMemoryRepository()
+	u := seedUser(t, repo)
+	body := `{"bio":"` + strings.Repeat("a", BioMaxLen+1) + `"}`
+	w := patchMe(repo, u.ID, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+	// Unchanged on rejection.
+	after, _ := repo.GetByID(context.Background(), u.ID)
+	if after.Bio != nil {
+		t.Fatalf("bio mutated on invalid update: %v", *after.Bio)
+	}
+}
+
 func TestUpdateMe_EmptyNameRejected(t *testing.T) {
 	repo := NewMemoryRepository()
 	u := seedUser(t, repo)

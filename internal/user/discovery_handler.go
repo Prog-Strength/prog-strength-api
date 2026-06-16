@@ -91,6 +91,7 @@ type publicProfileDTO struct {
 	UserID         string              `json:"user_id"`
 	Username       *string             `json:"username"`
 	DisplayName    string              `json:"display_name"`
+	Bio            *string             `json:"bio"`
 	AvatarURL      *string             `json:"avatar_url"`
 	FollowerCount  int                 `json:"follower_count"`
 	FollowingCount int                 `json:"following_count"`
@@ -222,6 +223,7 @@ func (h *DiscoveryHandler) getProfile(w http.ResponseWriter, r *http.Request) {
 		UserID:         u.ID,
 		Username:       u.Username,
 		DisplayName:    u.DisplayName,
+		Bio:            u.Bio,
 		AvatarURL:      h.avatarURL(r.Context(), u),
 		FollowerCount:  followers,
 		FollowingCount: following,

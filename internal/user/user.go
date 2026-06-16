@@ -12,6 +12,7 @@ const (
 	DisplayNameMaxLen = 60
 	HeightCmMin       = 50.0
 	HeightCmMax       = 250.0
+	BioMaxLen         = 160
 )
 
 // User is an authenticated account. Authentication is OAuth-only; there are
@@ -31,6 +32,9 @@ type User struct {
 	DistanceUnit DistanceUnit `json:"distance_unit"`
 	// HeightCm is an optional static body metric in canonical centimeters.
 	HeightCm *float64 `json:"height_cm"`
+	// Bio is an optional short, plain-text blurb shown on the public profile.
+	// nil means unset; validated (<=160 runes) at the write edge.
+	Bio *string `json:"bio"`
 	// Timezone is the canonical IANA timezone used for server-side Google
 	// Calendar writes (defaults to UTC).
 	Timezone string `json:"timezone"`
@@ -70,6 +74,9 @@ func (u *User) Validate() error {
 	}
 	if u.HeightCm != nil && (*u.HeightCm < HeightCmMin || *u.HeightCm > HeightCmMax) {
 		return ErrHeightOutOfRange
+	}
+	if u.Bio != nil && utf8.RuneCountInString(*u.Bio) > BioMaxLen {
+		return ErrBioTooLong
 	}
 	if u.Timezone == "" {
 		return ErrInvalidTimezone

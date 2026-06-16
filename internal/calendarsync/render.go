@@ -73,11 +73,18 @@ func summaryFor(plan *plannedworkout.PlannedWorkout) string {
 	return defaultSummary
 }
 
-// RenderEvent renders the Google Calendar event body for a plan at the given
-// detail level. appLinkBase is an optional base URL linked back to Prog
-// Strength (empty disables the link line). The window + timezone come straight
-// from the plan.
+// RenderEvent renders the Google Calendar event body for a plan. The
+// description always carries the user's notes (when set) followed by the
+// activity-appropriate agenda — a lift's exercises/sets, or a run's type +
+// details — so the synced event always reflects what the session is. The
+// window + timezone come straight from the plan. appLinkBase is an optional
+// base URL linked back to Prog Strength (empty disables the link line).
+//
+// detail is retained for signature compatibility with the scheduler but no
+// longer gates the description: notes + agenda are always included (the
+// calendar-detail level is effectively vestigial for rendering).
 func RenderEvent(plan *plannedworkout.PlannedWorkout, detail CalendarDetail, appLinkBase string) GoogleEvent {
+	_ = detail
 	ev := GoogleEvent{
 		Summary:  summaryFor(plan),
 		StartUTC: plan.ScheduledStartUTC,
@@ -85,20 +92,33 @@ func RenderEvent(plan *plannedworkout.PlannedWorkout, detail CalendarDetail, app
 		Timezone: plan.Timezone,
 	}
 
-	var b strings.Builder
-	if agenda := agendaBody(plan, detail); agenda != "" {
-		b.WriteString(agenda)
-	} else {
-		b.WriteString("Reserved training slot.")
+	// Description sections, top to bottom: notes, then the agenda. A plan with
+	// neither falls back to a generic reserved-slot line so the event is never
+	// blank.
+	var sections []string
+	if notes := notesBody(plan); notes != "" {
+		sections = append(sections, notes)
+	}
+	if agenda := agendaBody(plan); agenda != "" {
+		sections = append(sections, agenda)
+	}
+	body := strings.Join(sections, "\n\n")
+	if body == "" {
+		body = "Reserved training slot."
 	}
 	if link := planLink(plan, appLinkBase); link != "" {
-		if b.Len() > 0 {
-			b.WriteString("\n\n")
-		}
-		b.WriteString(link)
+		body += "\n\n" + link
 	}
-	ev.Description = b.String()
+	ev.Description = body
 	return ev
+}
+
+// notesBody returns the plan's trimmed free-text notes, or "" when none.
+func notesBody(plan *plannedworkout.PlannedWorkout) string {
+	if plan != nil && plan.Notes != nil {
+		return strings.TrimSpace(*plan.Notes)
+	}
+	return ""
 }
 
 // RenderCompletedEvent renders the event body for a COMPLETED plan: the summary
@@ -124,14 +144,12 @@ func RenderCompletedEvent(plan *plannedworkout.PlannedWorkout, actualText string
 	return ev
 }
 
-// agendaBody returns the full-agenda body text for a plan, dispatching on the
+// agendaBody returns the agenda body text for a plan, dispatching on the
 // activity kind: a lift renders its exercise agenda, a run renders its run
-// type + details. Returns "" when the detail level isn't full_agenda or the
-// plan carries no agenda — the caller then falls back to the time-block copy.
-func agendaBody(plan *plannedworkout.PlannedWorkout, detail CalendarDetail) string {
-	if detail != DetailFullAgenda {
-		return ""
-	}
+// type + details. Returns "" when the plan carries no agenda (an empty lift,
+// or a run with no type/details) — the caller then falls back to the
+// reserved-slot copy.
+func agendaBody(plan *plannedworkout.PlannedWorkout) string {
 	if plan.ActivityKind == plannedworkout.ActivityKindRun {
 		return renderRunAgenda(plan)
 	}

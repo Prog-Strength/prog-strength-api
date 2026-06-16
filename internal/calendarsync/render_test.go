@@ -33,7 +33,7 @@ func samplePlan() *plannedworkout.PlannedWorkout {
 	}
 }
 
-func TestRenderEvent_TimeBlock(t *testing.T) {
+func TestRenderEvent_SummaryWindowAndAgenda(t *testing.T) {
 	plan := samplePlan()
 	ev := RenderEvent(plan, DetailTimeBlock, "https://app.example.com")
 
@@ -46,19 +46,41 @@ func TestRenderEvent_TimeBlock(t *testing.T) {
 	if !ev.StartUTC.Equal(plan.ScheduledStartUTC) || !ev.EndUTC.Equal(plan.ScheduledEndUTC) {
 		t.Errorf("window not carried through: %v / %v", ev.StartUTC, ev.EndUTC)
 	}
-	// time_block must NOT list the agenda.
-	if strings.Contains(ev.Description, "Bench Press") {
-		t.Errorf("time_block description should not include agenda, got: %q", ev.Description)
-	}
-	if !strings.Contains(ev.Description, "Reserved") {
-		t.Errorf("expected reserved-slot note, got: %q", ev.Description)
+	// The agenda is always listed now — detail level no longer gates it.
+	if !strings.Contains(ev.Description, "Bench Press") {
+		t.Errorf("description should include the agenda, got: %q", ev.Description)
 	}
 	if !strings.Contains(ev.Description, "app.example.com/planned-workouts/plan-1") {
 		t.Errorf("expected app link, got: %q", ev.Description)
 	}
 }
 
-func TestRenderEvent_TimeBlockNoLinkBase(t *testing.T) {
+func TestRenderEvent_IncludesNotes(t *testing.T) {
+	plan := samplePlan()
+	plan.Notes = strPtr("Hit a PR last week — push for 140")
+	ev := RenderEvent(plan, DetailTimeBlock, "")
+
+	if !strings.Contains(ev.Description, "Hit a PR last week") {
+		t.Errorf("description should include the plan's notes, got: %q", ev.Description)
+	}
+	// Notes lead, agenda follows.
+	if strings.Index(ev.Description, "Hit a PR") > strings.Index(ev.Description, "Bench Press") {
+		t.Errorf("notes should precede the agenda, got: %q", ev.Description)
+	}
+}
+
+func TestRenderEvent_EmptyFallback(t *testing.T) {
+	// A lift plan with no notes and no exercises → generic reserved-slot copy.
+	plan := samplePlan()
+	plan.Notes = nil
+	plan.Exercises = nil
+	ev := RenderEvent(plan, DetailTimeBlock, "")
+	if !strings.Contains(ev.Description, "Reserved") {
+		t.Errorf("expected reserved-slot fallback, got: %q", ev.Description)
+	}
+}
+
+func TestRenderEvent_NoLinkBase(t *testing.T) {
 	ev := RenderEvent(samplePlan(), DetailTimeBlock, "")
 	if strings.Contains(ev.Description, "Open in Prog Strength") {
 		t.Errorf("no link expected when base unset, got: %q", ev.Description)
@@ -120,13 +142,14 @@ func TestRenderEvent_RunFullAgenda(t *testing.T) {
 	}
 }
 
-func TestRenderEvent_RunTimeBlockOmitsDetails(t *testing.T) {
+func TestRenderEvent_RunAlwaysIncludesDetails(t *testing.T) {
+	// Run type + details are always included now (detail level no longer gates).
 	ev := RenderEvent(sampleRunPlan(), DetailTimeBlock, "")
-	if strings.Contains(ev.Description, "4x800m") {
-		t.Errorf("time_block should not include run details, got: %q", ev.Description)
+	if !strings.Contains(ev.Description, "Interval run") {
+		t.Errorf("expected run-type heading, got: %q", ev.Description)
 	}
-	if !strings.Contains(ev.Description, "Reserved") {
-		t.Errorf("expected reserved-slot note, got: %q", ev.Description)
+	if !strings.Contains(ev.Description, "4x800m") {
+		t.Errorf("expected run details, got: %q", ev.Description)
 	}
 }
 

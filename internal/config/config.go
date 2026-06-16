@@ -57,12 +57,25 @@ type Config struct {
 	// publicly reachable production deployment once a real auth path exists.
 	DevAuth bool
 
-	// CORSAllowedOrigin is the single browser origin permitted to make
-	// credentialed cross-origin requests to the API. Empty disables CORS,
-	// which is appropriate for environments with no browser frontend
+	// CORSAllowedOrigins is the set of browser origins permitted to make
+	// credentialed cross-origin requests to the API, parsed from
+	// CORS_ALLOWED_ORIGIN via splitCSV (comma-separated). Empty disables
+	// CORS, which is appropriate for environments with no browser frontend
 	// (curl-only access still works since CORS is browser-enforced).
-	// Examples: "https://progstrength.fitness" (prod), "http://localhost:5173" (Vite dev).
-	CORSAllowedOrigin string
+	//
+	// Each entry may contain a SINGLE "*" wildcard (go-chi/cors), which is
+	// what makes Vercel preview deployments work: their hostnames carry one
+	// dynamic segment per branch/commit, e.g.
+	//   https://prog-strength-web-git-feat-xyz-abc123-<scope>.vercel.app
+	// so a pattern like
+	//   https://prog-strength-web-*-<scope>.vercel.app
+	// matches every branch preview without per-branch ops. go-chi reflects
+	// the concrete matched origin back in Access-Control-Allow-Origin (not
+	// the literal "*"), so AllowCredentials stays valid. Scope the wildcard
+	// to your project + Vercel scope — never a bare "*.vercel.app".
+	// Examples: "https://progstrength.fitness" (prod),
+	// "https://progstrength.fitness,https://prog-strength-web-*-acme.vercel.app".
+	CORSAllowedOrigins []string
 
 	// ReturnToAllowedOrigins is the whitelist of origins (scheme + host)
 	// that /auth/google/login may redirect back to via ?return_to=<url>.
@@ -159,7 +172,7 @@ func Load() (Config, error) {
 		GoogleRedirectURL:         os.Getenv("GOOGLE_REDIRECT_URL"),
 		GoogleCalendarRedirectURL: os.Getenv("GOOGLE_CALENDAR_REDIRECT_URL"),
 		DevAuth:                   os.Getenv("DEV_AUTH") == "true",
-		CORSAllowedOrigin:         os.Getenv("CORS_ALLOWED_ORIGIN"),
+		CORSAllowedOrigins:        splitCSV(os.Getenv("CORS_ALLOWED_ORIGIN")),
 		ReturnToAllowedOrigins:    splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
 		DailyUsageCapUSD:          parseFloatDefault(os.Getenv("DAILY_USAGE_CAP_USD"), 0),
 		UsagePriceTableJSON:       os.Getenv("USAGE_PRICE_TABLE_JSON"),

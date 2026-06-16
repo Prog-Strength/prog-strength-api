@@ -3,6 +3,8 @@ package user
 import (
 	"errors"
 	"fmt"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user/handle"
 )
 
 var (
@@ -18,8 +20,11 @@ var (
 	// Username write-path errors. Invalid covers charset/length/shape (input
 	// the regex rejects); Reserved is a structurally-valid but denylisted name;
 	// Taken is a case-insensitive collision surfaced from the unique index.
-	ErrUsernameInvalid  = errors.New("user: username must be 3-30 chars, start with a letter, and contain only letters, digits, and underscores")
-	ErrUsernameReserved = errors.New("user: username is reserved")
+	// Invalid/Reserved are re-exported from the leaf handle package (where the
+	// validation lives) so errors.Is keeps working across the package boundary;
+	// Taken originates here at the repository layer.
+	ErrUsernameInvalid  = handle.ErrUsernameInvalid
+	ErrUsernameReserved = handle.ErrUsernameReserved
 	ErrUsernameTaken    = errors.New("user: username already taken")
 )
 

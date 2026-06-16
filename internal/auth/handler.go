@@ -292,6 +292,30 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email, displayName, avat
 	if err := h.users.Create(ctx, newUser); err != nil {
 		return nil, err
 	}
+	// Create assigns newUser.ID. New accounts have no username yet, so
+	// auto-assign a handle derived from their display name (falling back to
+	// the id) so every user is addressable by a stable, unique handle. The
+	// uniqueness probe consults the same repo the rest of the request uses,
+	// treating ErrNotFound as "free".
+	if newUser.Username == nil {
+		handle, gErr := user.GenerateHandle(newUser.DisplayName, newUser.ID, func(c string) (bool, error) {
+			_, e := h.users.GetByUsername(ctx, c)
+			if errors.Is(e, user.ErrNotFound) {
+				return false, nil
+			}
+			if e != nil {
+				return false, e
+			}
+			return true, nil
+		})
+		if gErr != nil {
+			return nil, gErr
+		}
+		newUser.Username = &handle
+		if err := h.users.Update(ctx, newUser); err != nil {
+			return nil, err
+		}
+	}
 	return newUser, nil
 }
 

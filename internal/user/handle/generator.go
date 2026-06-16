@@ -1,4 +1,4 @@
-package user
+package handle
 
 import (
 	"strconv"
@@ -127,22 +127,22 @@ func firstFreeHandle(base string, exists func(string) (bool, error)) (string, bo
 // variant is somehow taken does it return the bare fallback as a last resort.
 func GenerateHandle(displayName, userID string, exists func(string) (bool, error)) (string, error) {
 	if base := slugifyHandle(displayName); base != "" {
-		handle, found, err := firstFreeHandle(base, exists)
+		h, found, err := firstFreeHandle(base, exists)
 		if err != nil {
 			return "", err
 		}
 		if found {
-			return handle, nil
+			return h, nil
 		}
 	}
 
 	fallback := fallbackHandle(userID)
-	handle, found, err := firstFreeHandle(fallback, exists)
+	h, found, err := firstFreeHandle(fallback, exists)
 	if err != nil {
 		return "", err
 	}
 	if found {
-		return handle, nil
+		return h, nil
 	}
 
 	// Last resort: every fallback variant was taken (practically impossible at

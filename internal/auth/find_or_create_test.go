@@ -90,6 +90,55 @@ func TestFindOrCreate_EmptyPictureLeavesNil(t *testing.T) {
 	}
 }
 
+// TestFindOrCreate_NewUserGetsValidHandle verifies a brand-new user comes back
+// with a non-nil, valid, persisted handle auto-assigned from their display name.
+func TestFindOrCreate_NewUserGetsValidHandle(t *testing.T) {
+	h, repo := newFindOrCreateHandler()
+	ctx := context.Background()
+
+	u, err := h.findOrCreateUser(ctx, "sam@example.com", "Sam Lifter", "")
+	if err != nil {
+		t.Fatalf("findOrCreateUser: %v", err)
+	}
+	if u.Username == nil {
+		t.Fatal("want non-nil username on a new user, got nil")
+	}
+	if _, vErr := user.ValidateUsername(*u.Username); vErr != nil {
+		t.Fatalf("assigned handle %q is invalid: %v", *u.Username, vErr)
+	}
+	// Persisted, not just on the returned struct.
+	stored, err := repo.GetByEmail(ctx, "sam@example.com")
+	if err != nil {
+		t.Fatalf("GetByEmail: %v", err)
+	}
+	if stored.Username == nil || *stored.Username != *u.Username {
+		t.Fatalf("handle not persisted: returned %v, stored %v", u.Username, stored.Username)
+	}
+}
+
+// TestFindOrCreate_TwoUsersGetDistinctHandles verifies two new users whose
+// display names slugify to the same base receive DISTINCT valid handles (the
+// uniqueness probe sees the first user's handle when generating the second).
+func TestFindOrCreate_TwoUsersGetDistinctHandles(t *testing.T) {
+	h, _ := newFindOrCreateHandler()
+	ctx := context.Background()
+
+	a, err := h.findOrCreateUser(ctx, "sam1@example.com", "Sam Lifter", "")
+	if err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	b, err := h.findOrCreateUser(ctx, "sam2@example.com", "Sam Lifter", "")
+	if err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	if a.Username == nil || b.Username == nil {
+		t.Fatalf("want both handles non-nil, got a=%v b=%v", a.Username, b.Username)
+	}
+	if *a.Username == *b.Username {
+		t.Fatalf("want distinct handles, both got %q", *a.Username)
+	}
+}
+
 // TestFindOrCreate_DevTokenPathEmptyPicture verifies the dev-token style call
 // (empty avatarURL) succeeds without error and leaves oauth_avatar_url nil.
 func TestFindOrCreate_DevTokenPathEmptyPicture(t *testing.T) {

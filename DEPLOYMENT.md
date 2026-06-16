@@ -76,6 +76,7 @@ preserves it), so DNS doesn't need to change on a host rebuild.
 | ----------------------- | ------------------------------------------------------ |
 | `EC2_HOST`              | Elastic IP of the prod instance (not the domain).      |
 | `EC2_SSH_KEY`           | Private key for the `prog-strength-backend-prod-keys` key pair. |
+| `SEMANTIC_RELEASE_TOKEN`| Token the release workflow uses for the `@semantic-release/git` changelog push to `main`. `main` requires status checks the fresh release commit can't have; with `enforce_admins=false` an **admin** identity bypasses them. Use a fine-grained PAT (Repository → Contents: write) from an owner/admin account. The default `GITHUB_TOKEN` is not an admin and is rejected (GH006). |
 | `JWT_SIGNING_KEY`       | HMAC secret for app JWTs.                              |
 | `GOOGLE_CLIENT_ID`      | OAuth client ID.                                       |
 | `GOOGLE_CLIENT_SECRET`  | OAuth client secret.                                   |

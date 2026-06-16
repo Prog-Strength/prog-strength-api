@@ -131,11 +131,12 @@ type planDTO struct {
 }
 
 type exerciseDTO struct {
-	ID         string   `json:"id"`
-	ExerciseID string   `json:"exercise_id"`
-	OrderIndex int      `json:"order_index"`
-	Notes      *string  `json:"notes"`
-	Sets       []setDTO `json:"sets"`
+	ID            string   `json:"id"`
+	ExerciseID    string   `json:"exercise_id"`
+	OrderIndex    int      `json:"order_index"`
+	Notes         *string  `json:"notes"`
+	SupersetGroup *int     `json:"superset_group"`
+	Sets          []setDTO `json:"sets"`
 }
 
 type setDTO struct {
@@ -183,11 +184,12 @@ func toDTO(pw *PlannedWorkout) planDTO {
 	}
 	for _, ex := range pw.Exercises {
 		edto := exerciseDTO{
-			ID:         ex.ID,
-			ExerciseID: ex.ExerciseID,
-			OrderIndex: ex.OrderIndex,
-			Notes:      ex.Notes,
-			Sets:       make([]setDTO, 0, len(ex.Sets)),
+			ID:            ex.ID,
+			ExerciseID:    ex.ExerciseID,
+			OrderIndex:    ex.OrderIndex,
+			Notes:         ex.Notes,
+			SupersetGroup: ex.SupersetGroup,
+			Sets:          make([]setDTO, 0, len(ex.Sets)),
 		}
 		for _, s := range ex.Sets {
 			edto.Sets = append(edto.Sets, setDTO(s))
@@ -223,9 +225,10 @@ type planRequest struct {
 }
 
 type exerciseReq struct {
-	ExerciseID string   `json:"exercise_id"`
-	Notes      *string  `json:"notes"`
-	Sets       []setReq `json:"sets"`
+	ExerciseID    string   `json:"exercise_id"`
+	Notes         *string  `json:"notes"`
+	SupersetGroup *int     `json:"superset_group"`
+	Sets          []setReq `json:"sets"`
 }
 
 type setReq struct {
@@ -242,9 +245,10 @@ func buildExercises(reqs []exerciseReq) []PlannedExercise {
 	out := make([]PlannedExercise, len(reqs))
 	for i, ex := range reqs {
 		pe := PlannedExercise{
-			ExerciseID: ex.ExerciseID,
-			Notes:      ex.Notes,
-			Sets:       make([]PlannedSet, len(ex.Sets)),
+			ExerciseID:    ex.ExerciseID,
+			Notes:         ex.Notes,
+			SupersetGroup: ex.SupersetGroup,
+			Sets:          make([]PlannedSet, len(ex.Sets)),
 		}
 		for j, s := range ex.Sets {
 			pe.Sets[j] = PlannedSet{

@@ -104,6 +104,36 @@ func TestRenderEvent_FullAgenda(t *testing.T) {
 	}
 }
 
+func TestRenderEvent_Superset(t *testing.T) {
+	// Two exercises sharing a superset group bracket under a "Superset:"
+	// header; a trailing standalone exercise renders on its own.
+	g := 1
+	plan := &plannedworkout.PlannedWorkout{
+		ID:                "plan-ss",
+		ScheduledStartUTC: time.Date(2026, 6, 20, 17, 0, 0, 0, time.UTC),
+		ScheduledEndUTC:   time.Date(2026, 6, 20, 18, 0, 0, 0, time.UTC),
+		Timezone:          "UTC",
+		Exercises: []plannedworkout.PlannedExercise{
+			{ExerciseID: "Bench Press", SupersetGroup: &g, Sets: []plannedworkout.PlannedSet{{TargetReps: intPtr(5)}}},
+			{ExerciseID: "Barbell Row", SupersetGroup: &g, Sets: []plannedworkout.PlannedSet{{TargetReps: intPtr(8)}}},
+			{ExerciseID: "Plank", Sets: []plannedworkout.PlannedSet{{TargetReps: intPtr(1)}}},
+		},
+	}
+	ev := RenderEvent(plan, DetailFullAgenda, "")
+
+	if !strings.Contains(ev.Description, "Superset:") {
+		t.Errorf("expected a Superset header, got: %q", ev.Description)
+	}
+	if !strings.Contains(ev.Description, "Bench Press") || !strings.Contains(ev.Description, "Barbell Row") {
+		t.Errorf("expected both superset members, got: %q", ev.Description)
+	}
+	// The standalone exercise is outside the bracket — its line is not indented
+	// to the superset's deeper level.
+	if !strings.Contains(ev.Description, "\nPlank") {
+		t.Errorf("expected standalone exercise on its own line, got: %q", ev.Description)
+	}
+}
+
 func TestRenderEvent_UnnamedPlan(t *testing.T) {
 	plan := samplePlan()
 	plan.Name = nil

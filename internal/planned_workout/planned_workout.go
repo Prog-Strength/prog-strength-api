@@ -90,7 +90,12 @@ type PlannedExercise struct {
 	ExerciseID string
 	OrderIndex int
 	Notes      *string
-	Sets       []PlannedSet
+	// SupersetGroup, when non-nil, groups exercises performed as a superset
+	// (alternating sets). Exercises sharing the same value belong to the same
+	// superset; nil is a standalone exercise. Mirrors the logged-workout model
+	// (workout.WorkoutExercise.SupersetGroup).
+	SupersetGroup *int
+	Sets          []PlannedSet
 }
 
 // PlannedWorkout is a scheduled training entry plus its optional agenda and

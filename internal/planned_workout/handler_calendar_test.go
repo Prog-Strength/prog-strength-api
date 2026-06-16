@@ -232,6 +232,52 @@ func TestCreate_NoCalendarSyncSkipsSchedule(t *testing.T) {
 	}
 }
 
+func TestUpdate_SyncedPlanPatchesWithoutFlag(t *testing.T) {
+	// A plan that's already synced to Google (has an event id) should have its
+	// event patched on EVERY edit — one-way sync — without the client needing
+	// to pass calendar_sync.
+	repo := NewMemoryRepository()
+	id := seedPlan(t, repo, "u1")
+	eventID := "evt-1"
+	_ = repo.SetGoogleSync(context.Background(), "u1", id, &eventID, SyncSynced, nil)
+
+	sched := &fakeScheduler{}
+	w := doCal(t, repo, nil, sched, "u1", "PUT", "/planned-workouts/"+id, `{"name":"Renamed"}`)
+	decodePlan(t, w, http.StatusOK)
+	if sched.scheduleCall != 1 {
+		t.Errorf("schedule called %d times want 1 (synced plan must re-sync on edit)", sched.scheduleCall)
+	}
+}
+
+func TestUpdate_UnsyncedPlanNoFlagSkipsSchedule(t *testing.T) {
+	// A plan that was never synced must NOT spawn a Google event just because
+	// it was edited — that's only an opt-in (calendar_sync) or explicit
+	// /schedule action.
+	repo := NewMemoryRepository()
+	id := seedPlan(t, repo, "u1")
+
+	sched := &fakeScheduler{}
+	w := doCal(t, repo, nil, sched, "u1", "PUT", "/planned-workouts/"+id, `{"name":"Renamed"}`)
+	decodePlan(t, w, http.StatusOK)
+	if sched.scheduleCall != 0 {
+		t.Errorf("schedule called %d times want 0 (unsynced plan must not auto-create on edit)", sched.scheduleCall)
+	}
+}
+
+func TestUpdate_CalendarSyncFlagTriggersScheduleEvenUnsynced(t *testing.T) {
+	// The explicit opt-in still works on update: a never-synced plan edited
+	// with calendar_sync:true gets pushed.
+	repo := NewMemoryRepository()
+	id := seedPlan(t, repo, "u1")
+
+	sched := &fakeScheduler{}
+	w := doCal(t, repo, nil, sched, "u1", "PUT", "/planned-workouts/"+id, `{"name":"Renamed","calendar_sync":true}`)
+	decodePlan(t, w, http.StatusOK)
+	if sched.scheduleCall != 1 {
+		t.Errorf("schedule called %d times want 1 (explicit calendar_sync opt-in)", sched.scheduleCall)
+	}
+}
+
 func TestDelete_RemovesCalendarEvent(t *testing.T) {
 	repo := NewMemoryRepository()
 	id := seedPlan(t, repo, "u1")

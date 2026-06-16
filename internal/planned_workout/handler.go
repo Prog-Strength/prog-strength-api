@@ -487,10 +487,18 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional "sync now" on update — same best-effort semantics as create.
-	// Re-read so the response reflects the persisted sync status/event id.
+	// Keep the linked Google event in sync on every edit — one-way (Prog
+	// Strength → Google). Push when the plan is ALREADY synced (it has a
+	// Google event, so an edit must patch the event's title/times/description)
+	// or the client explicitly opts in via calendar_sync. A plan that was
+	// never synced is left alone unless calendar_sync is set, so editing it
+	// doesn't spawn an unexpected event. Best-effort: a Google failure records
+	// a "failed" status on the plan but never fails the edit. Re-read so the
+	// response reflects the persisted sync status/event id.
+	alreadySynced := existing.GoogleEventID != nil && *existing.GoogleEventID != ""
+	wantSync := req.CalendarSync != nil && *req.CalendarSync
 	resp := &updated
-	if req.CalendarSync != nil && *req.CalendarSync && h.calendar != nil {
+	if h.calendar != nil && (alreadySynced || wantSync) {
 		_ = h.calendar.Schedule(r.Context(), userID, updated.ID, "")
 		if refreshed, rerr := h.repo.Get(r.Context(), userID, updated.ID); rerr == nil {
 			resp = refreshed

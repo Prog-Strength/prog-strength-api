@@ -13,9 +13,11 @@ const (
 
 // ValidateUsername canonicalizes and validates a user-supplied handle. See
 // handle.ValidateUsername for the full contract; this is a thin re-export.
-var ValidateUsername = handle.ValidateUsername
+func ValidateUsername(raw string) (string, error) { return handle.ValidateUsername(raw) }
 
 // GenerateHandle returns a valid, best-effort-unique handle for a user. See
 // handle.GenerateHandle for the full contract; this is a thin re-export so
 // callers that already depend on internal/user need not import the leaf.
-var GenerateHandle = handle.GenerateHandle
+func GenerateHandle(displayName, userID string, exists func(string) (bool, error)) (string, error) {
+	return handle.GenerateHandle(displayName, userID, exists)
+}

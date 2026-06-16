@@ -20,7 +20,7 @@ module.exports = {
       {
         assets: ['CHANGELOG.md', 'package.json', 'package-lock.json'],
         // [skip ci] keeps this changelog commit — pushed to main by the
-        // release bot via SEMANTIC_RELEASE_TOKEN — from triggering a second
+        // release bot via RELEASE_BOT_TOKEN — from triggering a second
         // release run (it's a chore commit, so that run would be a no-op).
         message: 'chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}',
       },

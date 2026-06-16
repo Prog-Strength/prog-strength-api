@@ -182,8 +182,8 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate at the boundary: a blank/over-long display name, an unknown
-	// enum, an out-of-range height, an invalid timezone, or a bad calendar
-	// detail is a client error (400), not a 500.
+	// enum, an out-of-range height, an over-long bio, an invalid timezone, or
+	// a bad calendar detail is a client error (400), not a 500.
 	if err := u.Validate(); err != nil {
 		var enumErr *InvalidEnumError
 		if errors.Is(err, ErrDisplayNameRequired) ||

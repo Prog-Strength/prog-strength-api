@@ -139,6 +139,8 @@ type exerciseDTO struct {
 	Sets          []setDTO `json:"sets"`
 }
 
+// setDTO mirrors PlannedSet field-for-field so toDTO can convert via
+// setDTO(s); keep the fields in the same order as PlannedSet.
 type setDTO struct {
 	ID           string   `json:"id"`
 	OrderIndex   int      `json:"order_index"`
@@ -146,6 +148,7 @@ type setDTO struct {
 	TargetWeight *float64 `json:"target_weight"`
 	Unit         *string  `json:"unit"`
 	TargetRPE    *float64 `json:"target_rpe"`
+	AMRAP        bool     `json:"amrap"`
 }
 
 func toDTO(pw *PlannedWorkout) planDTO {
@@ -236,6 +239,7 @@ type setReq struct {
 	TargetWeight *float64 `json:"target_weight"`
 	Unit         *string  `json:"unit"`
 	TargetRPE    *float64 `json:"target_rpe"`
+	AMRAP        bool     `json:"amrap"`
 }
 
 // buildExercises maps the request agenda to domain PlannedExercise/PlannedSet
@@ -256,6 +260,7 @@ func buildExercises(reqs []exerciseReq) []PlannedExercise {
 				TargetWeight: s.TargetWeight,
 				Unit:         s.Unit,
 				TargetRPE:    s.TargetRPE,
+				AMRAP:        s.AMRAP,
 			}
 		}
 		out[i] = pe

@@ -165,6 +165,39 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("CreateWithAMRAP_RoundTripsFlag", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-21T17:00:00Z"))
+		pw.Exercises = []PlannedExercise{
+			{
+				ExerciseID: "bench",
+				Sets: []PlannedSet{
+					{TargetReps: ptrInt(8)},
+					{AMRAP: true}, // no rep target — AMRAP
+				},
+			},
+		}
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		got, err := repo.Get(ctx, "u1", pw.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		sets := got.Exercises[0].Sets
+		if len(sets) != 2 {
+			t.Fatalf("want 2 sets, got %d", len(sets))
+		}
+		if sets[0].AMRAP {
+			t.Errorf("first set should not be AMRAP")
+		}
+		if !sets[1].AMRAP {
+			t.Errorf("second set should round-trip AMRAP=true, got %+v", sets[1])
+		}
+	})
+
 	t.Run("CreateWithSuperset_RoundTripsGroup", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()

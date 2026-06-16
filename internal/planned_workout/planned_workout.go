@@ -81,6 +81,10 @@ type PlannedSet struct {
 	TargetWeight *float64
 	Unit         *string
 	TargetRPE    *float64
+	// AMRAP ("as many reps as possible") marks a set with no fixed rep target
+	// — the lifter goes to the limit. When true, TargetReps is ignored for
+	// display.
+	AMRAP bool
 }
 
 // PlannedExercise is one exercise in a plan's agenda, carrying its ordered

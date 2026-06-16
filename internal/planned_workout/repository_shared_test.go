@@ -165,6 +165,40 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("CreateWithSuperset_RoundTripsGroup", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		pw := newPlan("u1", mustTime(t, "2026-06-21T17:00:00Z"))
+		pw.Exercises = []PlannedExercise{
+			{ExerciseID: "bench", SupersetGroup: ptrInt(1), Sets: []PlannedSet{{TargetReps: ptrInt(5)}}},
+			{ExerciseID: "row", SupersetGroup: ptrInt(1), Sets: []PlannedSet{{TargetReps: ptrInt(8)}}},
+			{ExerciseID: "ohp", Sets: []PlannedSet{{TargetReps: ptrInt(8)}}}, // standalone
+		}
+		if err := repo.Create(ctx, pw); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		got, err := repo.Get(ctx, "u1", pw.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(got.Exercises) != 3 {
+			t.Fatalf("want 3 exercises, got %d", len(got.Exercises))
+		}
+		// The two grouped exercises round-trip the same non-nil group.
+		if got.Exercises[0].SupersetGroup == nil || got.Exercises[1].SupersetGroup == nil {
+			t.Fatalf("superset group not persisted: %+v", got.Exercises)
+		}
+		if *got.Exercises[0].SupersetGroup != 1 || *got.Exercises[1].SupersetGroup != 1 {
+			t.Errorf("superset group = %v/%v, want 1/1", *got.Exercises[0].SupersetGroup, *got.Exercises[1].SupersetGroup)
+		}
+		// The standalone exercise stays nil.
+		if got.Exercises[2].SupersetGroup != nil {
+			t.Errorf("standalone exercise should have nil superset group, got %v", *got.Exercises[2].SupersetGroup)
+		}
+	})
+
 	t.Run("List_RangeOrderingOwnershipAndSoftDelete", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()

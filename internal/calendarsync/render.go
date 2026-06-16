@@ -197,20 +197,67 @@ func runTypeLabel(rt plannedworkout.RunType) string {
 //	Bench Press
 //	  3 × 5 @ RPE 8 (135 lb)
 //
+// Consecutive exercises sharing a superset group are bracketed under a
+// "Superset:" header and indented one level deeper, so the alternating-set
+// grouping is visible on the calendar:
+//
+//	Superset:
+//	  Bench Press
+//	    5 reps @ 135 lb
+//	  Barbell Row
+//	    8 reps
+//
 // Sets with no target fields at all are still listed by their position so the
 // count is visible; nil individual targets are omitted gracefully.
 func renderAgenda(exercises []plannedworkout.PlannedExercise) string {
-	lines := make([]string, 0, len(exercises))
-	for _, ex := range exercises {
-		var block strings.Builder
-		block.WriteString(exerciseLabel(ex))
-		for _, s := range ex.Sets {
-			block.WriteString("\n  ")
-			block.WriteString(renderSet(s))
+	blocks := make([]string, 0, len(exercises))
+	for _, group := range groupBySuperset(exercises) {
+		if len(group) > 1 {
+			var b strings.Builder
+			b.WriteString("Superset:")
+			for _, ex := range group {
+				b.WriteString("\n  ")
+				b.WriteString(renderExercise(ex, "    "))
+			}
+			blocks = append(blocks, b.String())
+		} else {
+			blocks = append(blocks, renderExercise(group[0], "  "))
 		}
-		lines = append(lines, block.String())
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(blocks, "\n")
+}
+
+// renderExercise renders one exercise's label followed by its target sets,
+// each set line prefixed with setIndent.
+func renderExercise(ex plannedworkout.PlannedExercise, setIndent string) string {
+	var b strings.Builder
+	b.WriteString(exerciseLabel(ex))
+	for _, s := range ex.Sets {
+		b.WriteString("\n")
+		b.WriteString(setIndent)
+		b.WriteString(renderSet(s))
+	}
+	return b.String()
+}
+
+// groupBySuperset buckets consecutive exercises that share the same non-nil
+// superset group into one slice; standalone exercises (nil group, or a group
+// not matching the previous exercise) start their own single-element bucket.
+// Mirrors the logged-workout grouping — order is the source of truth, so
+// non-adjacent same-group exercises are intentionally not merged.
+func groupBySuperset(exercises []plannedworkout.PlannedExercise) [][]plannedworkout.PlannedExercise {
+	var groups [][]plannedworkout.PlannedExercise
+	for _, ex := range exercises {
+		if n := len(groups); n > 0 {
+			prev := groups[n-1][len(groups[n-1])-1]
+			if ex.SupersetGroup != nil && prev.SupersetGroup != nil && *ex.SupersetGroup == *prev.SupersetGroup {
+				groups[n-1] = append(groups[n-1], ex)
+				continue
+			}
+		}
+		groups = append(groups, []plannedworkout.PlannedExercise{ex})
+	}
+	return groups
 }
 
 // exerciseLabel is the heading line for an exercise. The plan model carries the

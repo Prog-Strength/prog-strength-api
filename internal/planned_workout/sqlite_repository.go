@@ -276,9 +276,9 @@ func insertAgendaTx(ctx context.Context, tx *sql.Tx, pw *PlannedWorkout) error {
 		ex.OrderIndex = i
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO planned_workout_exercises (
-				id, planned_workout_id, exercise_id, order_index, notes
-			) VALUES (?, ?, ?, ?, ?)
-		`, ex.ID, pw.ID, ex.ExerciseID, ex.OrderIndex, ex.Notes); err != nil {
+				id, planned_workout_id, exercise_id, order_index, notes, superset_group
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, ex.ID, pw.ID, ex.ExerciseID, ex.OrderIndex, ex.Notes, ex.SupersetGroup); err != nil {
 			return err
 		}
 		for j := range ex.Sets {
@@ -305,7 +305,7 @@ func (r *SQLiteRepository) hydrateAgenda(ctx context.Context, pw *PlannedWorkout
 	// the per-exercise loadSets queries below, freeing the read connection.
 	exercises, err := func() ([]PlannedExercise, error) {
 		exRows, err := r.db.QueryContext(ctx, `
-			SELECT id, exercise_id, order_index, notes
+			SELECT id, exercise_id, order_index, notes, superset_group
 			FROM planned_workout_exercises
 			WHERE planned_workout_id = ?
 			ORDER BY order_index ASC
@@ -319,11 +319,16 @@ func (r *SQLiteRepository) hydrateAgenda(ctx context.Context, pw *PlannedWorkout
 		for exRows.Next() {
 			var ex PlannedExercise
 			var notes sql.NullString
-			if err := exRows.Scan(&ex.ID, &ex.ExerciseID, &ex.OrderIndex, &notes); err != nil {
+			var supersetGroup sql.NullInt64
+			if err := exRows.Scan(&ex.ID, &ex.ExerciseID, &ex.OrderIndex, &notes, &supersetGroup); err != nil {
 				return nil, err
 			}
 			if notes.Valid {
 				ex.Notes = &notes.String
+			}
+			if supersetGroup.Valid {
+				g := int(supersetGroup.Int64)
+				ex.SupersetGroup = &g
 			}
 			exercises = append(exercises, ex)
 		}

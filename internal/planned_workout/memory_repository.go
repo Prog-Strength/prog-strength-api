@@ -254,6 +254,7 @@ func clonePlan(src *PlannedWorkout) *PlannedWorkout {
 		for i, ex := range src.Exercises {
 			ce := ex
 			ce.Notes = clonePtrStr(ex.Notes)
+			ce.SupersetGroup = clonePtrInt(ex.SupersetGroup)
 			if ex.Sets != nil {
 				ce.Sets = make([]PlannedSet, len(ex.Sets))
 				for j, s := range ex.Sets {

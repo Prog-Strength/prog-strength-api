@@ -1,3 +1,10 @@
+# [0.58.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.57.1...v0.58.0) (2026-06-16)
+
+
+### Features
+
+* **planned-workouts:** superset support on planned exercises ([#41](https://github.com/Prog-Strength/prog-strength-api/issues/41)) ([7db2d9a](https://github.com/Prog-Strength/prog-strength-api/commit/7db2d9aef1ccdd96102341e1c829db684c587900))
+
 ## [0.57.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.57.0...v0.57.1) (2026-06-16)
 
 

@@ -6,16 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -41,6 +40,11 @@ type Handler struct {
 	// svc owns the single completion code path (LinkCompletion) and its
 	// inverse (Unlink). Always non-nil — NewHandler constructs it.
 	svc *Service
+	// logger is the package's structured logger. Always non-nil: NewHandler
+	// seeds a discard logger so tests and bare constructions stay silent, and
+	// server wiring swaps in the real request-id-stamping JSON logger via
+	// SetLogger (same optional-injection pattern as SetCalendarSync).
+	logger *slog.Logger
 }
 
 // CalendarScheduler is the planned-workout view of the calendar sync service:
@@ -60,9 +64,23 @@ type CalendarScheduler interface {
 }
 
 func NewHandler(repo Repository, userRepo user.Repository) *Handler {
-	h := &Handler{repo: repo, userRepo: userRepo}
+	h := &Handler{
+		repo:     repo,
+		userRepo: userRepo,
+		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
 	h.svc = NewService(repo)
 	return h
+}
+
+// SetLogger wires the structured logger into the handler. Called from server
+// wiring after construction with the request-id-stamping JSON logger gated at
+// LOG_LEVEL. Safe to never call — NewHandler seeds a discard logger so an
+// unwired handler logs nothing rather than panicking.
+func (h *Handler) SetLogger(l *slog.Logger) {
+	if l != nil {
+		h.logger = l
+	}
 }
 
 // Service exposes the completion service so server wiring can hand it to the
@@ -365,37 +383,76 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	rid := requestid.FromContext(r.Context())
-	since, until, err := parseSinceUntil(r)
+	ctx := r.Context()
+	since, until, err := listWindow(r)
 	if err != nil {
-		// Log the raw bounds, not the parsed ones — a malformed window
-		// (e.g. the agent emitting a bad RFC3339 string) is exactly what
-		// we want to see here, and parsing has already failed.
-		log.Printf("planned-workout list: request_id=%s user_id=%s since=%q until=%q outcome=bad_range err=%v",
-			rid, userID, r.URL.Query().Get("since"), r.URL.Query().Get("until"), err)
+		// A 400 — the caller sent a malformed window. Log the raw inputs (both
+		// query shapes) at warn so a bad agent-built request is visible without
+		// debug on; request_id is auto-stamped from ctx by the logger.
+		q := r.URL.Query()
+		h.logger.WarnContext(ctx, "planned workout list rejected",
+			"user_id", userID,
+			"outcome", "bad_range",
+			"error", err.Error(),
+			"since", q.Get("since"),
+			"until", q.Get("until"),
+			"timezone", q.Get("timezone"),
+			"date", q.Get("date"),
+			"start_date", q.Get("start_date"),
+			"end_date", q.Get("end_date"),
+		)
 		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	plans, err := h.repo.List(r.Context(), userID, since, until)
+	plans, err := h.repo.List(ctx, userID, since, until)
 	if err != nil {
-		httpresp.ServerError(w, r.Context(), "list planned workouts", err)
+		httpresp.ServerError(w, ctx, "list planned workouts", err)
 		return
 	}
 	out := make([]planDTO, 0, len(plans))
 	for i := range plans {
 		out = append(out, toDTO(&plans[i]))
 	}
-	// Informational success line, keyed on request_id so a chat-surfaced id
-	// pivots straight to it in CloudWatch (`filter request_id = "…"`). count
-	// plus starts is the diagnostic: when a "list" returns fewer plans than
-	// the user expected, starts shows the exact instants that fell inside
-	// [since, until), making a window/timezone-boundary clip visible without
-	// a re-query. If count already matches what the user has scheduled, the
-	// drop happened downstream (the model narrating only some of them), not
-	// here.
-	log.Printf("planned-workout list: request_id=%s user_id=%s since=%s until=%s count=%d starts=%s outcome=listed",
-		rid, userID, fmtTimePtr(since), fmtTimePtr(until), len(plans), fmtPlanStarts(plans))
+	// Info: the one-line summary that answers "did the API under-return?" — the
+	// resolved UTC window plus the count. request_id is stamped from ctx, so a
+	// chat-surfaced id pivots straight here (`filter request_id = "…"`).
+	h.logger.InfoContext(ctx, "planned workout list",
+		"user_id", userID,
+		"since", fmtTimePtr(since),
+		"until", fmtTimePtr(until),
+		"count", len(plans),
+	)
+	// Debug: the explicit per-plan detail — id, UTC scheduled-start, status —
+	// so when count looks wrong you can see exactly which instants fell inside
+	// [since, until) and spot a boundary clip without a re-query. Gated behind
+	// an Enabled check so the per-plan slice is only built when debug is on.
+	if h.logger.Enabled(ctx, slog.LevelDebug) {
+		h.logger.DebugContext(ctx, "planned workout list detail",
+			"user_id", userID,
+			"since", fmtTimePtr(since),
+			"until", fmtTimePtr(until),
+			"count", len(plans),
+			"plans", planDebugRows(plans),
+		)
+	}
 	httpresp.OK(w, "listed planned workouts", out)
+}
+
+// listWindow resolves the query window for GET /planned-workouts. Two shapes
+// are accepted: the timezone-aware contract (timezone + date or
+// start_date+end_date, all YYYY-MM-DD) that the agent uses so the model never
+// builds UTC timestamps itself, and the raw RFC3339 since/until the web client
+// sends. A timezone param selects the date contract; otherwise we fall back to
+// since/until.
+func listWindow(r *http.Request) (*time.Time, *time.Time, error) {
+	if r.URL.Query().Get("timezone") != "" {
+		start, end, _, err := daterange.ParseQuery(r.URL.Query())
+		if err != nil {
+			return nil, nil, err
+		}
+		return &start, &end, nil
+	}
+	return parseSinceUntil(r)
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -836,17 +893,17 @@ func fmtTimePtr(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// fmtPlanStarts renders the scheduled-start instants of the returned plans as a
-// compact space-separated bracketed list (e.g. "[2026-06-17T06:00:00Z
-// 2026-06-17T18:00:00Z]"). It's the at-a-glance evidence for a short list: the
-// instants are in UTC, the same space the query filters in, so a plan clipped
-// by a timezone-shifted window is obvious.
-func fmtPlanStarts(plans []PlannedWorkout) string {
-	starts := make([]string, 0, len(plans))
+// planDebugRows renders one "id start=<utc> status=<status>" string per
+// returned plan for the debug log. The starts are in UTC — the same space the
+// query filters in — so a plan clipped by a timezone-shifted window is obvious
+// at a glance against the logged since/until.
+func planDebugRows(plans []PlannedWorkout) []string {
+	rows := make([]string, 0, len(plans))
 	for i := range plans {
-		starts = append(starts, plans[i].ScheduledStartUTC.UTC().Format(time.RFC3339))
+		rows = append(rows, fmt.Sprintf("%s start=%s status=%s",
+			plans[i].ID, plans[i].ScheduledStartUTC.UTC().Format(time.RFC3339), plans[i].Status))
 	}
-	return fmt.Sprintf("[%s]", strings.Join(starts, " "))
+	return rows
 }
 
 func parseSinceUntil(r *http.Request) (*time.Time, *time.Time, error) {

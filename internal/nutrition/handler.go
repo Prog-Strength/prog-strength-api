@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
@@ -736,58 +737,15 @@ func (h *Handler) dailyMacros(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers -------------------------------------------------------
 
-// parseDateRangeQuery enforces the timezone-aware date contract shared
-// by the nutrition list and daily-macros endpoints. Returns the UTC
-// half-open interval [start, end) that brackets the user-local calendar
-// day(s), plus the resolved *time.Location for downstream local-date
-// grouping. Errors are 400-grade with stable messages — the handler
-// forwards err.Error() verbatim, so the strings here are the contract.
+// parseDateRangeQuery resolves the timezone-aware date contract (a required
+// IANA timezone plus either date or start_date+end_date) shared by the
+// nutrition list and daily-macros endpoints into the UTC half-open interval
+// [start, end) that brackets the user-local calendar day(s), plus the resolved
+// *time.Location for downstream local-date grouping. The contract itself lives
+// in internal/daterange (the planned-workout list reuses it); this stays as the
+// package's call site so both handlers read the same way.
 func parseDateRangeQuery(r *http.Request) (time.Time, time.Time, *time.Location, error) {
-	q := r.URL.Query()
-	tzName := q.Get("timezone")
-	if tzName == "" {
-		return time.Time{}, time.Time{}, nil, errors.New("timezone is required")
-	}
-	loc, err := loadTimezone(tzName)
-	if err != nil {
-		return time.Time{}, time.Time{}, nil, err
-	}
-
-	date := q.Get("date")
-	startDate := q.Get("start_date")
-	endDate := q.Get("end_date")
-
-	switch {
-	case date != "" && (startDate != "" || endDate != ""):
-		return time.Time{}, time.Time{}, nil, errors.New("supply either date or start_date+end_date, not both")
-	case startDate != "" && endDate == "":
-		return time.Time{}, time.Time{}, nil, errors.New("end_date is required when start_date is supplied")
-	case endDate != "" && startDate == "":
-		return time.Time{}, time.Time{}, nil, errors.New("start_date is required when end_date is supplied")
-	case date == "" && startDate == "" && endDate == "":
-		return time.Time{}, time.Time{}, nil, errors.New("date or start_date+end_date is required")
-	}
-
-	if date != "" {
-		start, end, dayErr := dayBoundsUTC(date, loc)
-		if dayErr != nil {
-			return time.Time{}, time.Time{}, nil, dayErr
-		}
-		return start, end, loc, nil
-	}
-
-	start, _, err := dayBoundsUTC(startDate, loc)
-	if err != nil {
-		return time.Time{}, time.Time{}, nil, err
-	}
-	endStart, end, err := dayBoundsUTC(endDate, loc)
-	if err != nil {
-		return time.Time{}, time.Time{}, nil, err
-	}
-	if endStart.Before(start) {
-		return time.Time{}, time.Time{}, nil, errors.New("end_date must be on or after start_date")
-	}
-	return start, end, loc, nil
+	return daterange.ParseQuery(r.URL.Query())
 }
 
 // isValidationError reports whether err is one of the package's

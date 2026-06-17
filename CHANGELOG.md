@@ -1,3 +1,10 @@
+## [0.60.3](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.2...v0.60.3) (2026-06-17)
+
+
+### Bug Fixes
+
+* **planned-workouts:** render list results in the caller's timezone ([#47](https://github.com/Prog-Strength/prog-strength-api/issues/47)) ([97d5125](https://github.com/Prog-Strength/prog-strength-api/commit/97d5125981d2f4dac81b5b59cfa1924a94a899a2))
+
 ## [0.60.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.1...v0.60.2) (2026-06-17)
 
 

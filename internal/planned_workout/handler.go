@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -361,8 +365,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
+	rid := requestid.FromContext(r.Context())
 	since, until, err := parseSinceUntil(r)
 	if err != nil {
+		// Log the raw bounds, not the parsed ones — a malformed window
+		// (e.g. the agent emitting a bad RFC3339 string) is exactly what
+		// we want to see here, and parsing has already failed.
+		log.Printf("planned-workout list: request_id=%s user_id=%s since=%q until=%q outcome=bad_range err=%v",
+			rid, userID, r.URL.Query().Get("since"), r.URL.Query().Get("until"), err)
 		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -375,6 +385,16 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	for i := range plans {
 		out = append(out, toDTO(&plans[i]))
 	}
+	// Informational success line, keyed on request_id so a chat-surfaced id
+	// pivots straight to it in CloudWatch (`filter request_id = "…"`). count
+	// plus starts is the diagnostic: when a "list" returns fewer plans than
+	// the user expected, starts shows the exact instants that fell inside
+	// [since, until), making a window/timezone-boundary clip visible without
+	// a re-query. If count already matches what the user has scheduled, the
+	// drop happened downstream (the model narrating only some of them), not
+	// here.
+	log.Printf("planned-workout list: request_id=%s user_id=%s since=%s until=%s count=%d starts=%s outcome=listed",
+		rid, userID, fmtTimePtr(since), fmtTimePtr(until), len(plans), fmtPlanStarts(plans))
 	httpresp.OK(w, "listed planned workouts", out)
 }
 
@@ -805,6 +825,28 @@ func toRunType(s *string) *RunType {
 	}
 	rt := RunType(*s)
 	return &rt
+}
+
+// fmtTimePtr renders an optional list bound for the log line: "none" when the
+// caller omitted it, RFC3339 UTC otherwise.
+func fmtTimePtr(t *time.Time) string {
+	if t == nil {
+		return "none"
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+// fmtPlanStarts renders the scheduled-start instants of the returned plans as a
+// compact space-separated bracketed list (e.g. "[2026-06-17T06:00:00Z
+// 2026-06-17T18:00:00Z]"). It's the at-a-glance evidence for a short list: the
+// instants are in UTC, the same space the query filters in, so a plan clipped
+// by a timezone-shifted window is obvious.
+func fmtPlanStarts(plans []PlannedWorkout) string {
+	starts := make([]string, 0, len(plans))
+	for i := range plans {
+		starts = append(starts, plans[i].ScheduledStartUTC.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("[%s]", strings.Join(starts, " "))
 }
 
 func parseSinceUntil(r *http.Request) (*time.Time, *time.Time, error) {

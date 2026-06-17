@@ -1,3 +1,10 @@
+## [0.60.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.0...v0.60.1) (2026-06-17)
+
+
+### Bug Fixes
+
+* **planned-workouts:** list by user-local day + leveled slog logging ([#45](https://github.com/Prog-Strength/prog-strength-api/issues/45)) ([fca0574](https://github.com/Prog-Strength/prog-strength-api/commit/fca0574c47a077ae61b74876f80a25662ffa38d1))
+
 # [0.60.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.59.1...v0.60.0) (2026-06-17)
 
 

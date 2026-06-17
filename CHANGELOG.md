@@ -1,3 +1,10 @@
+## [0.60.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.1...v0.60.2) (2026-06-17)
+
+
+### Bug Fixes
+
+* **planned-workouts:** render plan times in the plan's timezone ([#46](https://github.com/Prog-Strength/prog-strength-api/issues/46)) ([ba4d7b1](https://github.com/Prog-Strength/prog-strength-api/commit/ba4d7b197cd1edfc6ff923f952f4e3bab9bd6c93))
+
 ## [0.60.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.0...v0.60.1) (2026-06-17)
 
 

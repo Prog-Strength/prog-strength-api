@@ -174,12 +174,21 @@ type setDTO struct {
 }
 
 func toDTO(pw *PlannedWorkout) planDTO {
+	// Render the scheduled instants in the plan's own timezone so the
+	// wall-clock in the RFC3339 string IS the local time. The DTO used to emit
+	// UTC ("…Z") alongside a separate `timezone` field, leaving each consumer
+	// to combine them — the chat model (Haiku) couldn't, and read the UTC
+	// wall-clock as the local time (a 6 PM MDT plan stored 00:00Z surfaced as
+	// "midnight tomorrow," and the model dropped it from "today"). Same instant,
+	// just offset-aware; instant-based clients (web's new Date(...)) are
+	// unaffected.
+	loc := planLocation(pw.Timezone)
 	dto := planDTO{
 		ID:                 pw.ID,
 		Name:               pw.Name,
 		ActivityKind:       string(pw.ActivityKind),
-		ScheduledStart:     pw.ScheduledStartUTC,
-		ScheduledEnd:       pw.ScheduledEndUTC,
+		ScheduledStart:     pw.ScheduledStartUTC.In(loc),
+		ScheduledEnd:       pw.ScheduledEndUTC.In(loc),
 		Timezone:           pw.Timezone,
 		Status:             string(pw.Status),
 		Notes:              pw.Notes,
@@ -882,6 +891,22 @@ func toRunType(s *string) *RunType {
 	}
 	rt := RunType(*s)
 	return &rt
+}
+
+// planLocation resolves the plan's IANA timezone for rendering its scheduled
+// instants. An empty or unrecognized name falls back to UTC so a malformed
+// stored timezone degrades to "shows the UTC instant" rather than failing the
+// response. (time.LoadLocation("") already returns UTC, but the explicit guard
+// documents the intent.)
+func planLocation(tz string) *time.Location {
+	if tz == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
 }
 
 // fmtTimePtr renders an optional list bound for the log line: "none" when the

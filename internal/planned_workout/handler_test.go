@@ -270,6 +270,44 @@ func TestListHandler_BadSince(t *testing.T) {
 	}
 }
 
+// TestListHandler_TimezoneDateWindow is the regression lock for the planned-
+// workout lookup bug. Two plans sit on the same Denver-local day (2026-06-17):
+// one at noon, one at 7 PM. The 7 PM plan is 2026-06-18T01:00:00Z in UTC — past
+// midnight UTC. The old behavior had the model query the UTC day
+// [00:00Z, 24:00Z), which dropped the evening plan; the timezone-aware contract
+// queries the Denver day [06:00Z, +1d 06:00Z) and returns both.
+func TestListHandler_TimezoneDateWindow(t *testing.T) {
+	repo := NewMemoryRepository()
+	mk := func(start, end string) string {
+		return `{"scheduled_start":"` + start + `","scheduled_end":"` + end + `","timezone":"America/Denver"}`
+	}
+	// Noon Denver (UTC-6) = 18:00Z.
+	do(t, repo, nil, "u1", "POST", "/planned-workouts/", mk("2026-06-17T18:00:00Z", "2026-06-17T19:00:00Z"))
+	// 7 PM Denver = next-day 01:00Z — the session the UTC-day window dropped.
+	do(t, repo, nil, "u1", "POST", "/planned-workouts/", mk("2026-06-18T01:00:00Z", "2026-06-18T02:00:00Z"))
+
+	// Timezone-aware contract: both plans land in the Denver day.
+	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=America/Denver&date=2026-06-17", "")
+	if got := decodeList(t, w); len(got) != 2 {
+		t.Fatalf("timezone window: got %d plans, want 2: %+v", len(got), got)
+	}
+
+	// The old UTC-day window the model used to build drops the evening plan —
+	// documents the bug the contract fixes.
+	w = do(t, repo, nil, "u1", "GET", "/planned-workouts/?since=2026-06-17T00:00:00Z&until=2026-06-18T00:00:00Z", "")
+	if got := decodeList(t, w); len(got) != 1 {
+		t.Fatalf("UTC-day window: got %d plans, want 1: %+v", len(got), got)
+	}
+}
+
+func TestListHandler_BadTimezone(t *testing.T) {
+	repo := NewMemoryRepository()
+	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=Not/AZone&date=2026-06-17", "")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
+	}
+}
+
 func TestUpdateHandler_RescheduleAndReplaceAgenda(t *testing.T) {
 	repo := NewMemoryRepository()
 	body := `{

@@ -23,6 +23,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/logging"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
@@ -428,6 +429,10 @@ func New(cfg config.Config) (*Server, error) {
 		if calendarScheduler != nil {
 			plannedWorkoutHandler.SetCalendarSync(calendarScheduler)
 		}
+		// Request-id-stamping JSON logger gated at LOG_LEVEL — info for the
+		// list summary, debug for the per-plan detail that diagnoses a
+		// timezone-window clip.
+		plannedWorkoutHandler.SetLogger(logging.NewLogger(os.Stdout, cfg.LogLevel))
 		plannedWorkoutHandler.Mount(r)
 		// Steps lives in its own package — daily totals upserted by
 		// calendar date, unitless and hard-deleted — and shares the same

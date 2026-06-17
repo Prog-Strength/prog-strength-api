@@ -300,6 +300,35 @@ func TestListHandler_TimezoneDateWindow(t *testing.T) {
 	}
 }
 
+// TestDTO_RendersScheduledTimesInPlanTimezone locks the display fix: the DTO
+// renders scheduled_start/end in the plan's own timezone (offset-aware), so the
+// wall-clock the chat model reads is the local time. 2026-06-18T00:00:00Z is
+// 6 PM MDT on 2026-06-17 — the plan the model previously misread as "midnight
+// tomorrow" and dropped from "today" because the DTO emitted UTC.
+func TestDTO_RendersScheduledTimesInPlanTimezone(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{"scheduled_start":"2026-06-18T00:00:00Z","scheduled_end":"2026-06-18T01:00:00Z","timezone":"America/Denver"}`
+	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, body=%s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			ScheduledStart string `json:"scheduled_start"`
+			ScheduledEnd   string `json:"scheduled_end"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.ScheduledStart != "2026-06-17T18:00:00-06:00" {
+		t.Errorf("scheduled_start = %q, want 2026-06-17T18:00:00-06:00 (local, offset-aware)", env.Data.ScheduledStart)
+	}
+	if env.Data.ScheduledEnd != "2026-06-17T19:00:00-06:00" {
+		t.Errorf("scheduled_end = %q, want 2026-06-17T19:00:00-06:00", env.Data.ScheduledEnd)
+	}
+}
+
 func TestListHandler_BadTimezone(t *testing.T) {
 	repo := NewMemoryRepository()
 	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=Not/AZone&date=2026-06-17", "")

@@ -173,16 +173,23 @@ type setDTO struct {
 	AMRAP        bool     `json:"amrap"`
 }
 
+// toDTO renders pw with its scheduled instants expressed in the plan's own
+// stored timezone. Used by every endpoint except list, which overrides the
+// render zone (see toDTOInLocation).
 func toDTO(pw *PlannedWorkout) planDTO {
-	// Render the scheduled instants in the plan's own timezone so the
-	// wall-clock in the RFC3339 string IS the local time. The DTO used to emit
-	// UTC ("…Z") alongside a separate `timezone` field, leaving each consumer
-	// to combine them — the chat model (Haiku) couldn't, and read the UTC
-	// wall-clock as the local time (a 6 PM MDT plan stored 00:00Z surfaced as
-	// "midnight tomorrow," and the model dropped it from "today"). Same instant,
-	// just offset-aware; instant-based clients (web's new Date(...)) are
-	// unaffected.
-	loc := planLocation(pw.Timezone)
+	return toDTOInLocation(pw, planLocation(pw.Timezone))
+}
+
+// toDTOInLocation renders pw with its scheduled instants expressed in loc
+// (offset-aware), so the wall-clock in the RFC3339 string IS the local time in
+// loc. The DTO used to emit UTC ("…Z") alongside a separate `timezone` field,
+// leaving each consumer to combine them — the chat model (Haiku) couldn't, and
+// read the UTC wall-clock as the local time (a 6 PM MDT plan stored 00:00Z
+// surfaced as "midnight tomorrow," dropped from "today"). The list handler
+// passes the *caller's* timezone here so every plan renders in one consistent
+// zone even when their stored creation timezones differ. Same instant either
+// way; instant-based clients (web's new Date(...)) are unaffected.
+func toDTOInLocation(pw *PlannedWorkout, loc *time.Location) planDTO {
 	dto := planDTO{
 		ID:                 pw.ID,
 		Name:               pw.Name,
@@ -393,7 +400,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	since, until, err := listWindow(r)
+	since, until, renderLoc, err := listWindow(r)
 	if err != nil {
 		// A 400 — the caller sent a malformed window. Log the raw inputs (both
 		// query shapes) at warn so a bad agent-built request is visible without
@@ -420,7 +427,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]planDTO, 0, len(plans))
 	for i := range plans {
-		out = append(out, toDTO(&plans[i]))
+		// renderLoc is the caller's timezone (date-contract path) — render every
+		// plan in it so a multi-plan answer is consistent in one zone regardless
+		// of each plan's stored creation timezone. nil (since/until path) falls
+		// back to the plan's own timezone via toDTO.
+		if renderLoc != nil {
+			out = append(out, toDTOInLocation(&plans[i], renderLoc))
+		} else {
+			out = append(out, toDTO(&plans[i]))
+		}
 	}
 	// Info: the one-line summary that answers "did the API under-return?" — the
 	// resolved UTC window plus the count. request_id is stamped from ctx, so a
@@ -431,17 +446,18 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		"until", fmtTimePtr(until),
 		"count", len(plans),
 	)
-	// Debug: the explicit per-plan detail — id, UTC scheduled-start, status —
-	// so when count looks wrong you can see exactly which instants fell inside
-	// [since, until) and spot a boundary clip without a re-query. Gated behind
-	// an Enabled check so the per-plan slice is only built when debug is on.
+	// Debug: the explicit per-plan detail — id, stored tz, UTC instant, and the
+	// instant as rendered for the response — so when an answer looks wrong you
+	// can see both the raw instant and the local date/time the model actually
+	// reads (and spot a plan whose stored tz differs from the render zone).
+	// Gated behind an Enabled check so the slice is only built when debug is on.
 	if h.logger.Enabled(ctx, slog.LevelDebug) {
 		h.logger.DebugContext(ctx, "planned workout list detail",
 			"user_id", userID,
 			"since", fmtTimePtr(since),
 			"until", fmtTimePtr(until),
 			"count", len(plans),
-			"plans", planDebugRows(plans),
+			"plans", planDebugRows(plans, renderLoc),
 		)
 	}
 	httpresp.OK(w, "listed planned workouts", out)
@@ -453,15 +469,21 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 // builds UTC timestamps itself, and the raw RFC3339 since/until the web client
 // sends. A timezone param selects the date contract; otherwise we fall back to
 // since/until.
-func listWindow(r *http.Request) (*time.Time, *time.Time, error) {
+//
+// The returned *time.Location is the caller's timezone on the date-contract
+// path (nil on the since/until path). The list handler renders every plan's
+// times in it, so a "what's on today" answer is consistent in the user's
+// current zone even when the plans carry differing stored creation timezones.
+func listWindow(r *http.Request) (*time.Time, *time.Time, *time.Location, error) {
 	if r.URL.Query().Get("timezone") != "" {
-		start, end, _, err := daterange.ParseQuery(r.URL.Query())
+		start, end, loc, err := daterange.ParseQuery(r.URL.Query())
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return &start, &end, nil
+		return &start, &end, loc, nil
 	}
-	return parseSinceUntil(r)
+	since, until, err := parseSinceUntil(r)
+	return since, until, nil, err
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -918,15 +940,26 @@ func fmtTimePtr(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// planDebugRows renders one "id start=<utc> status=<status>" string per
-// returned plan for the debug log. The starts are in UTC — the same space the
-// query filters in — so a plan clipped by a timezone-shifted window is obvious
-// at a glance against the logged since/until.
-func planDebugRows(plans []PlannedWorkout) []string {
+// planDebugRows renders one row per returned plan for the debug log:
+// "id tz=<stored> start_utc=<utc> start_local=<rendered> status=<status>".
+// start_local is the instant as the response renders it (in renderLoc when the
+// caller gave a timezone, else the plan's own zone) — i.e. the exact date/time
+// the model reads. Pairing it with the stored tz makes a plan whose creation
+// timezone differs from the render zone obvious at a glance.
+func planDebugRows(plans []PlannedWorkout, renderLoc *time.Location) []string {
 	rows := make([]string, 0, len(plans))
 	for i := range plans {
-		rows = append(rows, fmt.Sprintf("%s start=%s status=%s",
-			plans[i].ID, plans[i].ScheduledStartUTC.UTC().Format(time.RFC3339), plans[i].Status))
+		p := &plans[i]
+		loc := renderLoc
+		if loc == nil {
+			loc = planLocation(p.Timezone)
+		}
+		rows = append(rows, fmt.Sprintf("%s tz=%s start_utc=%s start_local=%s status=%s",
+			p.ID,
+			p.Timezone,
+			p.ScheduledStartUTC.UTC().Format(time.RFC3339),
+			p.ScheduledStartUTC.In(loc).Format(time.RFC3339),
+			p.Status))
 	}
 	return rows
 }

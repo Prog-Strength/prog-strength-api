@@ -329,6 +329,44 @@ func TestDTO_RendersScheduledTimesInPlanTimezone(t *testing.T) {
 	}
 }
 
+// TestListHandler_RendersAllPlansInRequestTimezone is the regression lock for
+// the "second workout shows as tomorrow" bug. Two plans land on the same Denver
+// day but carry DIFFERENT stored timezones: one America/Denver, one UTC (e.g.
+// created via different paths). Listed with timezone=America/Denver, BOTH must
+// render on the local date 2026-06-17 — the UTC-stored plan must not surface as
+// "June 18" just because its creation timezone differs from the viewer's.
+func TestListHandler_RendersAllPlansInRequestTimezone(t *testing.T) {
+	repo := NewMemoryRepository()
+	mkTZ := func(start, end, tz string) string {
+		return `{"scheduled_start":"` + start + `","scheduled_end":"` + end + `","timezone":"` + tz + `"}`
+	}
+	// Noon Denver, stored in Denver.
+	do(t, repo, nil, "u1", "POST", "/planned-workouts/", mkTZ("2026-06-17T18:00:00Z", "2026-06-17T19:00:00Z", "America/Denver"))
+	// 6 PM Denver (00:00Z next day), but stored with a UTC timezone — the case
+	// that rendered as "midnight June 18" before this fix.
+	do(t, repo, nil, "u1", "POST", "/planned-workouts/", mkTZ("2026-06-18T00:00:00Z", "2026-06-18T01:00:00Z", "UTC"))
+
+	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=America/Denver&date=2026-06-17", "")
+	var env struct {
+		Data []struct {
+			ScheduledStart string `json:"scheduled_start"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data) != 2 {
+		t.Fatalf("got %d plans, want 2", len(env.Data))
+	}
+	for _, p := range env.Data {
+		// Every returned plan renders on the Denver local date with the Denver
+		// offset, regardless of its stored timezone.
+		if !strings.HasPrefix(p.ScheduledStart, "2026-06-17T") || !strings.HasSuffix(p.ScheduledStart, "-06:00") {
+			t.Errorf("scheduled_start = %q, want 2026-06-17T…-06:00 (rendered in request tz)", p.ScheduledStart)
+		}
+	}
+}
+
 func TestListHandler_BadTimezone(t *testing.T) {
 	repo := NewMemoryRepository()
 	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=Not/AZone&date=2026-06-17", "")

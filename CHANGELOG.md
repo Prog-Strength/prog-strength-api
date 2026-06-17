@@ -1,3 +1,10 @@
+# [0.60.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.59.1...v0.60.0) (2026-06-17)
+
+
+### Features
+
+* **planned-workouts:** log list calls with request_id for tracing ([#44](https://github.com/Prog-Strength/prog-strength-api/issues/44)) ([551db7e](https://github.com/Prog-Strength/prog-strength-api/commit/551db7ef82606501260e060fbd2f32c72094828d))
+
 ## [0.59.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.59.0...v0.59.1) (2026-06-16)
 
 

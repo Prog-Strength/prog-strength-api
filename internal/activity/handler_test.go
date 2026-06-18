@@ -16,6 +16,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 const testUserID = "u1"
@@ -45,9 +46,11 @@ type codeEnvelope struct {
 
 // --- helpers -------------------------------------------------------
 
-func newTestHandler() (*Handler, *MemoryArchiver, *MemoryRepository) {
+func newTestHandler(t *testing.T) (*Handler, *MemoryArchiver, *SQLiteRepository) {
+	// The in-memory ARCHIVER (object storage no-S3 fallback) stays; only the
+	// in-memory REPOSITORY moves to ephemeral SQLite.
 	arch := NewMemoryArchiver()
-	repo := NewMemoryRepository(arch)
+	repo := NewSQLiteRepository(dbtest.New(t), arch)
 	return NewHandler(repo), arch, repo
 }
 
@@ -93,7 +96,7 @@ func withParam(req *http.Request, key, val string) *http.Request {
 // --- import happy path + duplicate ---------------------------------
 
 func TestImportHappyPath(t *testing.T) {
-	h, arch, _ := newTestHandler()
+	h, arch, _ := newTestHandler(t)
 	w := doImport(t, h, readFixture(t, "typical_5k.tcx"))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
@@ -128,7 +131,7 @@ func TestImportHappyPath(t *testing.T) {
 // A biking TCX no longer rejects with SlugNotRunning — the validator
 // accepts any sport; the ingest pipeline classifies it as cycling.
 func TestImportBikingClassifiesAsCycling(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	w := doImport(t, h, readFixture(t, "biking.tcx"))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
@@ -150,7 +153,7 @@ func TestImportBikingClassifiesAsCycling(t *testing.T) {
 }
 
 func TestImportDuplicate(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	first := doImport(t, h, readFixture(t, "typical_5k.tcx"))
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first import status = %d", first.Code)
@@ -188,7 +191,7 @@ func TestImportValidationSlugs(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
-			h, _, _ := newTestHandler()
+			h, _, _ := newTestHandler(t)
 			w := doImport(t, h, readFixture(t, tc.fixture))
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -207,7 +210,7 @@ func TestImportValidationSlugs(t *testing.T) {
 // --- oversized + wrong media type ----------------------------------
 
 func TestImportOversized(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	big := bytes.Repeat([]byte("a"), maxTCXBytes+1024)
 	body, ct := multipartBody(t, big)
 	req := httptest.NewRequest("POST", "/activities/tcx", body)
@@ -229,7 +232,7 @@ func TestImportOversized(t *testing.T) {
 }
 
 func TestImportNonMultipart(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	req := httptest.NewRequest("POST", "/activities/tcx", strings.NewReader(`{"foo":"bar"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
@@ -251,7 +254,7 @@ func TestImportNonMultipart(t *testing.T) {
 // --- storage failure + rollback ------------------------------------
 
 func TestImportStorageFailure(t *testing.T) {
-	h, arch, repo := newTestHandler()
+	h, arch, repo := newTestHandler(t)
 	arch.PutErr = context.DeadlineExceeded
 	w := doImport(t, h, readFixture(t, "typical_5k.tcx"))
 	if w.Code != http.StatusInternalServerError {
@@ -276,7 +279,7 @@ func TestImportStorageFailure(t *testing.T) {
 // --- list pagination via before= -----------------------------------
 
 func TestListPagination(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {
 		a := newActivity(testUserID, IngestManualTCX, "act-"+string(rune('a'+i)),
@@ -326,7 +329,7 @@ func TestListPagination(t *testing.T) {
 // --- list date-range (since/until) ---------------------------------
 
 func TestListSinceUntil(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	starts := []time.Time{
 		time.Date(2026, 2, 27, 7, 0, 0, 0, time.UTC),  // before range
 		time.Date(2026, 3, 1, 6, 0, 0, 0, time.UTC),   // inside (lower edge, inclusive)
@@ -373,7 +376,7 @@ func TestListSinceUntil(t *testing.T) {
 // --- rename --------------------------------------------------------
 
 func TestRenameHandler(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	a := newActivity(testUserID, IngestManualTCX, "x", time.Now().UTC(), 1000, 300)
 	if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -416,7 +419,7 @@ func TestRenameHandler(t *testing.T) {
 // --- delete then get -----------------------------------------------
 
 func TestDeleteThenGet(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	a := newActivity(testUserID, IngestManualTCX, "x", time.Now().UTC(), 1000, 300)
 	if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -442,7 +445,7 @@ func TestDeleteThenGet(t *testing.T) {
 // --- running metrics -----------------------------------------------
 
 func TestRunningMetricsHandler(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	now := time.Now().UTC()
 	for i := 0; i < 2; i++ {
 		a := newActivity(testUserID, IngestManualTCX, "m-"+string(rune('a'+i)),
@@ -472,7 +475,7 @@ func TestRunningMetricsHandler(t *testing.T) {
 }
 
 func TestRunningMetricsHandlerMissingTimezone(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	req := httptest.NewRequest("GET", "/activities/running-metrics", nil)
 	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
 	w := httptest.NewRecorder()
@@ -496,7 +499,7 @@ type bestEffortHistoryEnvelope struct {
 
 // seedRunWithEfforts inserts a running activity carrying the given best
 // efforts directly through the repo's Create path.
-func seedRunWithEfforts(t *testing.T, repo *MemoryRepository, source string, start time.Time, efforts []ActivityBestEffort) *Activity {
+func seedRunWithEfforts(t *testing.T, repo *SQLiteRepository, source string, start time.Time, efforts []ActivityBestEffort) *Activity {
 	t.Helper()
 	avg := 300.0
 	a := &Activity{
@@ -517,7 +520,7 @@ func seedRunWithEfforts(t *testing.T, repo *MemoryRepository, source string, sta
 }
 
 func TestRunningBestEfforts_HappyPath(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 
 	at := func(s string) time.Time {
 		tt, err := time.Parse(time.RFC3339, s)
@@ -571,7 +574,7 @@ func TestRunningBestEfforts_HappyPath(t *testing.T) {
 }
 
 func TestRunningBestEfforts_Empty(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 
 	req := httptest.NewRequest("GET", "/running/best-efforts", nil)
 	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
@@ -588,7 +591,7 @@ func TestRunningBestEfforts_Empty(t *testing.T) {
 }
 
 func TestRunningBestEffortHistory_HappyPath(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 
 	at := func(s string) time.Time {
 		tt, _ := time.Parse(time.RFC3339, s)
@@ -622,7 +625,7 @@ func TestRunningBestEffortHistory_HappyPath(t *testing.T) {
 }
 
 func TestRunningBestEffortHistory_UnknownDistanceKey(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 
 	req := httptest.NewRequest("GET", "/running/best-efforts/15k/history", nil)
 	req = withParam(req, "distance_key", "15k")
@@ -669,7 +672,7 @@ func atRFC(t *testing.T, s string) time.Time {
 
 // seedRunFull inserts a running activity with an explicit total distance so
 // source classification (effort vs. activity distance) can be exercised.
-func seedRunFull(t *testing.T, repo *MemoryRepository, source string, start time.Time, distanceMeters float64, efforts []ActivityBestEffort) *Activity {
+func seedRunFull(t *testing.T, repo *SQLiteRepository, source string, start time.Time, distanceMeters float64, efforts []ActivityBestEffort) *Activity {
 	t.Helper()
 	avg := 300.0
 	a := &Activity{
@@ -691,7 +694,7 @@ func seedRunFull(t *testing.T, repo *MemoryRepository, source string, start time
 
 // seedMultiDistance seeds a user with a spread of efforts across several
 // distances and dates, enough for the engine to fit a curve.
-func seedMultiDistance(t *testing.T, repo *MemoryRepository) {
+func seedMultiDistance(t *testing.T, repo *SQLiteRepository) {
 	t.Helper()
 	// A 1mi window inside a 5k run, a 5k race, and a 10k race — multi-distance
 	// evidence on distinct dates.
@@ -709,7 +712,7 @@ func seedMultiDistance(t *testing.T, repo *MemoryRepository) {
 }
 
 func TestRunningMaxEffort_SummaryHappyPath(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 	seedMultiDistance(t, repo)
 
@@ -752,7 +755,7 @@ func TestRunningMaxEffort_SummaryHappyPath(t *testing.T) {
 }
 
 func TestRunningMaxEffort_SummaryNeverRanDistance(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 	// Only a single 5k effort — marathon is never directly run, but the
 	// engine can still extrapolate. To get a genuine insufficient/null case
@@ -784,7 +787,7 @@ func TestRunningMaxEffort_SummaryNeverRanDistance(t *testing.T) {
 }
 
 func TestRunningMaxEffort_SummaryEmptyUserNullEstimates(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 
 	req := httptest.NewRequest("GET", "/running/max-effort", nil)
@@ -810,7 +813,7 @@ func TestRunningMaxEffort_SummaryEmptyUserNullEstimates(t *testing.T) {
 }
 
 func TestRunningMaxEffortDetail_HappyPath(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 	seedMultiDistance(t, repo)
 
@@ -876,7 +879,7 @@ func TestRunningMaxEffortDetail_HappyPath(t *testing.T) {
 }
 
 func TestRunningMaxEffortDetail_UnknownDistanceKey(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 
 	req := httptest.NewRequest("GET", "/running/max-effort/15k", nil)
@@ -898,7 +901,7 @@ func TestRunningMaxEffortDetail_UnknownDistanceKey(t *testing.T) {
 }
 
 func TestRunningMaxEffortDetail_InsufficientData(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	h.now = func() time.Time { return fixedMaxEffortNow }
 	// No efforts at all → marathon detail has insufficient data.
 

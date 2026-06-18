@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // Counters live in the default registry and accumulate across tests,
@@ -17,7 +19,7 @@ func counterDelta(t *testing.T, read func() float64, action func()) float64 {
 }
 
 func TestMetricsCacheHitPath(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	svc := NewService(repo, testLogger(), &fakeProvider{})
 	ctx := context.Background()
 	if err := repo.Put(ctx, CacheRow{
@@ -50,7 +52,7 @@ func TestMetricsCacheHitPath(t *testing.T) {
 }
 
 func TestMetricsUnavailableOutcome(t *testing.T) {
-	svc := NewService(NewMemoryRepository(), testLogger(), &fakeProvider{})
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), &fakeProvider{})
 	read := func() float64 {
 		return testutil.ToFloat64(lookupRequestsTotal.WithLabelValues("unavailable"))
 	}
@@ -73,7 +75,7 @@ func TestMetricsProviderErrorAndServedPaths(t *testing.T) {
 			"usda", "9999",
 		)},
 	}
-	svc := NewService(NewMemoryRepository(), testLogger(), broken, working)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), broken, working)
 
 	errCount := func() float64 {
 		return testutil.ToFloat64(providerRequestsTotal.WithLabelValues("fatsecret", "error"))

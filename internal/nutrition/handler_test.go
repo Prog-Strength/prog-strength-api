@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // logEnvelope mirrors the httpresp success shape for single-entry
@@ -49,7 +50,7 @@ type batchEnvelope struct {
 
 // seedPantryItem inserts a pantry item owned by userID and returns its
 // generated ID so a kind:"pantry" batch item can resolve against it.
-func seedPantryItem(t *testing.T, repo *MemoryRepository, userID, name string, calories float64) string {
+func seedPantryItem(t *testing.T, repo *SQLiteRepository, userID, name string, calories float64) string {
 	t.Helper()
 	p := &PantryItem{
 		UserID:      userID,
@@ -66,7 +67,7 @@ func seedPantryItem(t *testing.T, repo *MemoryRepository, userID, name string, c
 
 // postBatch drives the createLogEntriesBatch handler with the given JSON
 // body and the given userID-in-context.
-func postBatch(t *testing.T, repo *MemoryRepository, userID, body string) *httptest.ResponseRecorder {
+func postBatch(t *testing.T, repo *SQLiteRepository, userID, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/nutrition-log/batch", strings.NewReader(body))
 	req = req.WithContext(authctx.WithUserID(req.Context(), userID))
@@ -90,9 +91,11 @@ func decodeBatch(t *testing.T, w *httptest.ResponseRecorder) batchLogResponseDTO
 
 // seedLogEntry inserts a pantry-backed entry at consumedAt for user u1 and
 // fails the test on a seed error. Returns the entry ID for assertions.
-func seedLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, consumedAt time.Time, calories float64) string {
+func seedLogEntry(t *testing.T, repo *SQLiteRepository, ctx context.Context, consumedAt time.Time, calories float64) string {
 	t.Helper()
-	pantryID := "p1"
+	// SQLite enforces the pantry_item_id FK, so back the entry with a real
+	// pantry item owned by u1.
+	pantryID := seedPantryItem(t, repo, "u1", "Eggs", calories)
 	e := &NutritionLogEntry{
 		UserID: "u1", ConsumedAt: consumedAt,
 		PantryItemID: &pantryID, Quantity: 1,
@@ -107,7 +110,7 @@ func seedLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, con
 
 // seedCustomLogEntry inserts a custom-typed entry (CustomMealName set,
 // quantity 1) for user u1 and returns its ID.
-func seedCustomLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, name string, calories float64) string {
+func seedCustomLogEntry(t *testing.T, repo *SQLiteRepository, ctx context.Context, name string, calories float64) string {
 	t.Helper()
 	n := name
 	e := &NutritionLogEntry{
@@ -123,11 +126,12 @@ func seedCustomLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Contex
 }
 
 // seedRecipeLogEntry inserts a recipe-backed entry for user u1 and
-// returns its ID. The recipe ID need not resolve: the PUT tests that use
-// it 400 on the custom-only field guard before any recipe lookup.
-func seedRecipeLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context) string {
+// returns its ID. SQLite enforces the recipe_id FK, so the entry points
+// at a real recipe (the PUT tests that use it still 400 on the
+// custom-only field guard before any recipe lookup).
+func seedRecipeLogEntry(t *testing.T, repo *SQLiteRepository, ctx context.Context) string {
 	t.Helper()
-	recipeID := "r1"
+	recipeID := seedRecipe(t, repo, "u1", "Recipe", 500)
 	e := &NutritionLogEntry{
 		UserID: "u1", ConsumedAt: time.Now().UTC(),
 		RecipeID: &recipeID, Quantity: 1,
@@ -142,7 +146,7 @@ func seedRecipeLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Contex
 
 // postCustom drives the createCustomLogEntry handler with the given JSON
 // body and userID-in-context.
-func postCustom(t *testing.T, repo *MemoryRepository, body string) *httptest.ResponseRecorder {
+func postCustom(t *testing.T, repo *SQLiteRepository, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/nutrition-log/custom", strings.NewReader(body))
 	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
@@ -153,7 +157,7 @@ func postCustom(t *testing.T, repo *MemoryRepository, body string) *httptest.Res
 
 // putLog drives the updateLogEntry handler against entry id with the
 // given JSON body and userID-in-context.
-func putLog(t *testing.T, repo *MemoryRepository, id, body string) *httptest.ResponseRecorder {
+func putLog(t *testing.T, repo *SQLiteRepository, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("PUT", "/nutrition-log/"+id, strings.NewReader(body))
 	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
@@ -180,7 +184,7 @@ func decodeEntry(t *testing.T, w *httptest.ResponseRecorder, wantStatus int) log
 
 // listLog drives the listLogEntries handler with the given query string and
 // userID-in-context, returning the recorder for status/body assertions.
-func listLog(t *testing.T, repo *MemoryRepository, query string) *httptest.ResponseRecorder {
+func listLog(t *testing.T, repo *SQLiteRepository, query string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/nutrition-log?"+query, nil)
 	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
@@ -190,37 +194,37 @@ func listLog(t *testing.T, repo *MemoryRepository, query string) *httptest.Respo
 }
 
 func TestListLogEntries_MissingTimezone(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "date=2026-05-28")
 	assertBadRequest(t, w, "timezone is required")
 }
 
 func TestListLogEntries_DateAndStartDateBothSupplied(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=UTC&date=2026-05-28&start_date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=UTC&date=2026-05-28&start_date=2026-05-28")
 	assertBadRequest(t, w, "supply either date or start_date+end_date, not both")
 }
 
 func TestListLogEntries_StartDateWithoutEndDate(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=UTC&start_date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=UTC&start_date=2026-05-28")
 	assertBadRequest(t, w, "end_date is required when start_date is supplied")
 }
 
 func TestListLogEntries_EndDateWithoutStartDate(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=UTC&end_date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=UTC&end_date=2026-05-28")
 	assertBadRequest(t, w, "start_date is required when end_date is supplied")
 }
 
 func TestListLogEntries_EndBeforeStart(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=UTC&start_date=2026-05-29&end_date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=UTC&start_date=2026-05-29&end_date=2026-05-28")
 	assertBadRequest(t, w, "end_date must be on or after start_date")
 }
 
 func TestListLogEntries_NoDateSupplied(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=UTC")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=UTC")
 	assertBadRequest(t, w, "date or start_date+end_date is required")
 }
 
 func TestListLogEntries_UnknownTimezone(t *testing.T) {
-	w := listLog(t, NewMemoryRepository(), "timezone=Mars/Phobos&date=2026-05-28")
+	w := listLog(t, NewSQLiteRepository(dbtest.New(t)), "timezone=Mars/Phobos&date=2026-05-28")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
 	}
@@ -235,7 +239,7 @@ func TestListLogEntries_UnknownTimezone(t *testing.T) {
 }
 
 func TestListLogEntries_SingleDateDenverBoundary(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	// America/Denver is UTC-6 (MDT) on 2026-05-28, so the local day
@@ -268,7 +272,7 @@ func TestListLogEntries_SingleDateDenverBoundary(t *testing.T) {
 }
 
 func TestListLogEntries_RangeInclusiveDenver(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	// Range 2026-05-28..2026-05-29 (Denver, UTC-6) covers
@@ -295,7 +299,7 @@ func TestListLogEntries_RangeInclusiveDenver(t *testing.T) {
 }
 
 func TestListLogEntries_RegressionBridgeUTC(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	// date=2026-05-28 + timezone=UTC must select exactly the explicit
@@ -322,7 +326,7 @@ func TestListLogEntries_RegressionBridgeUTC(t *testing.T) {
 }
 
 func TestDailyMacros_HandlerGroupsByLocalDateDenver(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	// Two instants that are the same Denver local day (2026-05-28) but
@@ -368,7 +372,7 @@ func assertBadRequest(t *testing.T, w *httptest.ResponseRecorder, wantMsg string
 }
 
 func TestCreateCustomLogEntry_HappyPath(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"name":"  Chipotle bowl  ","calories":850,"protein_g":45,"fat_g":30,"carbs_g":80,"meal":"lunch"}`
 	w := postCustom(t, repo, body)
 	got := decodeEntry(t, w, http.StatusCreated)
@@ -391,7 +395,7 @@ func TestCreateCustomLogEntry_HappyPath(t *testing.T) {
 }
 
 func TestCreateCustomLogEntry_DefaultsConsumedAtToNow(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	before := time.Now().UTC().Add(-time.Minute)
 	w := postCustom(t, repo, `{"name":"Snack","calories":100,"protein_g":1,"fat_g":2,"carbs_g":3,"meal":"snack"}`)
 	got := decodeEntry(t, w, http.StatusCreated)
@@ -420,14 +424,14 @@ func TestCreateCustomLogEntry_Validation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			w := postCustom(t, NewMemoryRepository(), tc.body)
+			w := postCustom(t, NewSQLiteRepository(dbtest.New(t)), tc.body)
 			assertBadRequest(t, w, tc.wantMsg)
 		})
 	}
 }
 
 func TestUpdateLogEntry_CustomNewName(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	id := seedCustomLogEntry(t, repo, ctx, "Old name", 500)
 
@@ -442,7 +446,7 @@ func TestUpdateLogEntry_CustomNewName(t *testing.T) {
 }
 
 func TestUpdateLogEntry_CustomNewMacros(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	id := seedCustomLogEntry(t, repo, ctx, "Meal", 500)
 
@@ -457,7 +461,7 @@ func TestUpdateLogEntry_CustomNewMacros(t *testing.T) {
 }
 
 func TestUpdateLogEntry_PantryWithNameRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	id := seedLogEntry(t, repo, ctx, time.Now().UTC(), 200)
 
@@ -466,7 +470,7 @@ func TestUpdateLogEntry_PantryWithNameRejected(t *testing.T) {
 }
 
 func TestUpdateLogEntry_RecipeWithCaloriesRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	id := seedRecipeLogEntry(t, repo, ctx)
 
@@ -477,7 +481,7 @@ func TestUpdateLogEntry_RecipeWithCaloriesRejected(t *testing.T) {
 // seedRecipe inserts a recipe for userID with a single pantry component
 // (quantity 1) and returns the recipe ID. The component's pantry item is
 // seeded first so ComputeRecipeMacros resolves to compCalories.
-func seedRecipe(t *testing.T, repo *MemoryRepository, userID, name string, compCalories float64) string {
+func seedRecipe(t *testing.T, repo *SQLiteRepository, userID, name string, compCalories float64) string {
 	t.Helper()
 	pantryID := seedPantryItem(t, repo, userID, name+" component", compCalories)
 	rec := &Recipe{
@@ -492,7 +496,7 @@ func seedRecipe(t *testing.T, repo *MemoryRepository, userID, name string, compC
 }
 
 func TestCreateLogEntriesBatch_AllSuccessMixed(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	pantryID := seedPantryItem(t, repo, "u1", "Eggs", 70)
 	recipeID := seedRecipe(t, repo, "u1", "Oatmeal", 300)
 
@@ -533,7 +537,7 @@ func TestCreateLogEntriesBatch_AllSuccessMixed(t *testing.T) {
 }
 
 func TestCreateLogEntriesBatch_PartialFailure(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	pantryID := seedPantryItem(t, repo, "u1", "Eggs", 70)
 
 	body := `{"items":[
@@ -557,7 +561,7 @@ func TestCreateLogEntriesBatch_PartialFailure(t *testing.T) {
 }
 
 func TestCreateLogEntriesBatch_AllFailStill200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"items":[
 		{"kind":"pantry","pantry_item_id":"nope-1","quantity":1,"meal":"breakfast"},
 		{"kind":"pantry","pantry_item_id":"nope-2","quantity":1,"meal":"lunch"}
@@ -570,7 +574,7 @@ func TestCreateLogEntriesBatch_AllFailStill200(t *testing.T) {
 }
 
 func TestCreateLogEntriesBatch_EmptyItems(t *testing.T) {
-	w := postBatch(t, NewMemoryRepository(), "u1", `{"items":[]}`)
+	w := postBatch(t, NewSQLiteRepository(dbtest.New(t)), "u1", `{"items":[]}`)
 	assertBadRequest(t, w, "items is required")
 }
 
@@ -580,12 +584,12 @@ func TestCreateLogEntriesBatch_OverCap(t *testing.T) {
 		items = append(items, `{"kind":"custom","name":"X","calories":1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"snack"}`)
 	}
 	body := `{"items":[` + strings.Join(items, ",") + `]}`
-	w := postBatch(t, NewMemoryRepository(), "u1", body)
+	w := postBatch(t, NewSQLiteRepository(dbtest.New(t)), "u1", body)
 	assertBadRequest(t, w, "too many items in one batch")
 }
 
 func TestCreateLogEntriesBatch_PerItemOwnership(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	// Pantry item owned by u2; referenced from a u1 batch must fail just
 	// that item (cross-user lookups return ErrNotFound).
 	otherID := seedPantryItem(t, repo, "u2", "Someone else's eggs", 70)
@@ -609,7 +613,7 @@ func TestCreateLogEntriesBatch_PerItemOwnership(t *testing.T) {
 }
 
 func TestCreateLogEntriesBatch_CustomNameMapsToCustomMealName(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"items":[
 		{"kind":"custom","name":"  Burrito  ","calories":800,"protein_g":40,"fat_g":30,"carbs_g":70,"meal":"dinner"}
 	]}`
@@ -628,7 +632,7 @@ func TestCreateLogEntriesBatch_CustomNameMapsToCustomMealName(t *testing.T) {
 }
 
 func TestCreateLogEntriesBatch_UnknownKind(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"items":[{"kind":"bogus","name":"X","calories":1,"meal":"snack"}]}`
 	got := decodeBatch(t, postBatch(t, repo, "u1", body))
 	if got.Logged != 0 || got.Failed != 1 {
@@ -642,7 +646,7 @@ func TestCreateLogEntriesBatch_UnknownKind(t *testing.T) {
 // TestCreateLogEntry_RefactorRegression pins that extracting buildLogEntry
 // did not change the single endpoint's 404 on an unknown pantry id.
 func TestCreateLogEntry_RefactorRegression(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	req := httptest.NewRequest("POST", "/nutrition-log", strings.NewReader(`{"pantry_item_id":"missing","quantity":1,"meal":"breakfast"}`))
 	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
 	w := httptest.NewRecorder()
@@ -664,7 +668,7 @@ func TestCreateLogEntry_RefactorRegression(t *testing.T) {
 // buildCustomLogEntry kept the single endpoint's 400 on an out-of-range
 // macro.
 func TestCreateCustomLogEntry_RefactorRegression(t *testing.T) {
-	w := postCustom(t, NewMemoryRepository(), `{"name":"X","calories":1,"protein_g":10001,"fat_g":1,"carbs_g":1,"meal":"lunch"}`)
+	w := postCustom(t, NewSQLiteRepository(dbtest.New(t)), `{"name":"X","calories":1,"protein_g":10001,"fat_g":1,"carbs_g":1,"meal":"lunch"}`)
 	assertBadRequest(t, w, "protein_g out of range")
 }
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 func TestPantryItem_ValidateRejectsBlankName(t *testing.T) {
@@ -35,7 +37,7 @@ func TestPantryItem_ValidateAcceptsZeroMacros(t *testing.T) {
 }
 
 func TestCreateGetUpdateDeletePantry_Roundtrip(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	p := &PantryItem{
@@ -90,7 +92,7 @@ func TestCreateGetUpdateDeletePantry_Roundtrip(t *testing.T) {
 }
 
 func TestListPantryItems_FiltersSubstringCaseInsensitive(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	for _, name := range []string{"Egg", "Chicken Breast", "Banana", "Bacon"} {
@@ -117,11 +119,22 @@ func TestListPantryItems_FiltersSubstringCaseInsensitive(t *testing.T) {
 }
 
 func TestLogEntry_ExactlyOneReferenceEnforced(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
-	pantryID := "p1"
-	recipeID := "r1"
+	// SQLite enforces the pantry_item_id / recipe_id foreign keys, so the
+	// valid pantry-only and recipe-only shapes must reference rows that
+	// exist. Seed a real pantry item and a real recipe (with its own
+	// pantry component) for them to point at.
+	pantryID := seedPantry(t, repo, "Chicken", 200, 30, 5, 0)
+	rec := &Recipe{
+		UserID: "u1", Name: "Chipotle bowl",
+		Components: []RecipeItem{{PantryItemID: pantryID, Quantity: 1}},
+	}
+	if err := repo.CreateRecipe(ctx, rec); err != nil {
+		t.Fatalf("seed recipe: %v", err)
+	}
+	recipeID := rec.ID
 	name := "Chipotle chicken bowl"
 
 	// base returns a fresh entry with the common required fields set.
@@ -192,7 +205,7 @@ func TestMealType_ValidRejectsOthers(t *testing.T) {
 }
 
 func TestLogEntry_RejectsInvalidMeal(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	pantryID := "p1"
 	err := repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
@@ -206,9 +219,11 @@ func TestLogEntry_RejectsInvalidMeal(t *testing.T) {
 }
 
 func TestLogEntry_MealRoundtrip(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
-	pantryID := "p1"
+	// SQLite enforces the pantry_item_id FK, so the entry must reference a
+	// real pantry item.
+	pantryID := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
 	entry := &NutritionLogEntry{
 		UserID: "u1", Quantity: 1, ConsumedAt: time.Now(),
 		PantryItemID: &pantryID,
@@ -227,10 +242,12 @@ func TestLogEntry_MealRoundtrip(t *testing.T) {
 }
 
 func TestDailyMacros_AggregatesPerUTCDate(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
-	pantryID := "p1"
+	// SQLite enforces the pantry_item_id FK, so seed a real pantry item
+	// for every logged entry to reference.
+	pantryID := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
 	mustLog := func(t *testing.T, consumedAt time.Time, cal, p, f, c float64) {
 		t.Helper()
 		if err := repo.CreateNutritionLogEntry(ctx, &NutritionLogEntry{
@@ -271,10 +288,12 @@ func TestDailyMacros_AggregatesPerUTCDate(t *testing.T) {
 }
 
 func TestDailyMacros_RangeExcludesSoftDeleted(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
-	pantryID := "p1"
+	// SQLite enforces the pantry_item_id FK, so the seeded entry must
+	// reference a real pantry item.
+	pantryID := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
 	consumedAt := time.Date(2026, 5, 28, 12, 0, 0, 0, time.UTC)
 	entry := &NutritionLogEntry{
 		UserID: "u1", ConsumedAt: consumedAt,

@@ -13,6 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // newMigratedDB opens a fresh migrated database in a temp dir with
@@ -72,7 +73,7 @@ func TestServiceScalesQuantityInCode(t *testing.T) {
 		hits:       []Candidate{fsCandidate("Chick-n-Mini", Macros{Calories: 90, ProteinG: 4.75, FatG: 3.25, CarbsG: 10.25})},
 	}
 	usda := &fakeProvider{source: "usda", configured: true}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "chick fil a chicken mini", 10, 5)
 	if err != nil {
@@ -109,7 +110,7 @@ func TestServiceMergesFatSecretFirstThenUSDA(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "chicken minis", 1, 5)
 	if err != nil {
@@ -131,7 +132,7 @@ func TestServiceFallsBackToUSDAWhenFatSecretEmpty(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "scrambled eggs", 2, 5)
 	if err != nil {
@@ -149,7 +150,7 @@ func TestServiceSurvivesOneProviderErroring(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{usdaCandidate("Egg, scrambled", Macros{Calories: 212, ProteinG: 13.8, FatG: 16.2, CarbsG: 2.1})},
 	}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	result, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if err != nil {
@@ -163,7 +164,7 @@ func TestServiceSurvivesOneProviderErroring(t *testing.T) {
 func TestServiceAllProvidersFailingReturnsErrFailed(t *testing.T) {
 	fs := &fakeProvider{source: "fatsecret", configured: true, err: errors.New("token endpoint 500")}
 	usda := &fakeProvider{source: "usda", configured: true, err: errors.New("search 500")}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	_, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if !errors.Is(err, ErrFailed) {
@@ -177,7 +178,7 @@ func TestServiceAllProvidersFailingReturnsErrFailed(t *testing.T) {
 func TestServiceNoProvidersConfiguredReturnsErrUnavailable(t *testing.T) {
 	fs := &fakeProvider{source: "fatsecret"}
 	usda := &fakeProvider{source: "usda"}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs, usda)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs, usda)
 
 	_, err := svc.Lookup(context.Background(), "eggs", 1, 5)
 	if !errors.Is(err, ErrUnavailable) {
@@ -194,7 +195,7 @@ func TestServiceCacheHitSkipsProviders(t *testing.T) {
 		configured: true,
 		hits:       []Candidate{newCandidate("Chick-n-Minis (4 Count)", "Chick-fil-A", "4 minis", Macros{Calories: 360, ProteinG: 19, FatG: 13, CarbsG: 41}, "fatsecret", "12345")},
 	}
-	svc := NewService(NewMemoryRepository(), testLogger(), fs)
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs)
 
 	first, err := svc.Lookup(context.Background(), "Chicken Minis", 1, 5)
 	if err != nil {
@@ -241,7 +242,7 @@ func seedCacheRow(t *testing.T, repo Repository, key, name string, fetchedAt tim
 }
 
 func TestServiceStaleRowTriggersRePull(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	// 8 days old — past the 7-day freshness TTL.
 	seedCacheRow(t, repo, "chicken minis", "Old Cached Minis", time.Now().UTC().Add(-8*24*time.Hour))
 
@@ -277,7 +278,7 @@ func TestServiceStaleRowTriggersRePull(t *testing.T) {
 }
 
 func TestServiceProviderFailurePlusStaleRowServesStale(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	seedCacheRow(t, repo, "chicken minis", "Old Cached Minis", time.Now().UTC().Add(-8*24*time.Hour))
 
 	fs := &fakeProvider{source: "fatsecret", configured: true, err: errors.New("token endpoint 500")}

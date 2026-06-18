@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // seedPantry helper: create a pantry item and return its ID.
-func seedPantry(t *testing.T, repo *MemoryRepository, name string, cal, p, f, c float64) string {
+func seedPantry(t *testing.T, repo *SQLiteRepository, name string, cal, p, f, c float64) string {
 	t.Helper()
 	item := &PantryItem{
 		UserID: "u1", Name: name,
@@ -55,7 +57,7 @@ func TestRecipe_ValidateRejectsOverCap(t *testing.T) {
 }
 
 func TestRecipeRoundtrip_PersistsComponentOrder(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	egg := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
@@ -93,7 +95,7 @@ func TestRecipeRoundtrip_PersistsComponentOrder(t *testing.T) {
 }
 
 func TestRecipeMacros_SumOfScaledComponents(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	// 1 egg = 70 cal, 6P, 5F, 0.5C
@@ -150,7 +152,7 @@ func TestRecipeMacros_ScaleAppliesQuantity(t *testing.T) {
 }
 
 func TestRecipeMacros_RejectsCrossUserAccess(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	egg := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
@@ -168,7 +170,7 @@ func TestRecipeMacros_RejectsCrossUserAccess(t *testing.T) {
 }
 
 func TestRecipeUpdate_ReplacesComponentSet(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	egg := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
@@ -208,7 +210,7 @@ func TestRecipeUpdate_ReplacesComponentSet(t *testing.T) {
 }
 
 func TestRecipeDelete_HidesFromListAndCompute(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	egg := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)
@@ -243,7 +245,7 @@ func TestRecipeMacros_SoftDeletedComponentStillContributes(t *testing.T) {
 	// (soft delete) should still contribute to recipes that already
 	// reference it — the recipe's component math doesn't shift just
 	// because the user cleaned up their pantry view.
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	egg := seedPantry(t, repo, "Egg", 70, 6, 5, 0.5)

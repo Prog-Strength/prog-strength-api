@@ -1,6 +1,10 @@
 package dbtest
 
-import "testing"
+import (
+	"database/sql"
+	"errors"
+	"testing"
+)
 
 // TestNew_OpensMigratedDB verifies New returns a live, migrated database:
 // it must ping and have recorded at least one migration in the
@@ -21,13 +25,26 @@ func TestNew_OpensMigratedDB(t *testing.T) {
 	}
 }
 
-// TestNew_IsIsolatedPerCall verifies each call yields a separate database
-// handle so tests don't share state through a single pooled connection.
+// TestNew_IsIsolatedPerCall verifies each call yields a genuinely separate
+// database: a table created on the first handle must not be visible on the
+// second, so tests can't leak state into one another. We probe via a custom
+// table and a sqlite_master lookup to avoid coupling to the domain schema.
 func TestNew_IsIsolatedPerCall(t *testing.T) {
 	first := New(t)
 	second := New(t)
 
-	if first == second {
-		t.Fatal("expected distinct *sql.DB handles per call, got the same pointer")
+	if _, err := first.Exec("CREATE TABLE dbtest_probe (id INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatalf("create probe table on first db: %v", err)
+	}
+
+	var name string
+	err := second.QueryRow(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dbtest_probe'",
+	).Scan(&name)
+	if err == nil {
+		t.Fatal("second db saw dbtest_probe created on first db: databases are not isolated")
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("lookup probe table on second db: %v", err)
 	}
 }

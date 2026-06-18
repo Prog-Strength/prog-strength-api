@@ -13,6 +13,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -33,7 +34,7 @@ func adminCtxRouter(h *beta.Handler, userID string) http.Handler {
 
 // seedAdminUser creates a user in the repo and returns its ID. The handler
 // resolves this to an email for the added_by field.
-func seedAdminUser(t *testing.T, repo *user.MemoryRepository, email string) string {
+func seedAdminUser(t *testing.T, repo *user.SQLiteRepository, email string) string {
 	t.Helper()
 	u := &user.User{
 		Email:        email,
@@ -48,8 +49,8 @@ func seedAdminUser(t *testing.T, repo *user.MemoryRepository, email string) stri
 }
 
 func TestHandler_AddListRoundTrip(t *testing.T) {
-	betaRepo := beta.NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	adminID := seedAdminUser(t, userRepo, "admin@example.com")
 	srv := adminCtxRouter(beta.NewHandler(betaRepo, userRepo), adminID)
 
@@ -91,8 +92,8 @@ func TestHandler_AddListRoundTrip(t *testing.T) {
 }
 
 func TestHandler_IdempotentReAdd(t *testing.T) {
-	betaRepo := beta.NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	adminID := seedAdminUser(t, userRepo, "admin@example.com")
 	srv := adminCtxRouter(beta.NewHandler(betaRepo, userRepo), adminID)
 
@@ -120,8 +121,8 @@ func TestHandler_IdempotentReAdd(t *testing.T) {
 }
 
 func TestHandler_DeleteThenDeleteAgain(t *testing.T) {
-	betaRepo := beta.NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	adminID := seedAdminUser(t, userRepo, "admin@example.com")
 	srv := adminCtxRouter(beta.NewHandler(betaRepo, userRepo), adminID)
 
@@ -144,8 +145,8 @@ func TestHandler_DeleteThenDeleteAgain(t *testing.T) {
 }
 
 func TestHandler_MalformedEmail400(t *testing.T) {
-	betaRepo := beta.NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	adminID := seedAdminUser(t, userRepo, "admin@example.com")
 	srv := adminCtxRouter(beta.NewHandler(betaRepo, userRepo), adminID)
 
@@ -168,8 +169,8 @@ func TestHandler_MalformedEmail400(t *testing.T) {
 // TestHandler_NonAdmin403EveryVerb mounts the routes behind the real
 // auth.RequireAdmin gate and asserts a non-admin user gets 403 on every verb.
 func TestHandler_NonAdmin403EveryVerb(t *testing.T) {
-	betaRepo := beta.NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	// Seed a NON-admin user (their email is not in adminEmails).
 	nonAdminID := seedAdminUser(t, userRepo, "notadmin@example.com")
 

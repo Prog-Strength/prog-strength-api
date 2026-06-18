@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // --- fake ProfileProvider ------------------------------------------------
@@ -76,8 +77,8 @@ type requestsEnvelope struct {
 
 // --- helpers -------------------------------------------------------------
 
-func newTestHandler() (*Handler, *MemoryRepository, *fakeProfiles) {
-	repo := NewMemoryRepository()
+func newTestHandler(t *testing.T) (*Handler, *SQLiteRepository, *fakeProfiles) {
+	repo := NewSQLiteRepository(dbtest.New(t))
 	profiles := newFakeProfiles()
 	return NewHandler(repo, profiles), repo, profiles
 }
@@ -105,7 +106,7 @@ func req(t *testing.T, method, target, userID, body string, params ...string) *h
 // --- POST /follows -------------------------------------------------------
 
 func TestHandler_RequestByUsername(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 
@@ -132,7 +133,7 @@ func TestHandler_RequestByUsername(t *testing.T) {
 }
 
 func TestHandler_RequestByRawUserID(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.users["raw-id"] = true // exists but has no username
 
@@ -144,7 +145,7 @@ func TestHandler_RequestByRawUserID(t *testing.T) {
 }
 
 func TestHandler_RequestSelf400(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	w := httptest.NewRecorder()
 	h.create(w, req(t, "POST", "/follows", "actor", `{"followee":"actor_h"}`))
@@ -154,7 +155,7 @@ func TestHandler_RequestSelf400(t *testing.T) {
 }
 
 func TestHandler_RequestUnknown404(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	w := httptest.NewRecorder()
 	h.create(w, req(t, "POST", "/follows", "actor", `{"followee":"ghost"}`))
@@ -164,7 +165,7 @@ func TestHandler_RequestUnknown404(t *testing.T) {
 }
 
 func TestHandler_RequestExisting409(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	if _, err := repo.Request(context.Background(), "actor", "bob"); err != nil {
@@ -178,7 +179,7 @@ func TestHandler_RequestExisting409(t *testing.T) {
 }
 
 func TestHandler_RequestPendingCap429(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	for i := 0; i < PendingCap; i++ {
@@ -194,7 +195,7 @@ func TestHandler_RequestPendingCap429(t *testing.T) {
 }
 
 func TestHandler_RequestMissingUser500(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	w := httptest.NewRecorder()
 	h.create(w, req(t, "POST", "/follows", "", `{"followee":"bob_h"}`))
 	if w.Code != http.StatusInternalServerError {
@@ -205,7 +206,7 @@ func TestHandler_RequestMissingUser500(t *testing.T) {
 // --- accept / reject -----------------------------------------------------
 
 func TestHandler_AcceptOnlyByFollowee(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("followee", "fee_h")
 	p.add("follower", "fer_h")
 	if _, err := repo.Request(context.Background(), "follower", "followee"); err != nil {
@@ -234,7 +235,7 @@ func TestHandler_AcceptOnlyByFollowee(t *testing.T) {
 }
 
 func TestHandler_ThirdPartyCannotAccept(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("followee", "fee_h")
 	p.add("follower", "fer_h")
 	p.add("stranger", "str_h")
@@ -251,7 +252,7 @@ func TestHandler_ThirdPartyCannotAccept(t *testing.T) {
 }
 
 func TestHandler_Reject204(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("followee", "fee_h")
 	p.add("follower", "fer_h")
 	if _, err := repo.Request(context.Background(), "follower", "followee"); err != nil {
@@ -268,7 +269,7 @@ func TestHandler_Reject204(t *testing.T) {
 }
 
 func TestHandler_AcceptUnknownUsername404(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("followee", "fee_h")
 	w := httptest.NewRecorder()
 	h.accept(w, req(t, "POST", "/follows/ghost/accept", "followee", "", "username", "ghost"))
@@ -280,7 +281,7 @@ func TestHandler_AcceptUnknownUsername404(t *testing.T) {
 // --- DELETE /follows/{username} context-sensitive ------------------------
 
 func TestHandler_DeleteFollowCancelsPending(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	if _, err := repo.Request(context.Background(), "actor", "bob"); err != nil {
@@ -297,7 +298,7 @@ func TestHandler_DeleteFollowCancelsPending(t *testing.T) {
 }
 
 func TestHandler_DeleteFollowUnfollowsAccepted(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	mustAccept(t, repo, "actor", "bob")
@@ -313,7 +314,7 @@ func TestHandler_DeleteFollowUnfollowsAccepted(t *testing.T) {
 }
 
 func TestHandler_DeleteFollowNoEdge404(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	w := httptest.NewRecorder()
@@ -324,7 +325,7 @@ func TestHandler_DeleteFollowNoEdge404(t *testing.T) {
 }
 
 func TestHandler_ThirdPartyCannotCancel(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("bob", "bob_h")
 	p.add("stranger", "str_h")
@@ -346,7 +347,7 @@ func TestHandler_ThirdPartyCannotCancel(t *testing.T) {
 // --- DELETE /followers/{username} ----------------------------------------
 
 func TestHandler_RemoveFollower(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")  // the followee
 	p.add("follower", "fer_h") // accepted follower of actor
 	mustAccept(t, repo, "follower", "actor")
@@ -362,7 +363,7 @@ func TestHandler_RemoveFollower(t *testing.T) {
 }
 
 func TestHandler_RemoveFollowerRequiresAcceptedEdge(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("follower", "fer_h")
 	// Only a pending edge exists — remove-follower targets accepted rows.
@@ -377,7 +378,7 @@ func TestHandler_RemoveFollowerRequiresAcceptedEdge(t *testing.T) {
 }
 
 func TestHandler_ThirdPartyCannotRemoveFollower(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("actor", "actor_h")
 	p.add("follower", "fer_h")
 	p.add("stranger", "str_h")
@@ -397,7 +398,7 @@ func TestHandler_ThirdPartyCannotRemoveFollower(t *testing.T) {
 // --- GET /follows/requests ----------------------------------------------
 
 func TestHandler_ListIncomingRequestsDefault(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("me", "me_h")
 	p.add("x", "x_h")
 	p.add("y", "y_h")
@@ -433,7 +434,7 @@ func TestHandler_ListIncomingRequestsDefault(t *testing.T) {
 }
 
 func TestHandler_ListOutgoingRequests(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("me", "me_h")
 	p.add("p1", "p1_h")
 	if _, err := repo.Request(context.Background(), "me", "p1"); err != nil {
@@ -457,7 +458,7 @@ func TestHandler_ListOutgoingRequests(t *testing.T) {
 }
 
 func TestHandler_RequestsEmptyNonNullSlice(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("me", "me_h")
 	w := httptest.NewRecorder()
 	h.listRequests(w, req(t, "GET", "/follows/requests", "me", ""))
@@ -474,7 +475,7 @@ func TestHandler_RequestsEmptyNonNullSlice(t *testing.T) {
 }
 
 func TestHandler_RequestsInvalidCursor400(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("me", "me_h")
 	w := httptest.NewRecorder()
 	h.listRequests(w, req(t, "GET", "/follows/requests?cursor=not-valid!!", "me", ""))
@@ -487,7 +488,7 @@ func TestHandler_RequestsInvalidCursor400(t *testing.T) {
 }
 
 func TestHandler_RequestsBadDirection400(t *testing.T) {
-	h, _, p := newTestHandler()
+	h, _, p := newTestHandler(t)
 	p.add("me", "me_h")
 	w := httptest.NewRecorder()
 	h.listRequests(w, req(t, "GET", "/follows/requests?direction=sideways", "me", ""))
@@ -497,7 +498,7 @@ func TestHandler_RequestsBadDirection400(t *testing.T) {
 }
 
 func TestHandler_RequestsPaginationAcrossPages(t *testing.T) {
-	h, repo, p := newTestHandler()
+	h, repo, p := newTestHandler(t)
 	p.add("me", "me_h")
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	for i := 0; i < 3; i++ {

@@ -76,12 +76,12 @@ func TestRepo_GetByUsernameNotFound(t *testing.T) {
 }
 
 // TestRepo_UsernameCaseInsensitiveCollision checks that two different users
-// cannot hold case-variant forms of the same canonical handle. Repos compare
-// case-insensitively (SQLite via the canonical stored value + the handler
-// canonicalizing; memory via a lowercased compare), so jimlifts vs JimLifts
-// collide. We feed the second user the canonical-but-same value too, since the
-// canonicalization happens at the handler edge — here we simulate a second
-// user trying to store the same lowercased handle.
+// cannot hold case-variant forms of the same canonical handle. The repo's
+// unique index is case-sensitive, so the case-insensitive guarantee comes from
+// the handler canonicalizing (lowercasing) handles in ValidateUsername before
+// they ever reach the repo: jimlifts and JimLifts both canonicalize to
+// jimlifts and collide. We feed the second user that same canonical value to
+// simulate what the handler edge would have produced.
 func TestRepo_UsernameCaseInsensitiveCollision(t *testing.T) {
 	for _, b := range repoBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -186,10 +186,10 @@ func TestRepo_KeepingOwnUsernameIsNotCollision(t *testing.T) {
 }
 
 // TestRepo_DeletedUsernameIsReusable verifies that soft-deleting an account
-// frees its handle for another user on BOTH backends. SQLite enforces this via
-// the partial unique index (WHERE deleted_at IS NULL); memory excludes deleted
-// users from its collision check. This locks the two implementations to the
-// same rule (and to the SOW's "freed handle is immediately available").
+// frees its handle for another user. SQLite enforces this via the partial
+// unique index (WHERE deleted_at IS NULL), so a soft-deleted row no longer
+// participates in the uniqueness constraint and its handle becomes available
+// again (matching the SOW's "freed handle is immediately available").
 func TestRepo_DeletedUsernameIsReusable(t *testing.T) {
 	for _, b := range repoBackends(t) {
 		t.Run(b.name, func(t *testing.T) {

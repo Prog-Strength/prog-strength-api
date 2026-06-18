@@ -293,3 +293,10 @@ func (r *SQLiteRepository) Delete(ctx context.Context, id string) error {
 
 	return nil
 }
+
+// normalizeEmail lowercases and trims an email address.
+// OAuth providers normalize differently, but this is sufficient for
+// single-provider (Google) use.
+func normalizeEmail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}

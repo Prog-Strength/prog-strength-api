@@ -691,3 +691,20 @@ func scanRecipe(s scanner) (*Recipe, error) {
 	}
 	return &r, nil
 }
+
+// exactlyOneSource returns true when the entry has exactly one of
+// PantryItemID, RecipeID, or CustomMealName set, mirroring the schema
+// CHECK. An empty-string pointer counts as unset.
+func exactlyOneSource(e *NutritionLogEntry) bool {
+	n := 0
+	if e.PantryItemID != nil && *e.PantryItemID != "" {
+		n++
+	}
+	if e.RecipeID != nil && *e.RecipeID != "" {
+		n++
+	}
+	if e.CustomMealName != nil && *e.CustomMealName != "" {
+		n++
+	}
+	return n == 1
+}

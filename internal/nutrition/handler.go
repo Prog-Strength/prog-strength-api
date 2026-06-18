@@ -1,8 +1,10 @@
 package nutrition
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -41,6 +43,7 @@ func (h *Handler) Mount(r chi.Router) {
 		// rather than interpreting "daily" as a log entry ID.
 		r.Get("/daily", h.dailyMacros)
 		r.Post("/custom", h.createCustomLogEntry)
+		r.Post("/batch", h.createLogEntriesBatch)
 		r.Get("/", h.listLogEntries)
 		r.Post("/", h.createLogEntry)
 		r.Get("/{id}", h.getLogEntry)
@@ -166,6 +169,47 @@ type customLogEntryRequest struct {
 	CarbsG     float64    `json:"carbs_g"`
 	Meal       string     `json:"meal"`
 	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
+}
+
+// MaxBatchLogItems caps a single batch request — a runaway-model guard
+// well above any real meal. See sows/batch-food-logging.md.
+const MaxBatchLogItems = 50
+
+// batchLogItemRequest is one item in a POST /nutrition-log/batch body.
+// `kind` is the authoritative selector; the per-kind fields reuse the
+// single endpoints' field names.
+type batchLogItemRequest struct {
+	Kind         string     `json:"kind"`
+	PantryItemID *string    `json:"pantry_item_id"`
+	RecipeID     *string    `json:"recipe_id"`
+	Quantity     float64    `json:"quantity"`
+	Name         string     `json:"name"`
+	Calories     float64    `json:"calories"`
+	ProteinG     float64    `json:"protein_g"`
+	FatG         float64    `json:"fat_g"`
+	CarbsG       float64    `json:"carbs_g"`
+	Meal         string     `json:"meal"`
+	ConsumedAt   *time.Time `json:"consumed_at"`
+}
+
+type batchLogRequest struct {
+	Items []batchLogItemRequest `json:"items"`
+}
+
+// batchLogResultDTO is one index-aligned per-item outcome. Entry is set
+// when ok; Error is set otherwise. omitempty keeps each object to the
+// shape that applies.
+type batchLogResultDTO struct {
+	Index int          `json:"index"`
+	OK    bool         `json:"ok"`
+	Entry *logEntryDTO `json:"entry,omitempty"`
+	Error string       `json:"error,omitempty"`
+}
+
+type batchLogResponseDTO struct {
+	Results []batchLogResultDTO `json:"results"`
+	Logged  int                 `json:"logged"`
+	Failed  int                 `json:"failed"`
 }
 
 type dailyMacrosDTO struct {
@@ -329,26 +373,39 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	entry, err := h.buildLogEntry(r.Context(), userID, req)
+	if err != nil {
+		writeLogBuildError(w, r, "build log entry", err)
+		return
+	}
+	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
+		httpresp.ServerError(w, r.Context(), "create nutrition log entry", err)
+		return
+	}
+	httpresp.Created(w, "logged consumption", toLogDTO(*entry))
+}
+
+// buildLogEntry validates a pantry- or recipe-backed log request and
+// returns the unsaved NutritionLogEntry with denormalized macros frozen at
+// log time. Caller-facing problems come back as *logBuildError; storage
+// failures come back as plain errors. It does not insert.
+func (h *Handler) buildLogEntry(ctx context.Context, userID string, req logEntryRequest) (*NutritionLogEntry, error) {
 	hasPantry := req.PantryItemID != nil && *req.PantryItemID != ""
 	hasRecipe := req.RecipeID != nil && *req.RecipeID != ""
 	if hasPantry == hasRecipe {
-		httpresp.Error(w, http.StatusBadRequest, ErrLogEntryReferenceRequired.Error())
-		return
+		return nil, &logBuildError{http.StatusBadRequest, ErrLogEntryReferenceRequired.Error()}
 	}
 	if req.Quantity <= 0 {
-		httpresp.Error(w, http.StatusBadRequest, ErrQuantityNonPositive.Error())
-		return
+		return nil, &logBuildError{http.StatusBadRequest, ErrQuantityNonPositive.Error()}
 	}
 	meal := MealType(req.Meal)
 	if !meal.Valid() {
-		httpresp.Error(w, http.StatusBadRequest, ErrInvalidMeal.Error())
-		return
+		return nil, &logBuildError{http.StatusBadRequest, ErrInvalidMeal.Error()}
 	}
-
-	// Derive the denormalized macros at log time from whichever
-	// source the request points at. Whatever lands on the entry's
-	// macro columns is frozen — future edits to the pantry item or
-	// recipe will not retroactively change this entry.
+	// Derive the denormalized macros at log time from whichever source
+	// the request points at. Whatever lands on the entry's macro columns
+	// is frozen — future edits to the pantry item or recipe will not
+	// retroactively change this entry.
 	consumedAt := time.Now().UTC()
 	if req.ConsumedAt != nil {
 		consumedAt = req.ConsumedAt.UTC()
@@ -360,14 +417,12 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		Meal:       meal,
 	}
 	if hasPantry {
-		pantry, err := h.repo.GetPantryItem(r.Context(), userID, *req.PantryItemID)
+		pantry, err := h.repo.GetPantryItem(ctx, userID, *req.PantryItemID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				httpresp.Error(w, http.StatusNotFound, "pantry item not found")
-				return
+				return nil, &logBuildError{http.StatusNotFound, "pantry item not found"}
 			}
-			httpresp.ServerError(w, r.Context(), "look up pantry item", err)
-			return
+			return nil, err
 		}
 		entry.PantryItemID = req.PantryItemID
 		entry.Calories = req.Quantity * pantry.Calories
@@ -375,14 +430,12 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		entry.FatG = req.Quantity * pantry.FatG
 		entry.CarbsG = req.Quantity * pantry.CarbsG
 	} else {
-		macros, err := h.repo.ComputeRecipeMacros(r.Context(), userID, *req.RecipeID)
+		macros, err := h.repo.ComputeRecipeMacros(ctx, userID, *req.RecipeID)
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				httpresp.Error(w, http.StatusNotFound, "recipe not found")
-				return
+				return nil, &logBuildError{http.StatusNotFound, "recipe not found"}
 			}
-			httpresp.ServerError(w, r.Context(), "compute recipe macros", err)
-			return
+			return nil, err
 		}
 		scaled := macros.Scale(req.Quantity)
 		entry.RecipeID = req.RecipeID
@@ -391,11 +444,7 @@ func (h *Handler) createLogEntry(w http.ResponseWriter, r *http.Request) {
 		entry.FatG = scaled.FatG
 		entry.CarbsG = scaled.CarbsG
 	}
-	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
-		httpresp.ServerError(w, r.Context(), "create nutrition log entry", err)
-		return
-	}
-	httpresp.Created(w, "logged consumption", toLogDTO(*entry))
+	return entry, nil
 }
 
 // createCustomLogEntry logs a one-off meal the user typed, not backed
@@ -413,18 +462,31 @@ func (h *Handler) createCustomLogEntry(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	entry, err := buildCustomLogEntry(userID, req)
+	if err != nil {
+		writeLogBuildError(w, r, "build custom log entry", err)
+		return
+	}
+	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
+		httpresp.ServerError(w, r.Context(), "create custom nutrition log entry", err)
+		return
+	}
+	httpresp.Created(w, "logged custom meal", toLogDTO(*entry))
+}
+
+// buildCustomLogEntry validates a one-off custom-meal request and returns
+// the unsaved NutritionLogEntry (quantity fixed at 1, macros verbatim).
+// Caller-facing problems come back as *logBuildError. It does not insert.
+func buildCustomLogEntry(userID string, req customLogEntryRequest) (*NutritionLogEntry, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		httpresp.Error(w, http.StatusBadRequest, "name is required")
-		return
+		return nil, &logBuildError{http.StatusBadRequest, "name is required"}
 	}
 	if len(name) > 200 {
-		httpresp.Error(w, http.StatusBadRequest, "name is too long")
-		return
+		return nil, &logBuildError{http.StatusBadRequest, "name is too long"}
 	}
 	if req.Calories < 0 || req.Calories > MaxCalories {
-		httpresp.Error(w, http.StatusBadRequest, "calories out of range")
-		return
+		return nil, &logBuildError{http.StatusBadRequest, "calories out of range"}
 	}
 	for _, m := range []struct {
 		name string
@@ -435,20 +497,18 @@ func (h *Handler) createCustomLogEntry(w http.ResponseWriter, r *http.Request) {
 		{"carbs_g", req.CarbsG},
 	} {
 		if m.val < 0 || m.val > MaxMacroGrams {
-			httpresp.Error(w, http.StatusBadRequest, m.name+" out of range")
-			return
+			return nil, &logBuildError{http.StatusBadRequest, m.name + " out of range"}
 		}
 	}
 	meal := MealType(req.Meal)
 	if !meal.Valid() {
-		httpresp.Error(w, http.StatusBadRequest, ErrInvalidMeal.Error())
-		return
+		return nil, &logBuildError{http.StatusBadRequest, ErrInvalidMeal.Error()}
 	}
 	consumedAt := time.Now().UTC()
 	if req.ConsumedAt != nil {
 		consumedAt = req.ConsumedAt.UTC()
 	}
-	entry := &NutritionLogEntry{
+	return &NutritionLogEntry{
 		UserID:         userID,
 		ConsumedAt:     consumedAt,
 		CustomMealName: &name,
@@ -458,12 +518,107 @@ func (h *Handler) createCustomLogEntry(w http.ResponseWriter, r *http.Request) {
 		FatG:           req.FatG,
 		CarbsG:         req.CarbsG,
 		Meal:           meal,
-	}
-	if err := h.repo.CreateNutritionLogEntry(r.Context(), entry); err != nil {
-		httpresp.ServerError(w, r.Context(), "create custom nutrition log entry", err)
+	}, nil
+}
+
+// createLogEntriesBatch logs a heterogeneous list of items best-effort:
+// each item is validated and inserted independently, a failure on one
+// never aborts the loop or rolls back a sibling, and per-item outcomes are
+// returned index-aligned to the request. The envelope is 400 only when it
+// is itself malformed (no items, or over the cap); otherwise it is 200
+// even if every item failed.
+func (h *Handler) createLogEntriesBatch(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	httpresp.Created(w, "logged custom meal", toLogDTO(*entry))
+	var req batchLogRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Items) == 0 {
+		httpresp.Error(w, http.StatusBadRequest, "items is required")
+		return
+	}
+	if len(req.Items) > MaxBatchLogItems {
+		httpresp.Error(w, http.StatusBadRequest, "too many items in one batch")
+		return
+	}
+
+	results := make([]batchLogResultDTO, 0, len(req.Items))
+	logged, failed := 0, 0
+	for i, item := range req.Items {
+		entry, err := h.buildBatchEntry(r.Context(), userID, item)
+		if err == nil {
+			err = h.repo.CreateNutritionLogEntry(r.Context(), entry)
+		}
+		if err != nil {
+			failed++
+			results = append(results, batchLogResultDTO{
+				Index: i,
+				OK:    false,
+				Error: batchItemErrorMessage(r, err),
+			})
+			continue
+		}
+		logged++
+		dto := toLogDTO(*entry)
+		results = append(results, batchLogResultDTO{Index: i, OK: true, Entry: &dto})
+	}
+	httpresp.OK(w, "logged consumption batch", batchLogResponseDTO{
+		Results: results,
+		Logged:  logged,
+		Failed:  failed,
+	})
+}
+
+// buildBatchEntry dispatches one batch item on its kind to the shared
+// build helper, mapping the item's fields onto the single endpoints'
+// request shapes.
+func (h *Handler) buildBatchEntry(ctx context.Context, userID string, item batchLogItemRequest) (*NutritionLogEntry, error) {
+	switch item.Kind {
+	case "pantry":
+		return h.buildLogEntry(ctx, userID, logEntryRequest{
+			PantryItemID: item.PantryItemID,
+			Quantity:     item.Quantity,
+			Meal:         item.Meal,
+			ConsumedAt:   item.ConsumedAt,
+		})
+	case "recipe":
+		return h.buildLogEntry(ctx, userID, logEntryRequest{
+			RecipeID:   item.RecipeID,
+			Quantity:   item.Quantity,
+			Meal:       item.Meal,
+			ConsumedAt: item.ConsumedAt,
+		})
+	case "custom":
+		return buildCustomLogEntry(userID, customLogEntryRequest{
+			Name:       item.Name,
+			Calories:   item.Calories,
+			ProteinG:   item.ProteinG,
+			FatG:       item.FatG,
+			CarbsG:     item.CarbsG,
+			Meal:       item.Meal,
+			ConsumedAt: item.ConsumedAt,
+		})
+	default:
+		return nil, &logBuildError{http.StatusBadRequest, "unknown item kind: " + item.Kind}
+	}
+}
+
+// batchItemErrorMessage renders a per-item error for the results array.
+// Caller-facing build errors carry their own message; an unexpected
+// storage failure is logged server-side and reported generically so a raw
+// internal error never leaks to the agent.
+func batchItemErrorMessage(r *http.Request, err error) string {
+	var be *logBuildError
+	if errors.As(err, &be) {
+		return be.msg
+	}
+	logServerError(r.Context(), "batch log item insert", err)
+	return "internal error"
 }
 
 func (h *Handler) listLogEntries(w http.ResponseWriter, r *http.Request) {
@@ -746,6 +901,40 @@ func (h *Handler) dailyMacros(w http.ResponseWriter, r *http.Request) {
 // package's call site so both handlers read the same way.
 func parseDateRangeQuery(r *http.Request) (time.Time, time.Time, *time.Location, error) {
 	return daterange.ParseQuery(r.URL.Query())
+}
+
+// logBuildError is a caller-facing failure from the log-entry build
+// helpers (bad input or a missing/unowned source). It carries the HTTP
+// status and message the single handlers already return, so extracting
+// the build logic doesn't change their 400/404 responses. Storage/system
+// failures are returned as plain errors instead and map to 500.
+type logBuildError struct {
+	status int
+	msg    string
+}
+
+func (e *logBuildError) Error() string { return e.msg }
+
+// writeLogBuildError maps a build-helper error onto the response: a
+// *logBuildError becomes its carried status+message, anything else is a
+// 500 logged under op.
+func writeLogBuildError(w http.ResponseWriter, r *http.Request, op string, err error) {
+	var be *logBuildError
+	if errors.As(err, &be) {
+		httpresp.Error(w, be.status, be.msg)
+		return
+	}
+	httpresp.ServerError(w, r.Context(), op, err)
+}
+
+// logServerError records an unexpected server-side failure without writing
+// a response. It mirrors how httpresp.ServerError logs (op + err) for the
+// best-effort batch path, where a per-item storage failure must be recorded
+// but the envelope still returns 200. ctx is accepted for parity with
+// httpresp.ServerError (reserved for structured logging).
+func logServerError(ctx context.Context, op string, err error) {
+	_ = ctx
+	log.Printf("%s: %v", op, err)
 }
 
 // isValidationError reports whether err is one of the package's

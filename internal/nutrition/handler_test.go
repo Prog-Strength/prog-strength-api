@@ -40,6 +40,54 @@ type errEnvelope struct {
 	Error string `json:"error"`
 }
 
+// batchEnvelope mirrors the httpresp success shape for the batch endpoint
+// so tests can assert on the per-item results and counts.
+type batchEnvelope struct {
+	Message string              `json:"message"`
+	Data    batchLogResponseDTO `json:"data"`
+}
+
+// seedPantryItem inserts a pantry item owned by userID and returns its
+// generated ID so a kind:"pantry" batch item can resolve against it.
+func seedPantryItem(t *testing.T, repo *MemoryRepository, userID, name string, calories float64) string {
+	t.Helper()
+	p := &PantryItem{
+		UserID:      userID,
+		Name:        name,
+		Calories:    calories,
+		ServingSize: 1,
+		ServingUnit: "serving",
+	}
+	if err := repo.CreatePantryItem(context.Background(), p); err != nil {
+		t.Fatalf("seed pantry item: %v", err)
+	}
+	return p.ID
+}
+
+// postBatch drives the createLogEntriesBatch handler with the given JSON
+// body and the given userID-in-context.
+func postBatch(t *testing.T, repo *MemoryRepository, userID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/nutrition-log/batch", strings.NewReader(body))
+	req = req.WithContext(authctx.WithUserID(req.Context(), userID))
+	w := httptest.NewRecorder()
+	NewHandler(repo).createLogEntriesBatch(w, req)
+	return w
+}
+
+// decodeBatch asserts a 200 and returns the batch payload.
+func decodeBatch(t *testing.T, w *httptest.ResponseRecorder) batchLogResponseDTO {
+	t.Helper()
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+	var got batchEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return got.Data
+}
+
 // seedLogEntry inserts a pantry-backed entry at consumedAt for user u1 and
 // fails the test on a seed error. Returns the entry ID for assertions.
 func seedLogEntry(t *testing.T, repo *MemoryRepository, ctx context.Context, consumedAt time.Time, calories float64) string {
@@ -424,6 +472,200 @@ func TestUpdateLogEntry_RecipeWithCaloriesRejected(t *testing.T) {
 
 	w := putLog(t, repo, id, `{"calories":123}`)
 	assertBadRequest(t, w, "calories is only editable on custom meal entries")
+}
+
+// seedRecipe inserts a recipe for userID with a single pantry component
+// (quantity 1) and returns the recipe ID. The component's pantry item is
+// seeded first so ComputeRecipeMacros resolves to compCalories.
+func seedRecipe(t *testing.T, repo *MemoryRepository, userID, name string, compCalories float64) string {
+	t.Helper()
+	pantryID := seedPantryItem(t, repo, userID, name+" component", compCalories)
+	rec := &Recipe{
+		UserID:     userID,
+		Name:       name,
+		Components: []RecipeItem{{PantryItemID: pantryID, Quantity: 1}},
+	}
+	if err := repo.CreateRecipe(context.Background(), rec); err != nil {
+		t.Fatalf("seed recipe: %v", err)
+	}
+	return rec.ID
+}
+
+func TestCreateLogEntriesBatch_AllSuccessMixed(t *testing.T) {
+	repo := NewMemoryRepository()
+	pantryID := seedPantryItem(t, repo, "u1", "Eggs", 70)
+	recipeID := seedRecipe(t, repo, "u1", "Oatmeal", 300)
+
+	body := `{"items":[
+		{"kind":"pantry","pantry_item_id":"` + pantryID + `","quantity":5,"meal":"breakfast"},
+		{"kind":"recipe","recipe_id":"` + recipeID + `","quantity":2,"meal":"lunch"},
+		{"kind":"custom","name":"Protein bar","calories":200,"protein_g":20,"fat_g":7,"carbs_g":18,"meal":"snack"}
+	]}`
+	got := decodeBatch(t, postBatch(t, repo, "u1", body))
+
+	if got.Logged != 3 || got.Failed != 0 {
+		t.Fatalf("counts: logged=%d failed=%d, want 3/0", got.Logged, got.Failed)
+	}
+	if len(got.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got.Results))
+	}
+	for i, res := range got.Results {
+		if res.Index != i {
+			t.Fatalf("results[%d].index = %d, want %d", i, res.Index, i)
+		}
+		if !res.OK || res.Entry == nil {
+			t.Fatalf("results[%d] not ok or missing entry: %+v", i, res)
+		}
+	}
+	// Pantry macros denormalized identically to the single endpoint:
+	// quantity 5 against a 70-cal item -> 350.
+	if got.Results[0].Entry.Calories != 350 {
+		t.Fatalf("pantry calories = %v, want 350 (5*70)", got.Results[0].Entry.Calories)
+	}
+	// Recipe scaled by quantity 2 against a 300-cal component -> 600.
+	if got.Results[1].Entry.Calories != 600 {
+		t.Fatalf("recipe calories = %v, want 600 (2*300)", got.Results[1].Entry.Calories)
+	}
+	// Custom macros verbatim.
+	if got.Results[2].Entry.Calories != 200 {
+		t.Fatalf("custom calories = %v, want 200", got.Results[2].Entry.Calories)
+	}
+}
+
+func TestCreateLogEntriesBatch_PartialFailure(t *testing.T) {
+	repo := NewMemoryRepository()
+	pantryID := seedPantryItem(t, repo, "u1", "Eggs", 70)
+
+	body := `{"items":[
+		{"kind":"pantry","pantry_item_id":"` + pantryID + `","quantity":1,"meal":"breakfast"},
+		{"kind":"pantry","pantry_item_id":"does-not-exist","quantity":1,"meal":"breakfast"}
+	]}`
+	got := decodeBatch(t, postBatch(t, repo, "u1", body))
+
+	if got.Logged != 1 || got.Failed != 1 {
+		t.Fatalf("counts: logged=%d failed=%d, want 1/1", got.Logged, got.Failed)
+	}
+	if !got.Results[0].OK || got.Results[0].Index != 0 {
+		t.Fatalf("results[0] = %+v, want ok index 0", got.Results[0])
+	}
+	if got.Results[1].OK || got.Results[1].Index != 1 || got.Results[1].Error == "" {
+		t.Fatalf("results[1] = %+v, want failed index 1 with error", got.Results[1])
+	}
+	if got.Results[1].Error != "pantry item not found" {
+		t.Fatalf("results[1].error = %q, want %q", got.Results[1].Error, "pantry item not found")
+	}
+}
+
+func TestCreateLogEntriesBatch_AllFailStill200(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{"items":[
+		{"kind":"pantry","pantry_item_id":"nope-1","quantity":1,"meal":"breakfast"},
+		{"kind":"pantry","pantry_item_id":"nope-2","quantity":1,"meal":"lunch"}
+	]}`
+	w := postBatch(t, repo, "u1", body)
+	got := decodeBatch(t, w) // asserts 200
+	if got.Logged != 0 || got.Failed != 2 {
+		t.Fatalf("counts: logged=%d failed=%d, want 0/2", got.Logged, got.Failed)
+	}
+}
+
+func TestCreateLogEntriesBatch_EmptyItems(t *testing.T) {
+	w := postBatch(t, NewMemoryRepository(), "u1", `{"items":[]}`)
+	assertBadRequest(t, w, "items is required")
+}
+
+func TestCreateLogEntriesBatch_OverCap(t *testing.T) {
+	items := make([]string, 0, MaxBatchLogItems+1)
+	for i := 0; i < MaxBatchLogItems+1; i++ {
+		items = append(items, `{"kind":"custom","name":"X","calories":1,"protein_g":1,"fat_g":1,"carbs_g":1,"meal":"snack"}`)
+	}
+	body := `{"items":[` + strings.Join(items, ",") + `]}`
+	w := postBatch(t, NewMemoryRepository(), "u1", body)
+	assertBadRequest(t, w, "too many items in one batch")
+}
+
+func TestCreateLogEntriesBatch_PerItemOwnership(t *testing.T) {
+	repo := NewMemoryRepository()
+	// Pantry item owned by u2; referenced from a u1 batch must fail just
+	// that item (cross-user lookups return ErrNotFound).
+	otherID := seedPantryItem(t, repo, "u2", "Someone else's eggs", 70)
+	mineID := seedPantryItem(t, repo, "u1", "My eggs", 70)
+
+	body := `{"items":[
+		{"kind":"pantry","pantry_item_id":"` + mineID + `","quantity":1,"meal":"breakfast"},
+		{"kind":"pantry","pantry_item_id":"` + otherID + `","quantity":1,"meal":"breakfast"}
+	]}`
+	got := decodeBatch(t, postBatch(t, repo, "u1", body))
+
+	if got.Logged != 1 || got.Failed != 1 {
+		t.Fatalf("counts: logged=%d failed=%d, want 1/1", got.Logged, got.Failed)
+	}
+	if !got.Results[0].OK {
+		t.Fatalf("own item should succeed: %+v", got.Results[0])
+	}
+	if got.Results[1].OK || got.Results[1].Error != "pantry item not found" {
+		t.Fatalf("other user's item should fail not-found: %+v", got.Results[1])
+	}
+}
+
+func TestCreateLogEntriesBatch_CustomNameMapsToCustomMealName(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{"items":[
+		{"kind":"custom","name":"  Burrito  ","calories":800,"protein_g":40,"fat_g":30,"carbs_g":70,"meal":"dinner"}
+	]}`
+	got := decodeBatch(t, postBatch(t, repo, "u1", body))
+
+	if got.Logged != 1 || got.Failed != 0 {
+		t.Fatalf("counts: logged=%d failed=%d, want 1/0", got.Logged, got.Failed)
+	}
+	entry := got.Results[0].Entry
+	if entry == nil || entry.CustomMealName == nil || *entry.CustomMealName != "Burrito" {
+		t.Fatalf("custom_meal_name = %v, want %q", entry, "Burrito")
+	}
+	if entry.PantryItemID != nil || entry.RecipeID != nil {
+		t.Fatalf("custom entry should have no pantry/recipe source: %+v", entry)
+	}
+}
+
+func TestCreateLogEntriesBatch_UnknownKind(t *testing.T) {
+	repo := NewMemoryRepository()
+	body := `{"items":[{"kind":"bogus","name":"X","calories":1,"meal":"snack"}]}`
+	got := decodeBatch(t, postBatch(t, repo, "u1", body))
+	if got.Logged != 0 || got.Failed != 1 {
+		t.Fatalf("counts: logged=%d failed=%d, want 0/1", got.Logged, got.Failed)
+	}
+	if got.Results[0].OK || got.Results[0].Error != "unknown item kind: bogus" {
+		t.Fatalf("results[0] = %+v, want failed with unknown-kind error", got.Results[0])
+	}
+}
+
+// TestCreateLogEntry_RefactorRegression pins that extracting buildLogEntry
+// did not change the single endpoint's 404 on an unknown pantry id.
+func TestCreateLogEntry_RefactorRegression(t *testing.T) {
+	repo := NewMemoryRepository()
+	req := httptest.NewRequest("POST", "/nutrition-log", strings.NewReader(`{"pantry_item_id":"missing","quantity":1,"meal":"breakfast"}`))
+	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+	NewHandler(repo).createLogEntry(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d want 404, body=%s", w.Code, w.Body.String())
+	}
+	var got errEnvelope
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.Error != "pantry item not found" {
+		t.Fatalf("error = %q, want %q", got.Error, "pantry item not found")
+	}
+}
+
+// TestCreateCustomLogEntry_RefactorRegression pins that extracting
+// buildCustomLogEntry kept the single endpoint's 400 on an out-of-range
+// macro.
+func TestCreateCustomLogEntry_RefactorRegression(t *testing.T) {
+	w := postCustom(t, NewMemoryRepository(), `{"name":"X","calories":1,"protein_g":10001,"fat_g":1,"carbs_g":1,"meal":"lunch"}`)
+	assertBadRequest(t, w, "protein_g out of range")
 }
 
 func decodeList(t *testing.T, w *httptest.ResponseRecorder) []logEntryDTO {

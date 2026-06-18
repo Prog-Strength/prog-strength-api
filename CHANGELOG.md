@@ -1,3 +1,10 @@
+# [0.61.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.3...v0.61.0) (2026-06-18)
+
+
+### Features
+
+* **nutrition:** add best-effort POST /nutrition-log/batch ([#48](https://github.com/Prog-Strength/prog-strength-api/issues/48)) ([6bd1ee2](https://github.com/Prog-Strength/prog-strength-api/commit/6bd1ee2290caab84a31e297bdd18238cbbe6c8cf))
+
 ## [0.60.3](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.2...v0.60.3) (2026-06-17)
 
 

@@ -50,11 +50,14 @@ func (f *fakeRunSource) ListRunningSamplesSince(_ context.Context, _ string, sin
 }
 
 // newStatsFixture builds a discovery handler wired to the given lift/run
-// sources plus a real memory user + follow repo, mounted on a chi router.
-func newStatsFixture(t *testing.T, lifts LiftSessionSource, runs RunningSampleSource) (chi.Router, Repository, *follow.MemoryRepository) {
+// sources plus a real SQLite-backed user + follow repo, mounted on a chi router.
+// The user and follow repos use independent ephemeral databases: they query
+// disjoint tables keyed on user IDs and the follows table carries no FK to
+// users, so they need not share a *sql.DB.
+func newStatsFixture(t *testing.T, lifts LiftSessionSource, runs RunningSampleSource) (chi.Router, Repository, follow.Repository) {
 	t.Helper()
 	userRepo := NewSQLiteRepository(dbtest.New(t))
-	followRepo := follow.NewMemoryRepository()
+	followRepo := follow.NewSQLiteRepository(dbtest.New(t))
 	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), lifts, runs)
 	r := chi.NewRouter()
 	h.Mount(r)

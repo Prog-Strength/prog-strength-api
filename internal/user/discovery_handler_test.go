@@ -14,13 +14,17 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
 )
 
-// newDiscoveryFixture builds a memory user repo, a real memory follow repo (so
-// relationships/counts are genuine), and a discovery handler mounted on a real
-// chi router. Returns the router and both repos.
-func newDiscoveryFixture(t *testing.T) (chi.Router, Repository, *follow.MemoryRepository) {
+// newDiscoveryFixture builds a SQLite-backed user repo, a real SQLite follow
+// repo (so relationships/counts are genuine), and a discovery handler mounted on
+// a real chi router. Returns the router and both repos. The user and follow
+// repos use independent ephemeral databases: they query disjoint tables keyed on
+// user IDs and the follows table carries no FK to users, so they need not share
+// a *sql.DB. The fixture seeds genuine follow rows below, so relationship
+// assertions exercise real data rather than empty-DB fallbacks.
+func newDiscoveryFixture(t *testing.T) (chi.Router, Repository, follow.Repository) {
 	t.Helper()
 	userRepo := NewSQLiteRepository(dbtest.New(t))
-	followRepo := follow.NewMemoryRepository()
+	followRepo := follow.NewSQLiteRepository(dbtest.New(t))
 	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), &fakeLiftSource{}, &fakeRunSource{})
 	r := chi.NewRouter()
 	h.Mount(r)

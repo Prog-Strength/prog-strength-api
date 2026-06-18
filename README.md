@@ -123,10 +123,10 @@ A standard envelope (`internal/httpresp/`) wraps every response:
 run) — fastest path for poking at the API.
 
 ```bash
-DATABASE_URL=./dev.db go run ./cmd/api
+DATABASE_URL=./dev.db JWT_SIGNING_KEY=local-dev-do-not-ship go run ./cmd/api
 ```
 
-The server listens on `http://localhost:8080`. State is lost on restart.
+The server listens on `http://localhost:8080`. State persists in the SQLite file at `DATABASE_URL`, so it survives restarts.
 
 ### Run locally (Docker + SQLite)
 

@@ -214,11 +214,15 @@ configured to require them on `main`.
 
 ## Running the API locally
 
-Minimal local run uses in-memory repos and a single-line invocation:
+Minimal local run requires `DATABASE_URL` pointing at a SQLite file
+(created on first run):
 
 ```bash
-JWT_SIGNING_KEY=local-dev-do-not-ship go run ./cmd/api
+DATABASE_URL=./dev.db JWT_SIGNING_KEY=local-dev-do-not-ship go run ./cmd/api
 ```
+
+Tests don't need this: they get their own ephemeral SQLite DB via the
+`internal/db/dbtest` helper (`dbtest.New(t)`).
 
 For more realistic local dev (SQLite, dev-auth, beta gate, OAuth, S3
 TCX archival), see [`README.md`](README.md) — that's the high-level

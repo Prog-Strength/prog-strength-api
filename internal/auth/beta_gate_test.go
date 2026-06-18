@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -17,13 +18,13 @@ import (
 // branches on — h.betaChecker.IsAllowed — including that the decision flips
 // after an admin Add against the live in-memory repo, with no handler rebuild.
 
-func newGateHandler(betaRepo beta.Repository) *Handler {
-	return NewHandler(Config{JWTSecret: []byte("test-secret")}, user.NewMemoryRepository(), betaRepo)
+func newGateHandler(t *testing.T, betaRepo beta.Repository) *Handler {
+	return NewHandler(Config{JWTSecret: []byte("test-secret")}, user.NewSQLiteRepository(dbtest.New(t)), betaRepo)
 }
 
 func TestGate_EmptyRepoAllowsEveryone(t *testing.T) {
 	ctx := context.Background()
-	h := newGateHandler(beta.NewMemoryRepository())
+	h := newGateHandler(t, beta.NewSQLiteRepository(dbtest.New(t)))
 
 	allowed, err := h.betaChecker.IsAllowed(ctx, "anyone@example.com")
 	if err != nil {
@@ -36,11 +37,11 @@ func TestGate_EmptyRepoAllowsEveryone(t *testing.T) {
 
 func TestGate_NonEmptyRepoBlocksAbsentEmail(t *testing.T) {
 	ctx := context.Background()
-	betaRepo := beta.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
 	if err := betaRepo.Add(ctx, "allowed@example.com", "", ""); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	h := newGateHandler(betaRepo)
+	h := newGateHandler(t, betaRepo)
 
 	allowed, err := h.betaChecker.IsAllowed(ctx, "absent@example.com")
 	if err != nil {
@@ -57,12 +58,12 @@ func TestGate_NonEmptyRepoBlocksAbsentEmail(t *testing.T) {
 // delivers over the boot-time env map.
 func TestGate_DecisionFlipsAfterAdd(t *testing.T) {
 	ctx := context.Background()
-	betaRepo := beta.NewMemoryRepository()
+	betaRepo := beta.NewSQLiteRepository(dbtest.New(t))
 	// Seed one allowed email so the table is non-empty (gate active).
 	if err := betaRepo.Add(ctx, "seed@example.com", "", ""); err != nil {
 		t.Fatalf("seed Add: %v", err)
 	}
-	h := newGateHandler(betaRepo)
+	h := newGateHandler(t, betaRepo)
 
 	const target = "newtester@example.com"
 

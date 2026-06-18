@@ -15,6 +15,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // testCipher builds a deterministic AES-256 cipher for tests.
@@ -70,7 +71,7 @@ func publicRouter(h *Handler) http.Handler {
 }
 
 func TestConnectRedirectsToGoogle(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	router := authedRouter(h, "user-1")
 
@@ -119,7 +120,7 @@ func TestConnectRedirectsToGoogle(t *testing.T) {
 }
 
 func TestConnectRequiresUser(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	// Mount authed routes WITHOUT the user-injecting middleware.
 	r := chi.NewRouter()
@@ -143,7 +144,7 @@ func TestCallbackStoresEncryptedConnection(t *testing.T) {
 	})
 	defer tokenSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, tokenSrv.URL)
 	h.httpClient = tokenSrv.Client()
 	router := publicRouter(h)
@@ -192,7 +193,7 @@ func TestCallbackRedirectsToReturnTo(t *testing.T) {
 	})
 	defer tokenSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, tokenSrv.URL)
 	h.httpClient = tokenSrv.Client()
 	router := publicRouter(h)
@@ -218,7 +219,7 @@ func TestCallbackRedirectsToReturnTo(t *testing.T) {
 }
 
 func TestCallbackMismatchedState(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	router := publicRouter(h)
 
@@ -256,7 +257,7 @@ func TestCallbackRejectsForgedStateAccountLinking(t *testing.T) {
 	})
 	defer tokenSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, tokenSrv.URL)
 	h.httpClient = tokenSrv.Client()
 	router := publicRouter(h)
@@ -285,7 +286,7 @@ func TestCallbackRejectsForgedStateAccountLinking(t *testing.T) {
 }
 
 func TestCallbackMissingStateCookie(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	router := publicRouter(h)
 
@@ -307,7 +308,7 @@ func TestCallbackNoRefreshToken(t *testing.T) {
 	})
 	defer tokenSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, tokenSrv.URL)
 	h.httpClient = tokenSrv.Client()
 	router := publicRouter(h)
@@ -337,7 +338,7 @@ func TestCallbackNoRefreshToken(t *testing.T) {
 }
 
 func TestGetConnectionAbsent(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	router := authedRouter(h, "user-1")
 
@@ -351,7 +352,7 @@ func TestGetConnectionAbsent(t *testing.T) {
 }
 
 func TestGetConnectionConnected(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	if err := conns.Upsert(context.Background(), "user-1", []byte("e"), []byte("n"), "primary", CalendarEventsScope, time.Now()); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -368,7 +369,7 @@ func TestGetConnectionConnected(t *testing.T) {
 }
 
 func TestGetConnectionRevoked(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	if err := conns.Upsert(context.Background(), "user-1", []byte("e"), []byte("n"), "primary", CalendarEventsScope, time.Now()); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -396,7 +397,7 @@ func TestDeleteConnectionRevokesAndDeletes(t *testing.T) {
 	}))
 	defer revokeSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	h.httpClient = revokeSrv.Client()
 	h.revokeURL = revokeSrv.URL
@@ -433,7 +434,7 @@ func TestDeleteConnectionRevokeFailureStillDeletes(t *testing.T) {
 	}))
 	defer revokeSrv.Close()
 
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	h.httpClient = revokeSrv.Client()
 	h.revokeURL = revokeSrv.URL
@@ -454,7 +455,7 @@ func TestDeleteConnectionRevokeFailureStillDeletes(t *testing.T) {
 }
 
 func TestDeleteConnectionAbsent(t *testing.T) {
-	conns := calendarconn.NewMemoryRepository()
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
 	h := newHandler(t, conns, "")
 	router := authedRouter(h, "user-1")
 

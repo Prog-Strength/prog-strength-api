@@ -5,22 +5,25 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// newFindOrCreateHandler builds a minimal Handler backed by an in-memory user
-// repository, sufficient to exercise findOrCreateUser (no Google config or JWT
-// signing involved in that path).
-func newFindOrCreateHandler() (*Handler, *user.MemoryRepository) {
-	repo := user.NewMemoryRepository()
-	h := NewHandler(Config{JWTSecret: []byte("test-secret")}, repo, beta.NewMemoryRepository())
+// newFindOrCreateHandler builds a minimal Handler backed by an ephemeral SQLite
+// user repository, sufficient to exercise findOrCreateUser (no Google config or
+// JWT signing involved in that path). The user repo is returned so tests can
+// assert what was persisted; the beta repo gets its own throwaway DB since the
+// findOrCreate path never touches it.
+func newFindOrCreateHandler(t *testing.T) (*Handler, user.Repository) {
+	repo := user.NewSQLiteRepository(dbtest.New(t))
+	h := NewHandler(Config{JWTSecret: []byte("test-secret")}, repo, beta.NewSQLiteRepository(dbtest.New(t)))
 	return h, repo
 }
 
 // TestFindOrCreate_NewUserPersistsAvatar verifies a brand-new Google user has
 // the picture URL stored as oauth_avatar_url.
 func TestFindOrCreate_NewUserPersistsAvatar(t *testing.T) {
-	h, repo := newFindOrCreateHandler()
+	h, repo := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	u, err := h.findOrCreateUser(ctx, "new@example.com", "New", "https://pic.example/a.png")
@@ -43,7 +46,7 @@ func TestFindOrCreate_NewUserPersistsAvatar(t *testing.T) {
 // TestFindOrCreate_ExistingUserRefreshesChangedAvatar verifies an existing user
 // with a different picture URL gets it opportunistically refreshed on login.
 func TestFindOrCreate_ExistingUserRefreshesChangedAvatar(t *testing.T) {
-	h, repo := newFindOrCreateHandler()
+	h, repo := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	if _, err := h.findOrCreateUser(ctx, "u@example.com", "U", "https://pic.example/old.png"); err != nil {
@@ -66,7 +69,7 @@ func TestFindOrCreate_ExistingUserRefreshesChangedAvatar(t *testing.T) {
 // leaves oauth_avatar_url nil, and an empty picture on an existing login does
 // not overwrite a stored value.
 func TestFindOrCreate_EmptyPictureLeavesNil(t *testing.T) {
-	h, _ := newFindOrCreateHandler()
+	h, _ := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	u, err := h.findOrCreateUser(ctx, "np@example.com", "NP", "")
@@ -93,7 +96,7 @@ func TestFindOrCreate_EmptyPictureLeavesNil(t *testing.T) {
 // TestFindOrCreate_NewUserGetsValidHandle verifies a brand-new user comes back
 // with a non-nil, valid, persisted handle auto-assigned from their display name.
 func TestFindOrCreate_NewUserGetsValidHandle(t *testing.T) {
-	h, repo := newFindOrCreateHandler()
+	h, repo := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	u, err := h.findOrCreateUser(ctx, "sam@example.com", "Sam Lifter", "")
@@ -120,7 +123,7 @@ func TestFindOrCreate_NewUserGetsValidHandle(t *testing.T) {
 // display names slugify to the same base receive DISTINCT valid handles (the
 // uniqueness probe sees the first user's handle when generating the second).
 func TestFindOrCreate_TwoUsersGetDistinctHandles(t *testing.T) {
-	h, _ := newFindOrCreateHandler()
+	h, _ := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	a, err := h.findOrCreateUser(ctx, "sam1@example.com", "Sam Lifter", "")
@@ -142,7 +145,7 @@ func TestFindOrCreate_TwoUsersGetDistinctHandles(t *testing.T) {
 // TestFindOrCreate_DevTokenPathEmptyPicture verifies the dev-token style call
 // (empty avatarURL) succeeds without error and leaves oauth_avatar_url nil.
 func TestFindOrCreate_DevTokenPathEmptyPicture(t *testing.T) {
-	h, _ := newFindOrCreateHandler()
+	h, _ := newFindOrCreateHandler(t)
 	ctx := context.Background()
 
 	u, err := h.findOrCreateUser(ctx, "dev@example.com", "dev@example.com", "")

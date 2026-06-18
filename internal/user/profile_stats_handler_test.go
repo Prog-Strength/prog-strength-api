@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
 )
 
@@ -52,7 +53,7 @@ func (f *fakeRunSource) ListRunningSamplesSince(_ context.Context, _ string, sin
 // sources plus a real memory user + follow repo, mounted on a chi router.
 func newStatsFixture(t *testing.T, lifts LiftSessionSource, runs RunningSampleSource) (chi.Router, Repository, *follow.MemoryRepository) {
 	t.Helper()
-	userRepo := NewMemoryRepository()
+	userRepo := NewSQLiteRepository(dbtest.New(t))
 	followRepo := follow.NewMemoryRepository()
 	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), lifts, runs)
 	r := chi.NewRouter()

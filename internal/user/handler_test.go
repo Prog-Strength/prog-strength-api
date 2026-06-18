@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // envelope mirrors the success shape from httpresp, with Data typed as a
@@ -21,7 +22,7 @@ type envelope struct {
 }
 
 func TestGetMe_ReturnsUser(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := &User{Email: "lifter@example.com", DisplayName: "Lifter", WeightUnit: WeightUnitPounds, DistanceUnit: DistanceUnitMiles}
 	if err := repo.Create(context.Background(), u); err != nil {
 		t.Fatalf("seed user: %v", err)
@@ -72,7 +73,7 @@ func patchMe(repo Repository, userID, body string) *httptest.ResponseRecorder {
 }
 
 func TestUpdateMe_UpdatesDistanceUnit(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"distance_unit":"km"}`)
@@ -94,7 +95,7 @@ func TestUpdateMe_UpdatesDistanceUnit(t *testing.T) {
 }
 
 func TestUpdateMe_InvalidDistanceUnit(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"distance_unit":"furlongs"}`)
@@ -113,7 +114,7 @@ func TestUpdateMe_InvalidDistanceUnit(t *testing.T) {
 }
 
 func TestUpdateMe_DisplayNameOnlyLeavesUnitsUnchanged(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"display_name":"New Name"}`)
@@ -137,7 +138,7 @@ func TestUpdateMe_DisplayNameOnlyLeavesUnitsUnchanged(t *testing.T) {
 }
 
 func TestUpdateMe_SetsUsernameCanonicalized(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"username":"@JimLifts"}`)
@@ -155,7 +156,7 @@ func TestUpdateMe_SetsUsernameCanonicalized(t *testing.T) {
 }
 
 func TestUpdateMe_InvalidUsername(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"username":"jim-lifts"}`)
@@ -169,7 +170,7 @@ func TestUpdateMe_InvalidUsername(t *testing.T) {
 }
 
 func TestUpdateMe_ReservedUsername(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"username":"admin"}`)
@@ -179,7 +180,7 @@ func TestUpdateMe_ReservedUsername(t *testing.T) {
 }
 
 func TestUpdateMe_UsernameTakenConflict(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	a := seedUser(t, repo)
 	b := &User{Email: "b@example.com", DisplayName: "B", WeightUnit: WeightUnitPounds, DistanceUnit: DistanceUnitMiles}
 	if err := repo.Create(context.Background(), b); err != nil {
@@ -197,7 +198,7 @@ func TestUpdateMe_UsernameTakenConflict(t *testing.T) {
 }
 
 func TestGetMe_NotFound(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 
 	req := httptest.NewRequest("GET", "/me", nil)
 	req = req.WithContext(authctx.WithUserID(req.Context(), "nonexistent"))
@@ -231,7 +232,7 @@ func decodeMe(t *testing.T, w *httptest.ResponseRecorder) meResponse {
 // --- A5: GET /me resolved avatar_url -------------------------------------
 
 func TestGetMe_AvatarKeyPresignsURL(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	u := seedUser(t, repo)
 	u.AvatarKey = ptrString("user_id=u1/x.png")
@@ -255,7 +256,7 @@ func TestGetMe_AvatarKeyPresignsURL(t *testing.T) {
 }
 
 func TestGetMe_OAuthFallbackWhenNoAvatarKey(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	u := seedUser(t, repo)
 	u.OAuthAvatarURL = ptrString("https://oauth.example/pic.png")
@@ -279,7 +280,7 @@ func TestGetMe_OAuthFallbackWhenNoAvatarKey(t *testing.T) {
 }
 
 func TestGetMe_AvatarNullWhenNeitherSet(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	u := seedUser(t, repo)
 
@@ -297,7 +298,7 @@ func TestGetMe_AvatarNullWhenNeitherSet(t *testing.T) {
 // --- A6: PATCH /me height + validation -----------------------------------
 
 func TestUpdateMe_SetsHeight(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"height_cm":180}`)
@@ -319,7 +320,7 @@ func TestUpdateMe_SetsHeight(t *testing.T) {
 }
 
 func TestUpdateMe_SetsBio(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"bio":"I lift things up and put them down."}`)
@@ -341,7 +342,7 @@ func TestUpdateMe_SetsBio(t *testing.T) {
 }
 
 func TestUpdateMe_EmptyBioClears(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	u.Bio = ptrString("existing bio")
 	if err := repo.Update(context.Background(), u); err != nil {
@@ -363,7 +364,7 @@ func TestUpdateMe_EmptyBioClears(t *testing.T) {
 }
 
 func TestUpdateMe_OmittedBioUnchanged(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	u.Bio = ptrString("keep me")
 	if err := repo.Update(context.Background(), u); err != nil {
@@ -382,7 +383,7 @@ func TestUpdateMe_OmittedBioUnchanged(t *testing.T) {
 }
 
 func TestUpdateMe_OverlongBioRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	body := `{"bio":"` + strings.Repeat("a", BioMaxLen+1) + `"}`
 	w := patchMe(repo, u.ID, body)
@@ -397,7 +398,7 @@ func TestUpdateMe_OverlongBioRejected(t *testing.T) {
 }
 
 func TestUpdateMe_EmptyNameRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	w := patchMe(repo, u.ID, `{"display_name":""}`)
 	if w.Code != http.StatusBadRequest {
@@ -406,7 +407,7 @@ func TestUpdateMe_EmptyNameRejected(t *testing.T) {
 }
 
 func TestUpdateMe_OverlongNameRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	body := `{"display_name":"` + strings.Repeat("a", 61) + `"}`
 	w := patchMe(repo, u.ID, body)
@@ -416,7 +417,7 @@ func TestUpdateMe_OverlongNameRejected(t *testing.T) {
 }
 
 func TestUpdateMe_SetsTimezoneAndCalendarDetail(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"timezone":"America/New_York","calendar_default_detail":"full_agenda"}`)
@@ -441,7 +442,7 @@ func TestUpdateMe_SetsTimezoneAndCalendarDetail(t *testing.T) {
 }
 
 func TestUpdateMe_InvalidTimezoneRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"timezone":"Not/AZone"}`)
@@ -451,7 +452,7 @@ func TestUpdateMe_InvalidTimezoneRejected(t *testing.T) {
 }
 
 func TestUpdateMe_InvalidCalendarDetailRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 
 	w := patchMe(repo, u.ID, `{"calendar_default_detail":"bogus"}`)
@@ -461,7 +462,7 @@ func TestUpdateMe_InvalidCalendarDetailRejected(t *testing.T) {
 }
 
 func TestUpdateMe_OutOfRangeHeightRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, repo)
 	w := patchMe(repo, u.ID, `{"height_cm":300}`)
 	if w.Code != http.StatusBadRequest {
@@ -512,7 +513,7 @@ func doUpload(t *testing.T, h *Handler, userID string, data []byte) *httptest.Re
 }
 
 func TestUploadAvatar_ValidPNG(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
 	u := seedUser(t, repo)
@@ -533,7 +534,7 @@ func TestUploadAvatar_ValidPNG(t *testing.T) {
 }
 
 func TestUploadAvatar_TagsPreviousKey(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
 	u := seedUser(t, repo)
@@ -554,7 +555,7 @@ func TestUploadAvatar_TagsPreviousKey(t *testing.T) {
 }
 
 func TestUploadAvatar_OversizedRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
 	u := seedUser(t, repo)
@@ -568,7 +569,7 @@ func TestUploadAvatar_OversizedRejected(t *testing.T) {
 }
 
 func TestUploadAvatar_UnsupportedTypeRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
 	u := seedUser(t, repo)
@@ -580,7 +581,7 @@ func TestUploadAvatar_UnsupportedTypeRejected(t *testing.T) {
 }
 
 func TestDeleteAvatar_ClearsAndTagsAndReturnsFallback(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
 	u := seedUser(t, repo)
@@ -616,7 +617,7 @@ func TestDeleteAvatar_ClearsAndTagsAndReturnsFallback(t *testing.T) {
 }
 
 func TestAvatarEndpoints_NoStoreReturns503(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	h := NewHandler(repo, nil)
 	u := seedUser(t, repo)
 

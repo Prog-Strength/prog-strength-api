@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
 )
 
@@ -18,7 +19,7 @@ import (
 // chi router. Returns the router and both repos.
 func newDiscoveryFixture(t *testing.T) (chi.Router, Repository, *follow.MemoryRepository) {
 	t.Helper()
-	userRepo := NewMemoryRepository()
+	userRepo := NewSQLiteRepository(dbtest.New(t))
 	followRepo := follow.NewMemoryRepository()
 	h := NewDiscoveryHandler(userRepo, followRepo, NewFakeAvatarStore(), &fakeLiftSource{}, &fakeRunSource{})
 	r := chi.NewRouter()

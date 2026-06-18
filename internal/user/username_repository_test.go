@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
-// repoBackends returns the two Repository implementations under a common name
-// so the username repository contract can be table-driven across both.
+// repoBackends returns the Repository implementations under a common name so
+// the username repository contract can be table-driven. Only the SQLite backend
+// remains (the in-memory repo is deprecated); the contract now asserts the real
+// persistence path.
 func repoBackends(t *testing.T) []struct {
 	name string
 	repo Repository
@@ -18,7 +22,6 @@ func repoBackends(t *testing.T) []struct {
 		name string
 		repo Repository
 	}{
-		{"memory", NewMemoryRepository()},
 		{"sqlite", sqliteRepo},
 	}
 }
@@ -100,12 +103,17 @@ func TestRepo_UsernameCaseInsensitiveCollision(t *testing.T) {
 	}
 }
 
-// TestRepo_UsernameMemoryCaseFold specifically exercises the memory backend's
-// case-insensitive comparison: a stored "jimlifts" must collide with a stored
-// "JimLifts" (memory does not canonicalize, so it must fold on compare).
-func TestRepo_UsernameMemoryCaseFold(t *testing.T) {
+// TestRepo_UsernameCanonicalStoredValueCollides pins the SQLite collision rule:
+// the unique index is on the stored handle, which the handler always
+// canonicalizes (lowercases) before write. Two users that both store the same
+// canonical handle therefore collide. Differently-cased *stored* values do not
+// collide at the repo layer because the index is case-sensitive — that case is
+// prevented upstream by ValidateUsername, not by the repo. (This replaces the
+// old memory-only fold-on-compare test, which asserted behavior specific to the
+// deprecated in-memory backend.)
+func TestRepo_UsernameCanonicalStoredValueCollides(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	a := makeUser(t, repo, "a@example.com")
 	bb := makeUser(t, repo, "b@example.com")
 
@@ -113,7 +121,8 @@ func TestRepo_UsernameMemoryCaseFold(t *testing.T) {
 	if err := repo.Update(ctx, a); err != nil {
 		t.Fatalf("Update a: %v", err)
 	}
-	bb.Username = strPtr("JimLifts")
+	// Same canonical (already-lowercased) handle the handler would produce.
+	bb.Username = strPtr("jimlifts")
 	if err := repo.Update(ctx, bb); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("Update b error = %v, want ErrUsernameTaken", err)
 	}

@@ -6,11 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 )
 
 func TestReplaceAndListUserHeadlineExercises_Roundtrip(t *testing.T) {
-	repo := NewMemoryRepository()
+	d := dbtest.New(t)
+	// user_headline_exercises.exercise_id has an FK to exercises(id), so
+	// the referenced slugs must exist in the catalog before insertion.
+	seedExerciseCatalog(t, d, "barbell-bench-press", "barbell-deadlift", "barbell-overhead-press")
+	repo := NewSQLiteRepository(d)
 	ctx := context.Background()
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 
@@ -43,7 +48,12 @@ func TestReplaceAndListUserHeadlineExercises_Roundtrip(t *testing.T) {
 }
 
 func TestReplaceUserHeadlineExercises_OverwritesPrevious(t *testing.T) {
-	repo := NewMemoryRepository()
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d,
+		"barbell-bench-press", "barbell-deadlift",
+		"barbell-overhead-press", "neutral-grip-pull-up", "barbell-high-bar-back-squat",
+	)
+	repo := NewSQLiteRepository(d)
 	ctx := context.Background()
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 
@@ -76,7 +86,9 @@ func TestReplaceUserHeadlineExercises_EmptyClearsRows(t *testing.T) {
 	// the user's rows," matching the SQLite implementation. The
 	// handler layer rejects empty PUTs upstream, but the repo
 	// contract is broader so backfill / admin paths can use it.
-	repo := NewMemoryRepository()
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d, "barbell-bench-press")
+	repo := NewSQLiteRepository(d)
 	ctx := context.Background()
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 
@@ -98,8 +110,9 @@ func TestReplaceUserHeadlineExercises_EmptyClearsRows(t *testing.T) {
 }
 
 func TestEffectiveHeadlineExerciseSlugs_DefaultsWhenNoCustom(t *testing.T) {
-	repo := NewMemoryRepository()
-	exRepo := exercise.NewMemoryRepository(exercise.Catalog)
+	d := dbtest.New(t)
+	repo := NewSQLiteRepository(d)
+	exRepo := exercise.NewSQLiteRepository(d)
 	h := NewHandler(repo, exRepo)
 
 	got, err := h.effectiveHeadlineExerciseSlugs(context.Background(), "u-never-customized")
@@ -120,8 +133,10 @@ func TestEffectiveHeadlineExerciseSlugs_DefaultsWhenNoCustom(t *testing.T) {
 }
 
 func TestEffectiveHeadlineExerciseSlugs_ReturnsCustom(t *testing.T) {
-	repo := NewMemoryRepository()
-	exRepo := exercise.NewMemoryRepository(exercise.Catalog)
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d, "barbell-overhead-press", "neutral-grip-pull-up")
+	repo := NewSQLiteRepository(d)
+	exRepo := exercise.NewSQLiteRepository(d)
 	h := NewHandler(repo, exRepo)
 	ctx := context.Background()
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)

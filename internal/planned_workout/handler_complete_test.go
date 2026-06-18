@@ -4,10 +4,12 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 func TestComplete_Workout200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1","session_kind":"workout"}`)
@@ -24,7 +26,7 @@ func TestComplete_Workout200(t *testing.T) {
 }
 
 func TestComplete_Activity200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"act-9","session_kind":"activity"}`)
@@ -38,7 +40,7 @@ func TestComplete_Activity200(t *testing.T) {
 }
 
 func TestComplete_MissingSessionID400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_kind":"workout"}`)
 	if w.Code != http.StatusBadRequest {
@@ -47,7 +49,7 @@ func TestComplete_MissingSessionID400(t *testing.T) {
 }
 
 func TestComplete_MissingSessionKind400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1"}`)
 	if w.Code != http.StatusBadRequest {
@@ -56,7 +58,7 @@ func TestComplete_MissingSessionKind400(t *testing.T) {
 }
 
 func TestComplete_InvalidSessionKind400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1","session_kind":"bogus"}`)
 	if w.Code != http.StatusBadRequest {
@@ -65,7 +67,7 @@ func TestComplete_InvalidSessionKind400(t *testing.T) {
 }
 
 func TestComplete_CrossUser404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "user-a")
 	w := doCal(t, repo, nil, nil, "user-b", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1","session_kind":"workout"}`)
 	if w.Code != http.StatusNotFound {
@@ -74,7 +76,7 @@ func TestComplete_CrossUser404(t *testing.T) {
 }
 
 func TestComplete_SyncedRewritesGoogleEvent(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	// Mark the plan as Google-synced so completion triggers a rewrite.
 	eventID := "evt-1"
@@ -97,7 +99,7 @@ func TestComplete_SyncedRewritesGoogleEvent(t *testing.T) {
 }
 
 func TestComplete_NotSyncedSkipsRewrite(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{}
 
@@ -109,7 +111,7 @@ func TestComplete_NotSyncedSkipsRewrite(t *testing.T) {
 }
 
 func TestComplete_RewriteErrorStill200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	eventID := "evt-1"
 	if err := repo.SetGoogleSync(context.Background(), "u1", id, &eventID, SyncSynced, nil); err != nil {

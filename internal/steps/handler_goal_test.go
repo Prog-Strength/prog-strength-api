@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // goalEnvelope mirrors the httpresp success shape with the goal DTO typed.
@@ -16,8 +17,9 @@ type goalEnvelope struct {
 	Data    goalDTO `json:"data"`
 }
 
-func newGoalHandler() *Handler {
-	return NewHandler(NewMemoryRepository())
+func newGoalHandler(t *testing.T) *Handler {
+	t.Helper()
+	return NewHandler(NewSQLiteRepository(dbtest.New(t)))
 }
 
 func getGoal(t *testing.T, h *Handler) *httptest.ResponseRecorder {
@@ -51,7 +53,7 @@ func decodeGoal(t *testing.T, w *httptest.ResponseRecorder) goalDTO {
 }
 
 func TestGetMyStepsGoal_EmptyState(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 	w := getGoal(t, h)
 	// Snapshot the raw body before decoding consumes the buffer.
 	raw := w.Body.String()
@@ -69,7 +71,7 @@ func TestGetMyStepsGoal_EmptyState(t *testing.T) {
 }
 
 func TestPutMyStepsGoal_HappyPath(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 	got := decodeGoal(t, putGoal(t, h, `{"goal":10000}`))
 	if got.Goal != 10000 {
 		t.Errorf("goal = %d, want 10000", got.Goal)
@@ -91,7 +93,7 @@ func TestPutMyStepsGoal_Validation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newGoalHandler()
+			h := newGoalHandler(t)
 			w := putGoal(t, h, tt.body)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
@@ -101,7 +103,7 @@ func TestPutMyStepsGoal_Validation(t *testing.T) {
 }
 
 func TestPutMyStepsGoal_SecondPutWins(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 	first := decodeGoal(t, putGoal(t, h, `{"goal":10000}`))
 	if first.Goal != 10000 {
 		t.Fatalf("first goal = %d, want 10000", first.Goal)

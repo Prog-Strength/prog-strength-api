@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -33,8 +34,8 @@ func newSQLiteTestRepo(t *testing.T) *SQLiteRepository {
 
 func TestGetBodyweightGoal_EmptyState(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertEmptyGoal(t, NewMemoryRepository(), ctx)
+	t.Run("dbtest", func(t *testing.T) {
+		assertEmptyGoal(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 	})
 	t.Run("sqlite", func(t *testing.T) {
 		assertEmptyGoal(t, newSQLiteTestRepo(t), ctx)
@@ -60,8 +61,8 @@ func assertEmptyGoal(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestUpsertBodyweightGoal_InsertThenUpdate(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpsertRoundtrip(t, NewMemoryRepository(), ctx)
+	t.Run("dbtest", func(t *testing.T) {
+		assertUpsertRoundtrip(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 	})
 	t.Run("sqlite", func(t *testing.T) {
 		assertUpsertRoundtrip(t, newSQLiteTestRepo(t), ctx)
@@ -124,8 +125,8 @@ func assertUpsertRoundtrip(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestUpdateEntry_HappyPath(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpdateEntryHappy(t, NewMemoryRepository(), ctx)
+	t.Run("dbtest", func(t *testing.T) {
+		assertUpdateEntryHappy(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 	})
 	t.Run("sqlite", func(t *testing.T) {
 		assertUpdateEntryHappy(t, newSQLiteTestRepo(t), ctx)
@@ -171,8 +172,8 @@ func assertUpdateEntryHappy(t *testing.T, repo Repository, ctx context.Context) 
 
 func TestUpdateEntry_SoftDeletedReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpdateSoftDeleted(t, NewMemoryRepository(), ctx)
+	t.Run("dbtest", func(t *testing.T) {
+		assertUpdateSoftDeleted(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 	})
 	t.Run("sqlite", func(t *testing.T) {
 		assertUpdateSoftDeleted(t, newSQLiteTestRepo(t), ctx)
@@ -201,8 +202,8 @@ func assertUpdateSoftDeleted(t *testing.T, repo Repository, ctx context.Context)
 
 func TestUpdateEntry_CrossUserReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpdateCrossUser(t, NewMemoryRepository(), ctx)
+	t.Run("dbtest", func(t *testing.T) {
+		assertUpdateCrossUser(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 	})
 	t.Run("sqlite", func(t *testing.T) {
 		assertUpdateCrossUser(t, newSQLiteTestRepo(t), ctx)

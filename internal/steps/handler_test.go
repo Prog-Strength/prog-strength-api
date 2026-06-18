@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // entryEnvelope mirrors the httpresp success shape with the entry DTO typed.
@@ -81,7 +82,7 @@ func assertBadRequest(t *testing.T, w *httptest.ResponseRecorder) {
 // --- PUT /steps/{date} -------------------------------------------------
 
 func TestUpsertHandler_HappyPath(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, "u1", "PUT", "/steps/2026-06-14", `{"steps":8400}`)
 	got := decodeEntry(t, w)
 	if got.Date != "2026-06-14" {
@@ -96,7 +97,7 @@ func TestUpsertHandler_HappyPath(t *testing.T) {
 }
 
 func TestUpsertHandler_ReLogOverwrites(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	_ = decodeEntry(t, do(t, repo, "u1", "PUT", "/steps/2026-06-14", `{"steps":8400}`))
 	got := decodeEntry(t, do(t, repo, "u1", "PUT", "/steps/2026-06-14", `{"steps":12000}`))
 	if got.Steps != 12000 {
@@ -105,13 +106,13 @@ func TestUpsertHandler_ReLogOverwrites(t *testing.T) {
 }
 
 func TestUpsertHandler_BadDate(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, "u1", "PUT", "/steps/2026-13-99", `{"steps":8400}`)
 	assertBadRequest(t, w)
 }
 
 func TestUpsertHandler_FutureDateRejected(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	// Three days ahead of today's UTC date — past the one-day slack.
 	future := time.Now().UTC().AddDate(0, 0, 3).Format(dateLayout)
 	w := do(t, repo, "u1", "PUT", "/steps/"+future, `{"steps":8400}`)
@@ -119,7 +120,7 @@ func TestUpsertHandler_FutureDateRejected(t *testing.T) {
 }
 
 func TestUpsertHandler_TomorrowAllowed(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	// One day ahead is within the slack for tz midnight crossing.
 	tomorrow := time.Now().UTC().AddDate(0, 0, 1).Format(dateLayout)
 	w := do(t, repo, "u1", "PUT", "/steps/"+tomorrow, `{"steps":8400}`)
@@ -129,13 +130,13 @@ func TestUpsertHandler_TomorrowAllowed(t *testing.T) {
 }
 
 func TestUpsertHandler_NegativeSteps(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, "u1", "PUT", "/steps/2026-06-14", `{"steps":-1}`)
 	assertBadRequest(t, w)
 }
 
 func TestUpsertHandler_StepsOverMax(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, "u1", "PUT", "/steps/2026-06-14", fmt.Sprintf(`{"steps":%d}`, MaxSteps+1))
 	assertBadRequest(t, w)
 }
@@ -143,7 +144,7 @@ func TestUpsertHandler_StepsOverMax(t *testing.T) {
 // --- DELETE /steps/{date} ----------------------------------------------
 
 func TestDeleteHandler_NoContentThenNotFound(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	if _, err := repo.UpsertEntry(context.Background(), &Entry{UserID: "u1", Date: "2026-06-14", Steps: 8400}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -161,7 +162,7 @@ func TestDeleteHandler_NoContentThenNotFound(t *testing.T) {
 // --- GET /steps keyset shape -------------------------------------------
 
 func TestListHandler_KeysetShape(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	for _, d := range []string{"2026-06-10", "2026-06-11", "2026-06-12"} {
 		if _, err := repo.UpsertEntry(ctx, &Entry{UserID: "u1", Date: d, Steps: 1000}); err != nil {
@@ -188,7 +189,7 @@ func TestListHandler_KeysetShape(t *testing.T) {
 }
 
 func TestListHandler_RangeNextBeforeNull(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	if _, err := repo.UpsertEntry(ctx, &Entry{UserID: "u1", Date: "2026-06-12", Steps: 1000}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -204,7 +205,7 @@ func TestListHandler_RangeNextBeforeNull(t *testing.T) {
 }
 
 func TestListHandler_BadSince(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, "u1", "GET", "/steps?since=nope", "")
 	assertBadRequest(t, w)
 }
@@ -212,7 +213,7 @@ func TestListHandler_BadSince(t *testing.T) {
 // --- Authz: cross-user isolation ---------------------------------------
 
 func TestAuthz_UserBCannotSeeOrDeleteUserAEntries(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	if _, err := repo.UpsertEntry(ctx, &Entry{UserID: "user-a", Date: "2026-06-14", Steps: 8400}); err != nil {
 		t.Fatalf("seed: %v", err)

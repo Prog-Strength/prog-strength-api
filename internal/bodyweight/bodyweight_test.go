@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -31,7 +32,7 @@ func TestEntry_ValidateRequiresMeasuredAt(t *testing.T) {
 }
 
 func TestCreateGetListDelete_Roundtrip(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	e := &Entry{
@@ -70,7 +71,7 @@ func TestCreateGetListDelete_Roundtrip(t *testing.T) {
 }
 
 func TestList_FiltersByRangeAndSortsDescending(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	mustLog := func(t *testing.T, measuredAt time.Time, weight float64) {
@@ -116,7 +117,7 @@ func TestList_FiltersByRangeAndSortsDescending(t *testing.T) {
 }
 
 func TestList_ExcludesSoftDeleted(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 
 	entry := &Entry{

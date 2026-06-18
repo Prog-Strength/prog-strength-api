@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -64,7 +65,7 @@ func decodeEntry(t *testing.T, w *httptest.ResponseRecorder) entryDTO {
 }
 
 func TestUpdateHandler_HappyPath(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	e := seedEntry(t, repo, "u1", 185, user.WeightUnitPounds)
 
 	w := updateEntry(t, repo, "u1", e.ID, `{"weight":183.5}`)
@@ -78,7 +79,7 @@ func TestUpdateHandler_HappyPath(t *testing.T) {
 }
 
 func TestUpdateHandler_SoftDeletedReturns404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	e := seedEntry(t, repo, "u1", 180, user.WeightUnitPounds)
 	if err := repo.Delete(context.Background(), "u1", e.ID); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -90,7 +91,7 @@ func TestUpdateHandler_SoftDeletedReturns404(t *testing.T) {
 }
 
 func TestUpdateHandler_CrossUserReturns404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	e := seedEntry(t, repo, "user-a", 180, user.WeightUnitPounds)
 	// user-b must not be able to update user-a's entry.
 	w := updateEntry(t, repo, "user-b", e.ID, `{"weight":999}`)
@@ -107,7 +108,7 @@ func TestUpdateHandler_CrossUserReturns404(t *testing.T) {
 }
 
 func TestUpdateHandler_WeightZeroReturns400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	e := seedEntry(t, repo, "u1", 180, user.WeightUnitPounds)
 	w := updateEntry(t, repo, "u1", e.ID, `{"weight":0}`)
 	if w.Code != http.StatusBadRequest {
@@ -123,7 +124,7 @@ func TestUpdateHandler_WeightZeroReturns400(t *testing.T) {
 }
 
 func TestUpdateHandler_PartialPreservesWeightAndUnit(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	e := seedEntry(t, repo, "u1", 185, user.WeightUnitKilograms)
 
 	newMeasured := time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC)

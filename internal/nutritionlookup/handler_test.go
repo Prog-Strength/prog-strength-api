@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 var errAlwaysDown = errors.New("provider down")
@@ -41,7 +42,8 @@ func getLookup(t *testing.T, svc *Service, rawQuery string) *httptest.ResponseRe
 
 // happyService returns a service whose single fake provider serves one
 // candidate.
-func happyService() (*Service, *fakeProvider) {
+func happyService(t *testing.T) (*Service, *fakeProvider) {
+	t.Helper()
 	fs := &fakeProvider{
 		source:     "fatsecret",
 		configured: true,
@@ -51,7 +53,7 @@ func happyService() (*Service, *fakeProvider) {
 			"fatsecret", "12345",
 		)},
 	}
-	return NewService(NewMemoryRepository(), testLogger(), fs), fs
+	return NewService(NewSQLiteRepository(dbtest.New(t)), testLogger(), fs), fs
 }
 
 func TestLookupParamValidation(t *testing.T) {
@@ -72,7 +74,7 @@ func TestLookupParamValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, fs := happyService()
+			svc, fs := happyService(t)
 			w := getLookup(t, svc, tt.rawQuery)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body: %s)", w.Code, w.Body.String())
@@ -92,7 +94,7 @@ func TestLookupParamValidation(t *testing.T) {
 }
 
 func TestLookupSuccessEnvelope(t *testing.T) {
-	svc, _ := happyService()
+	svc, _ := happyService(t)
 	w := getLookup(t, svc, "query=chicken+minis&quantity=2&max_results=3")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
@@ -120,7 +122,7 @@ func TestLookupSuccessEnvelope(t *testing.T) {
 }
 
 func TestLookupDefaultsQuantityAndMaxResults(t *testing.T) {
-	svc, fs := happyService()
+	svc, fs := happyService(t)
 	w := getLookup(t, svc, "query=chicken+minis")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
@@ -139,7 +141,7 @@ func TestLookupDefaultsQuantityAndMaxResults(t *testing.T) {
 
 func TestLookupUnavailableWhenNoProvidersConfigured(t *testing.T) {
 	svc := NewService(
-		NewMemoryRepository(),
+		NewSQLiteRepository(dbtest.New(t)),
 		testLogger(),
 		&fakeProvider{source: "fatsecret"},
 		&fakeProvider{source: "usda"},
@@ -159,7 +161,7 @@ func TestLookupUnavailableWhenNoProvidersConfigured(t *testing.T) {
 
 func TestLookupFailedWhenAllProvidersDownAndNoCache(t *testing.T) {
 	svc := NewService(
-		NewMemoryRepository(),
+		NewSQLiteRepository(dbtest.New(t)),
 		testLogger(),
 		&fakeProvider{source: "fatsecret", configured: true, err: errAlwaysDown},
 		&fakeProvider{source: "usda", configured: true, err: errAlwaysDown},
@@ -181,7 +183,7 @@ func TestLookupFailedWhenAllProvidersDownAndNoCache(t *testing.T) {
 }
 
 func TestLookupMissingUserInContextIs500(t *testing.T) {
-	svc, _ := happyService()
+	svc, _ := happyService(t)
 	r := chi.NewRouter()
 	NewHandler(svc, testLogger()).Mount(r)
 	req := httptest.NewRequest("GET", "/nutrition/lookup?query=eggs", nil)

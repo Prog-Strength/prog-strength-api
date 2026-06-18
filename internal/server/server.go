@@ -166,127 +166,115 @@ func New(cfg config.Config) (*Server, error) {
 		priceTable = usage.DefaultPriceTable()
 	}
 
-	if cfg.DatabaseURL != "" {
-		// SQLite mode.
-		log.Printf("using SQLite database at %s", cfg.DatabaseURL)
+	// DATABASE_URL is required: the in-memory repositories were dev-only
+	// scaffolding and have been removed, so a SQLite file path is the only
+	// supported persistence backend. Fail fast with an actionable message
+	// rather than silently booting against non-durable storage.
+	if cfg.DatabaseURL == "" {
+		return nil, errors.New("DATABASE_URL is required; set it to a SQLite file path, e.g. DATABASE_URL=./dev.db")
+	}
 
-		database, err := db.Open(cfg.DatabaseURL)
+	// SQLite mode.
+	log.Printf("using SQLite database at %s", cfg.DatabaseURL)
+
+	database, err := db.Open(cfg.DatabaseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Run migrations.
+	if err := db.Migrate(database); err != nil {
+		return nil, err
+	}
+
+	// Create SQLite repositories.
+	exerciseRepo = exercise.NewSQLiteRepository(database)
+	sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
+	workoutRepo = sqliteWorkoutRepo
+	userRepo = user.NewSQLiteRepository(database)
+	nutritionRepo = nutrition.NewSQLiteRepository(database)
+	bodyweightRepo = bodyweight.NewSQLiteRepository(database)
+	plannedWorkoutRepo = plannedworkout.NewSQLiteRepository(database)
+	stepsRepo = steps.NewSQLiteRepository(database)
+	chatRepo = chat.NewSQLiteRepository(database)
+	activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
+	nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
+	timelineRepo = timeline.NewSQLiteRepository(database)
+	calendarConnRepo = calendarconn.NewSQLiteRepository(database)
+	followRepo = follow.NewSQLiteRepository(database)
+	betaSQLiteRepo := beta.NewSQLiteRepository(database)
+	betaRepo = betaSQLiteRepo
+
+	// Sync exercise catalog: catalog.go is the source of truth; this
+	// upserts new entries and updates non-key fields on existing ones.
+	if err := exerciseRepo.(*exercise.SQLiteRepository).SyncCatalog(context.Background(), exercise.Catalog); err != nil {
+		return nil, err
+	}
+
+	// Backfill the 1RM history table for any workouts that existed
+	// before this feature shipped. No-op when the table is already
+	// populated, so it stays cheap on every subsequent startup.
+	if err := sqliteWorkoutRepo.BackfillOneRepMaxHistory(context.Background()); err != nil {
+		return nil, err
+	}
+
+	// Same pattern for the personal records and event tables. Both
+	// derived from `workouts`; both gated on count > 0.
+	if err := sqliteWorkoutRepo.BackfillPersonalRecords(context.Background()); err != nil {
+		return nil, err
+	}
+
+	// Backfill running best efforts from each live running activity's
+	// archived TCX. Gated on activity_best_efforts being empty, so it
+	// runs once after migration 016 ships and is a no-op thereafter.
+	if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityBestEfforts(context.Background()); err != nil {
+		return nil, err
+	}
+
+	// Seed the timeline feed index from existing workouts, runs, PR
+	// events, and best efforts. Gated on timeline_post being empty, so it
+	// runs once after migration 019 ships and is a no-op thereafter.
+	if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
+		return nil, err
+	}
+
+	// One-time seed of the beta allowlist from BETA_ALLOWED_EMAILS.
+	// Guarded by an empty-table check inside SeedFromEnv, so it carries
+	// the live env list into the DB on the first boot after this feature
+	// ships and is a no-op thereafter (never overwriting admin edits).
+	if n, err := betaSQLiteRepo.SeedFromEnv(context.Background(), cfg.BetaAllowedEmails); err != nil {
+		return nil, err
+	} else if n > 0 {
+		log.Printf("seeded %d beta allowed email(s) from BETA_ALLOWED_EMAILS", n)
+	}
+
+	// Telemetry uses its own SQLite file so high-volume agent
+	// writes don't share locks or Litestream backups with the
+	// application data. Same migration pattern as app.db, just
+	// pointed at a different embed.FS.
+	if cfg.TelemetryDatabaseURL != "" {
+		log.Printf("using telemetry SQLite database at %s", cfg.TelemetryDatabaseURL)
+		telemetryDB, err := db.Open(cfg.TelemetryDatabaseURL)
 		if err != nil {
 			return nil, err
 		}
-
-		// Run migrations.
-		if err := db.Migrate(database); err != nil {
+		if err := db.MigrateTelemetry(telemetryDB); err != nil {
 			return nil, err
 		}
-
-		// Create SQLite repositories.
-		exerciseRepo = exercise.NewSQLiteRepository(database)
-		sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
-		workoutRepo = sqliteWorkoutRepo
-		userRepo = user.NewSQLiteRepository(database)
-		nutritionRepo = nutrition.NewSQLiteRepository(database)
-		bodyweightRepo = bodyweight.NewSQLiteRepository(database)
-		plannedWorkoutRepo = plannedworkout.NewSQLiteRepository(database)
-		stepsRepo = steps.NewSQLiteRepository(database)
-		chatRepo = chat.NewSQLiteRepository(database)
-		activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
-		nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
-		timelineRepo = timeline.NewSQLiteRepository(database)
-		calendarConnRepo = calendarconn.NewSQLiteRepository(database)
-		followRepo = follow.NewSQLiteRepository(database)
-		betaSQLiteRepo := beta.NewSQLiteRepository(database)
-		betaRepo = betaSQLiteRepo
-
-		// Sync exercise catalog: catalog.go is the source of truth; this
-		// upserts new entries and updates non-key fields on existing ones.
-		if err := exerciseRepo.(*exercise.SQLiteRepository).SyncCatalog(context.Background(), exercise.Catalog); err != nil {
-			return nil, err
-		}
-
-		// Backfill the 1RM history table for any workouts that existed
-		// before this feature shipped. No-op when the table is already
-		// populated, so it stays cheap on every subsequent startup.
-		if err := sqliteWorkoutRepo.BackfillOneRepMaxHistory(context.Background()); err != nil {
-			return nil, err
-		}
-
-		// Same pattern for the personal records and event tables. Both
-		// derived from `workouts`; both gated on count > 0.
-		if err := sqliteWorkoutRepo.BackfillPersonalRecords(context.Background()); err != nil {
-			return nil, err
-		}
-
-		// Backfill running best efforts from each live running activity's
-		// archived TCX. Gated on activity_best_efforts being empty, so it
-		// runs once after migration 016 ships and is a no-op thereafter.
-		if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityBestEfforts(context.Background()); err != nil {
-			return nil, err
-		}
-
-		// Seed the timeline feed index from existing workouts, runs, PR
-		// events, and best efforts. Gated on timeline_post being empty, so it
-		// runs once after migration 019 ships and is a no-op thereafter.
-		if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
-			return nil, err
-		}
-
-		// One-time seed of the beta allowlist from BETA_ALLOWED_EMAILS.
-		// Guarded by an empty-table check inside SeedFromEnv, so it carries
-		// the live env list into the DB on the first boot after this feature
-		// ships and is a no-op thereafter (never overwriting admin edits).
-		if n, err := betaSQLiteRepo.SeedFromEnv(context.Background(), cfg.BetaAllowedEmails); err != nil {
-			return nil, err
-		} else if n > 0 {
-			log.Printf("seeded %d beta allowed email(s) from BETA_ALLOWED_EMAILS", n)
-		}
-
-		// Telemetry uses its own SQLite file so high-volume agent
-		// writes don't share locks or Litestream backups with the
-		// application data. Same migration pattern as app.db, just
-		// pointed at a different embed.FS.
-		if cfg.TelemetryDatabaseURL != "" {
-			log.Printf("using telemetry SQLite database at %s", cfg.TelemetryDatabaseURL)
-			telemetryDB, err := db.Open(cfg.TelemetryDatabaseURL)
-			if err != nil {
-				return nil, err
-			}
-			if err := db.MigrateTelemetry(telemetryDB); err != nil {
-				return nil, err
-			}
-			telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
-			telemetry.NewHandlerWithIntentSink(telemetryRepo, chatRepo).Mount(r)
-			// Usage ledger reads the same telemetry.db handle to price
-			// per-user daily spend for GET /me/usage (mounted below in
-			// the JWT-gated group).
-			usageLedger = usage.NewLedger(telemetryDB, priceTable)
-			// Daily TTL: NULLs content/arguments_json/result_summary
-			// after 90 days. Metadata (token counts, latencies, tool
-			// names, timestamps) is kept indefinitely. Background
-			// goroutine; survives until process exit.
-			telemetryRepo.StartContentTTL(context.Background(), telemetry.ContentRetention)
-			log.Println("telemetry: agent event recording enabled")
-		} else {
-			log.Println("telemetry: disabled (TELEMETRY_DATABASE_URL unset)")
-		}
+		telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
+		telemetry.NewHandlerWithIntentSink(telemetryRepo, chatRepo).Mount(r)
+		// Usage ledger reads the same telemetry.db handle to price
+		// per-user daily spend for GET /me/usage (mounted below in
+		// the JWT-gated group).
+		usageLedger = usage.NewLedger(telemetryDB, priceTable)
+		// Daily TTL: NULLs content/arguments_json/result_summary
+		// after 90 days. Metadata (token counts, latencies, tool
+		// names, timestamps) is kept indefinitely. Background
+		// goroutine; survives until process exit.
+		telemetryRepo.StartContentTTL(context.Background(), telemetry.ContentRetention)
+		log.Println("telemetry: agent event recording enabled")
 	} else {
-		// In-memory mode (default for local dev without DATABASE_URL).
-		log.Println("using in-memory repositories")
-
-		exerciseRepo = exercise.NewMemoryRepository(exercise.Catalog)
-		workoutRepo = workout.NewMemoryRepository()
-		userRepo = user.NewMemoryRepository()
-		nutritionRepo = nutrition.NewMemoryRepository()
-		bodyweightRepo = bodyweight.NewMemoryRepository()
-		plannedWorkoutRepo = plannedworkout.NewMemoryRepository()
-		stepsRepo = steps.NewMemoryRepository()
-		chatRepo = chat.NewMemoryRepository()
-		activityRepo = activity.NewMemoryRepository(activityArchiver)
-		nutritionLookupRepo = nutritionlookup.NewMemoryRepository()
-		timelineRepo = timeline.NewMemoryRepository()
-		calendarConnRepo = calendarconn.NewMemoryRepository()
-		followRepo = follow.NewMemoryRepository()
-		betaRepo = beta.NewMemoryRepository()
+		log.Println("telemetry: disabled (TELEMETRY_DATABASE_URL unset)")
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -18,7 +19,7 @@ func okHandler(reached *bool) http.Handler {
 }
 
 // seedUser creates a user and returns its ID.
-func seedUser(t *testing.T, repo *user.MemoryRepository, email string) string {
+func seedUser(t *testing.T, repo user.Repository, email string) string {
 	t.Helper()
 	u := &user.User{
 		Email:        email,
@@ -128,7 +129,7 @@ func TestRequireUser_NoTokenRejected(t *testing.T) {
 }
 
 func TestRequireAdmin_AdminPasses(t *testing.T) {
-	repo := user.NewMemoryRepository()
+	repo := user.NewSQLiteRepository(dbtest.New(t))
 	id := seedUser(t, repo, "Admin@Example.com")
 
 	var reached bool
@@ -149,7 +150,7 @@ func TestRequireAdmin_AdminPasses(t *testing.T) {
 }
 
 func TestRequireAdmin_NonAdminForbidden(t *testing.T) {
-	repo := user.NewMemoryRepository()
+	repo := user.NewSQLiteRepository(dbtest.New(t))
 	id := seedUser(t, repo, "user@example.com")
 
 	var reached bool
@@ -169,7 +170,7 @@ func TestRequireAdmin_NonAdminForbidden(t *testing.T) {
 }
 
 func TestRequireAdmin_EmptyAdminListDeniesEveryone(t *testing.T) {
-	repo := user.NewMemoryRepository()
+	repo := user.NewSQLiteRepository(dbtest.New(t))
 	id := seedUser(t, repo, "admin@example.com")
 
 	var reached bool
@@ -189,7 +190,7 @@ func TestRequireAdmin_EmptyAdminListDeniesEveryone(t *testing.T) {
 }
 
 func TestRequireAdmin_NoUserInContextDenied(t *testing.T) {
-	repo := user.NewMemoryRepository()
+	repo := user.NewSQLiteRepository(dbtest.New(t))
 
 	var reached bool
 	h := RequireAdmin(repo, []string{"admin@example.com"})(okHandler(&reached))
@@ -208,7 +209,7 @@ func TestRequireAdmin_NoUserInContextDenied(t *testing.T) {
 }
 
 func TestRequireAdmin_UnresolvableUserDenied(t *testing.T) {
-	repo := user.NewMemoryRepository()
+	repo := user.NewSQLiteRepository(dbtest.New(t))
 
 	var reached bool
 	h := RequireAdmin(repo, []string{"admin@example.com"})(okHandler(&reached))

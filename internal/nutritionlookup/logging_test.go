@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 )
 
@@ -123,7 +124,7 @@ func TestServiceLogsCacheHitWithRequestID(t *testing.T) {
 	// CloudWatch filter-by-request-id workflow depends on.
 	var buf bytes.Buffer
 	logger := NewLogger(&buf, slog.LevelDebug)
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	svc := NewService(repo, logger, &fakeProvider{})
 	ctx := ctxWithRequestID(t, "req-cache-hit")
 

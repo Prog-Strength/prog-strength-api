@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,4 +227,27 @@ func newSQLiteRepo(t *testing.T) (*SQLiteRepository, *sql.DB) {
 		t.Fatalf("Migrate: %v", err)
 	}
 	return NewSQLiteRepository(sqlDB), sqlDB
+}
+
+// uuid is a quick "give me a deterministic uuid-shaped string" helper.
+// The repos only check format, not version bits — any 8-4-4-4-12 hex
+// string passes. Fixture readability beats correct-version v4 noise.
+func uuid(n int) string {
+	s := pad(n*1111111111, 32) // up to 32 hex chars
+	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
+}
+
+func pad(n int, w int) string {
+	const hex = "0123456789abcdef"
+	out := make([]byte, w)
+	for i := range out {
+		out[i] = '0'
+	}
+	i := w
+	for n > 0 && i > 0 {
+		i--
+		out[i] = hex[n&0xf]
+		n >>= 4
+	}
+	return strings.ToLower(string(out))
 }

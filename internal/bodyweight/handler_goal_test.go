@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // goalEnvelope mirrors the httpresp success shape with the goal DTO typed
@@ -21,9 +22,10 @@ type goalErrEnvelope struct {
 	Error string `json:"error"`
 }
 
-func newGoalHandler() *Handler {
+func newGoalHandler(t *testing.T) *Handler {
+	t.Helper()
 	// userRepo is unused by the goal handlers; nil is fine here.
-	return NewHandler(NewMemoryRepository(), nil)
+	return NewHandler(NewSQLiteRepository(dbtest.New(t)), nil)
 }
 
 // getGoal drives getMyBodyweightGoal with userID-in-context.
@@ -73,7 +75,7 @@ func assertGoalBadRequest(t *testing.T, w *httptest.ResponseRecorder, wantMsg st
 }
 
 func TestGetMyBodyweightGoal_EmptyState(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 	w := getGoal(t, h)
 	got := decodeGoal(t, w)
 	if got.Weight != 0 {
@@ -88,7 +90,7 @@ func TestGetMyBodyweightGoal_EmptyState(t *testing.T) {
 }
 
 func TestPutMyBodyweightGoal_HappyPath(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 	w := putGoal(t, h, `{"weight":175,"unit":"lb"}`)
 	got := decodeGoal(t, w)
 	if got.Weight != 175 {
@@ -117,7 +119,7 @@ func TestPutMyBodyweightGoal_Validation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newGoalHandler()
+			h := newGoalHandler(t)
 			w := putGoal(t, h, tt.body)
 			assertGoalBadRequest(t, w, tt.wantMsg)
 		})
@@ -125,7 +127,7 @@ func TestPutMyBodyweightGoal_Validation(t *testing.T) {
 }
 
 func TestPutMyBodyweightGoal_SecondPutWins(t *testing.T) {
-	h := newGoalHandler()
+	h := newGoalHandler(t)
 
 	first := decodeGoal(t, putGoal(t, h, `{"weight":175,"unit":"lb"}`))
 	if first.Weight != 175 {

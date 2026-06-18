@@ -41,7 +41,7 @@ var _ PlanMatcher = (*fakePlanMatcher)(nil)
 // calls OnSessionLogged exactly once with the new activity id and its start
 // time.
 func TestPlanMatcher_RunningUploadFiresOnSessionLogged(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -81,7 +81,7 @@ func TestPlanMatcher_RunningUploadFiresOnSessionLogged(t *testing.T) {
 // cycling TCX, which the ingest pipeline classifies as ActivityCycling) does
 // NOT call OnSessionLogged — only running activities reconcile against a plan.
 func TestPlanMatcher_NonRunningUploadDoesNotFire(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -98,7 +98,7 @@ func TestPlanMatcher_NonRunningUploadDoesNotFire(t *testing.T) {
 // TestPlanMatcher_DeleteFiresOnSessionDeleted proves deleting an activity calls
 // OnSessionDeleted with that activity id.
 func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -131,7 +131,7 @@ func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
 // with no matcher set must not panic (existing tests exercise this implicitly;
 // this asserts it explicitly).
 func TestPlanMatcher_NilIsNoOp(t *testing.T) {
-	h, _, repo := newTestHandler()
+	h, _, repo := newTestHandler(t)
 	// no SetPlanMatcher call — planMatcher stays nil.
 
 	if w := doImport(t, h, readFixture(t, "typical_5k.tcx")); w.Code != http.StatusCreated {

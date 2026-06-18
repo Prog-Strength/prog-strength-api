@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // TestGetPersonalRecordEventsByIDs_SQLite seeds PR events by creating a
@@ -27,11 +29,14 @@ func TestGetPersonalRecordEventsByIDs_SQLite(t *testing.T) {
 	assertGetPREventsByIDs(t, repo, w.ID)
 }
 
-// TestGetPersonalRecordEventsByIDs_Memory mirrors the SQLite test against the
-// in-memory repository so both backends are covered.
-func TestGetPersonalRecordEventsByIDs_Memory(t *testing.T) {
+// TestGetPersonalRecordEventsByIDs_SecondBackend mirrors the primary test on
+// an independent ephemeral SQLite database, keeping a second isolated-DB
+// path covered now that the in-memory backend is being retired.
+func TestGetPersonalRecordEventsByIDs_SecondBackend(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMemoryRepository()
+	d := dbtest.New(t)
+	repo := NewSQLiteRepository(d)
+	seedExerciseCatalog(t, d, "barbell-bench-press", "back-squat")
 
 	w := &Workout{
 		UserID:      "u1",

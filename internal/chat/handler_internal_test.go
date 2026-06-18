@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 func TestGetSessionIntent_Found(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	ctx := context.Background()
 	id := "11111111-2222-4333-8444-555555555555"
 	if err := repo.CreateSession(ctx, &Session{ID: id, UserID: "u-1"}); err != nil {
@@ -53,7 +55,7 @@ func TestGetSessionIntent_Found(t *testing.T) {
 }
 
 func TestGetSessionIntent_NoIntentYet(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := "11111111-2222-4333-8444-555555555555"
 	_ = repo.CreateSession(context.Background(), &Session{ID: id, UserID: "u-1"})
 
@@ -74,7 +76,7 @@ func TestGetSessionIntent_NoIntentYet(t *testing.T) {
 
 func TestGetSessionIntent_UnknownSession_Returns200WithNulls(t *testing.T) {
 	// SOW: return the same shape on 404 to keep the agent client trivial.
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	r := chi.NewRouter()
 	NewHandler(repo).MountInternal(r)
 

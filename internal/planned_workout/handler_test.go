@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -88,7 +89,7 @@ func seedUser(t *testing.T, repo user.Repository, tz string) *user.User {
 }
 
 func TestCreateHandler_BareBlock(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"America/New_York"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	created := decodePlan(t, w, http.StatusCreated)
@@ -111,7 +112,7 @@ func TestCreateHandler_BareBlock(t *testing.T) {
 }
 
 func TestCreateHandler_WithAgenda(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"scheduled_start":"2026-07-01T09:00:00Z",
 		"scheduled_end":"2026-07-01T10:00:00Z",
@@ -150,7 +151,7 @@ func TestCreateHandler_WithAgenda(t *testing.T) {
 }
 
 func TestCreateHandler_Run(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"activity_kind":"run",
 		"scheduled_start":"2026-07-01T06:00:00Z",
@@ -179,7 +180,7 @@ func TestCreateHandler_Run(t *testing.T) {
 }
 
 func TestCreateHandler_RunWithExercisesIs400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"activity_kind":"run",
 		"scheduled_start":"2026-07-01T06:00:00Z",
@@ -194,7 +195,7 @@ func TestCreateHandler_RunWithExercisesIs400(t *testing.T) {
 }
 
 func TestUpdateHandler_SwitchLiftToRunClearsAgenda(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	// Start as a lift with an agenda.
 	create := `{
 		"scheduled_start":"2026-07-01T09:00:00Z",
@@ -219,8 +220,8 @@ func TestUpdateHandler_SwitchLiftToRunClearsAgenda(t *testing.T) {
 }
 
 func TestCreateHandler_DefaultsTimezoneFromUser(t *testing.T) {
-	repo := NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	u := seedUser(t, userRepo, "America/New_York")
 
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z"}`
@@ -232,8 +233,8 @@ func TestCreateHandler_DefaultsTimezoneFromUser(t *testing.T) {
 }
 
 func TestCreateHandler_DefaultsTimezoneUTCOnRepoError(t *testing.T) {
-	repo := NewMemoryRepository()
-	userRepo := user.NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
+	userRepo := user.NewSQLiteRepository(dbtest.New(t))
 	// No user seeded → GetByID returns ErrNotFound → fallback "UTC".
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z"}`
 	w := do(t, repo, userRepo, "missing-user", "POST", "/planned-workouts/", body)
@@ -244,7 +245,7 @@ func TestCreateHandler_DefaultsTimezoneUTCOnRepoError(t *testing.T) {
 }
 
 func TestListHandler_FiltersByRange(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	mk := func(start, end string) string {
 		return `{"scheduled_start":"` + start + `","scheduled_end":"` + end + `","timezone":"UTC"}`
 	}
@@ -263,7 +264,7 @@ func TestListHandler_FiltersByRange(t *testing.T) {
 }
 
 func TestListHandler_BadSince(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?since=nope", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
@@ -277,7 +278,7 @@ func TestListHandler_BadSince(t *testing.T) {
 // [00:00Z, 24:00Z), which dropped the evening plan; the timezone-aware contract
 // queries the Denver day [06:00Z, +1d 06:00Z) and returns both.
 func TestListHandler_TimezoneDateWindow(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	mk := func(start, end string) string {
 		return `{"scheduled_start":"` + start + `","scheduled_end":"` + end + `","timezone":"America/Denver"}`
 	}
@@ -306,7 +307,7 @@ func TestListHandler_TimezoneDateWindow(t *testing.T) {
 // 6 PM MDT on 2026-06-17 — the plan the model previously misread as "midnight
 // tomorrow" and dropped from "today" because the DTO emitted UTC.
 func TestDTO_RendersScheduledTimesInPlanTimezone(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-06-18T00:00:00Z","scheduled_end":"2026-06-18T01:00:00Z","timezone":"America/Denver"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	if w.Code != http.StatusCreated {
@@ -336,7 +337,7 @@ func TestDTO_RendersScheduledTimesInPlanTimezone(t *testing.T) {
 // render on the local date 2026-06-17 — the UTC-stored plan must not surface as
 // "June 18" just because its creation timezone differs from the viewer's.
 func TestListHandler_RendersAllPlansInRequestTimezone(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	mkTZ := func(start, end, tz string) string {
 		return `{"scheduled_start":"` + start + `","scheduled_end":"` + end + `","timezone":"` + tz + `"}`
 	}
@@ -368,7 +369,7 @@ func TestListHandler_RendersAllPlansInRequestTimezone(t *testing.T) {
 }
 
 func TestListHandler_BadTimezone(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := do(t, repo, nil, "u1", "GET", "/planned-workouts/?timezone=Not/AZone&date=2026-06-17", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d want 400, body=%s", w.Code, w.Body.String())
@@ -376,7 +377,7 @@ func TestListHandler_BadTimezone(t *testing.T) {
 }
 
 func TestUpdateHandler_RescheduleAndReplaceAgenda(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC",
 		"exercises":[{"exercise_id":"squat","sets":[{"target_reps":5}]}]
@@ -404,7 +405,7 @@ func TestUpdateHandler_RescheduleAndReplaceAgenda(t *testing.T) {
 }
 
 func TestUpdateHandler_KeepsAgendaWhenExercisesAbsent(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC",
 		"exercises":[{"exercise_id":"squat","sets":[{"target_reps":5}]}]
@@ -423,7 +424,7 @@ func TestUpdateHandler_KeepsAgendaWhenExercisesAbsent(t *testing.T) {
 }
 
 func TestUpdateHandler_EmptyAgendaClears(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{
 		"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC",
 		"exercises":[{"exercise_id":"squat","sets":[{"target_reps":5}]}]
@@ -439,7 +440,7 @@ func TestUpdateHandler_EmptyAgendaClears(t *testing.T) {
 }
 
 func TestDeleteHandler(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC"}`
 	created := decodePlan(t, do(t, repo, nil, "u1", "POST", "/planned-workouts/", body), http.StatusCreated)
 
@@ -454,7 +455,7 @@ func TestDeleteHandler(t *testing.T) {
 }
 
 func TestSkipHandler(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC"}`
 	created := decodePlan(t, do(t, repo, nil, "u1", "POST", "/planned-workouts/", body), http.StatusCreated)
 
@@ -469,7 +470,7 @@ func TestSkipHandler(t *testing.T) {
 }
 
 func TestAuthz_CrossUserReturns404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC"}`
 	created := decodePlan(t, do(t, repo, nil, "user-a", "POST", "/planned-workouts/", body), http.StatusCreated)
 
@@ -492,7 +493,7 @@ func TestAuthz_CrossUserReturns404(t *testing.T) {
 }
 
 func TestValidation_EndBeforeStart(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T10:00:00Z","scheduled_end":"2026-07-01T09:00:00Z","timezone":"UTC"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	if w.Code != http.StatusBadRequest {
@@ -501,7 +502,7 @@ func TestValidation_EndBeforeStart(t *testing.T) {
 }
 
 func TestValidation_BadTimezone(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"Mars/Olympus"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	if w.Code != http.StatusBadRequest {
@@ -510,7 +511,7 @@ func TestValidation_BadTimezone(t *testing.T) {
 }
 
 func TestValidation_BadCalendarDetail(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC","calendar_detail":"nope"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	if w.Code != http.StatusBadRequest {
@@ -519,7 +520,7 @@ func TestValidation_BadCalendarDetail(t *testing.T) {
 }
 
 func TestCreateHandler_MissingStartIs400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	body := `{"scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC"}`
 	w := do(t, repo, nil, "u1", "POST", "/planned-workouts/", body)
 	if w.Code != http.StatusBadRequest {

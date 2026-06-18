@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
@@ -66,15 +67,18 @@ func (f fakeTokens) Token(ctx context.Context, userID, refreshToken string) (str
 
 const testUserID = "user-1"
 
-// newTestService wires a Service over memory repos + a real cipher with a
-// connected user and a single seeded plan, returning the service, the plan id,
-// and the repos for assertions.
+// newTestService wires a Service over ephemeral SQLite repos + a real cipher
+// with a connected user and a single seeded plan, returning the service, the
+// plan id, and the repos for assertions. The connection, plan, and user repos
+// share ONE database so the service's per-user reads (connection, plan,
+// CalendarDefaultDetail) all resolve against the same testUserID rows.
 func newTestService(t *testing.T, client CalendarClient, tokens tokenMinter) (*Service, string, calendarconn.Repository, plannedworkout.Repository) {
 	t.Helper()
 
-	conns := calendarconn.NewMemoryRepository()
-	plans := plannedworkout.NewMemoryRepository()
-	users := user.NewMemoryRepository()
+	db := dbtest.New(t)
+	conns := calendarconn.NewSQLiteRepository(db)
+	plans := plannedworkout.NewSQLiteRepository(db)
+	users := user.NewSQLiteRepository(db)
 
 	cipher, err := NewCipher(make([]byte, 32))
 	if err != nil {

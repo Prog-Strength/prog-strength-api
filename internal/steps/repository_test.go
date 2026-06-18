@@ -2,33 +2,12 @@ package steps
 
 import (
 	"context"
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
-
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
-
-// newSQLiteTestRepo spins up a migrated SQLite DB in a temp dir and returns
-// a repository against it. Exercises the real SQL (and the 019_steps
-// migration) end to end.
-func newSQLiteTestRepo(t *testing.T) *SQLiteRepository {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_journal_mode=WAL")
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { d.Close() })
-	if err := db.Migrate(d); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return NewSQLiteRepository(d)
-}
 
 // strptr is a helper for the *string range/keyset bounds.
 func strptr(s string) *string { return &s }
@@ -37,12 +16,7 @@ func strptr(s string) *string { return &s }
 
 func TestUpsertEntry_ReplacesNotDuplicates(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpsertReplaces(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertUpsertReplaces(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertUpsertReplaces(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertUpsertReplaces(t *testing.T, repo Repository, ctx context.Context) {
@@ -93,12 +67,7 @@ func assertUpsertReplaces(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestUpsertEntry_RejectsOutOfRange(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertUpsertOutOfRange(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertUpsertOutOfRange(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertUpsertOutOfRange(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertUpsertOutOfRange(t *testing.T, repo Repository, ctx context.Context) {
@@ -115,12 +84,7 @@ func assertUpsertOutOfRange(t *testing.T, repo Repository, ctx context.Context) 
 
 func TestList_RangeInclusiveBounds(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertRangeInclusive(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertRangeInclusive(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertRangeInclusive(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertRangeInclusive(t *testing.T, repo Repository, ctx context.Context) {
@@ -152,12 +116,7 @@ func assertRangeInclusive(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestList_KeysetPagination(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertKeyset(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertKeyset(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertKeyset(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertKeyset(t *testing.T, repo Repository, ctx context.Context) {
@@ -209,7 +168,7 @@ func assertKeyset(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestList_KeysetWinsOverRange(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	seedDays(t, repo, ctx, "u1", map[string]int{
 		"2026-06-10": 100,
 		"2026-06-11": 200,
@@ -229,12 +188,7 @@ func TestList_KeysetWinsOverRange(t *testing.T) {
 
 func TestDelete_HardDeleteAndNotFound(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertDelete(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertDelete(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertDelete(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertDelete(t *testing.T, repo Repository, ctx context.Context) {
@@ -261,12 +215,7 @@ func assertDelete(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestDelete_CrossUserNotFound(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertDeleteCrossUser(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertDeleteCrossUser(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertDeleteCrossUser(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertDeleteCrossUser(t *testing.T, repo Repository, ctx context.Context) {
@@ -292,12 +241,7 @@ func assertDeleteCrossUser(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestList_ScopedToUser(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertListScoped(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertListScoped(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertListScoped(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertListScoped(t *testing.T, repo Repository, ctx context.Context) {
@@ -321,12 +265,7 @@ func assertListScoped(t *testing.T, repo Repository, ctx context.Context) {
 
 func TestGoal_InsertThenUpdate(t *testing.T) {
 	ctx := context.Background()
-	t.Run("memory", func(t *testing.T) {
-		assertGoalRoundtrip(t, NewMemoryRepository(), ctx)
-	})
-	t.Run("sqlite", func(t *testing.T) {
-		assertGoalRoundtrip(t, newSQLiteTestRepo(t), ctx)
-	})
+	assertGoalRoundtrip(t, NewSQLiteRepository(dbtest.New(t)), ctx)
 }
 
 func assertGoalRoundtrip(t *testing.T, repo Repository, ctx context.Context) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
@@ -81,7 +82,9 @@ func doCreate(t *testing.T, h *Handler, performedAt time.Time) (*httptest.Respon
 // TestPlanMatcher_CreateFiresOnSessionLogged proves creating a workout calls
 // OnSessionLogged once with the new workout id and its PerformedAt.
 func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
-	h := NewHandler(NewMemoryRepository(), exercise.NewMemoryRepository(exercise.Catalog))
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d, "barbell-bench-press")
+	h := NewHandler(NewSQLiteRepository(d), exercise.NewSQLiteRepository(d))
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -106,8 +109,10 @@ func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
 // TestPlanMatcher_DeleteFiresOnSessionDeleted proves deleting a workout calls
 // OnSessionDeleted with that workout id and the owning user.
 func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
-	repo := NewMemoryRepository()
-	h := NewHandler(repo, exercise.NewMemoryRepository(exercise.Catalog))
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d, "barbell-bench-press")
+	repo := NewSQLiteRepository(d)
+	h := NewHandler(repo, exercise.NewSQLiteRepository(d))
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -150,8 +155,10 @@ func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
 // TestPlanMatcher_NilIsNoOp proves the nil-safe path: create + delete with no
 // matcher set must not panic.
 func TestPlanMatcher_NilIsNoOp(t *testing.T) {
-	repo := NewMemoryRepository()
-	h := NewHandler(repo, exercise.NewMemoryRepository(exercise.Catalog))
+	d := dbtest.New(t)
+	seedExerciseCatalog(t, d, "barbell-bench-press")
+	repo := NewSQLiteRepository(d)
+	h := NewHandler(repo, exercise.NewSQLiteRepository(d))
 	// no SetPlanMatcher call — planMatcher stays nil.
 
 	_, created := doCreate(t, h, time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC))

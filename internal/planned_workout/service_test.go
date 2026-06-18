@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // seedRunPlan seeds a planned-status run plan with the given start (UTC) and tz,
@@ -37,7 +39,7 @@ func markSynced(t *testing.T, repo Repository, userID, planID string) {
 }
 
 func TestService_LinkCompletion_SyncedRewrites(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	markSynced(t, repo, "u1", id)
 
@@ -67,7 +69,7 @@ func TestService_LinkCompletion_SyncedRewrites(t *testing.T) {
 }
 
 func TestService_Unlink_RevertsAndResyncs(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	markSynced(t, repo, "u1", id)
 
@@ -98,7 +100,7 @@ func TestService_Unlink_RevertsAndResyncs(t *testing.T) {
 }
 
 func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	const ny = "America/New_York"
 	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC) // 1:30pm NY
 	id := seedRunPlan(t, repo, "u1", planStart, ny)
@@ -142,7 +144,7 @@ func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
 }
 
 func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	const ny = "America/New_York"
 	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC)
 	id := seedRunPlan(t, repo, "u1", planStart, ny)
@@ -167,7 +169,7 @@ func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
 }
 
 func TestService_OnSessionDeleted_NoLinkIsNoOp(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	svc := NewService(repo)
 	svc.SetCalendar(&fakeScheduler{})
 	// No plan links act-x; must not panic or error.

@@ -4,10 +4,12 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 func TestMacroGoals_GetReturnsZeroWhenNeverSet(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	g, err := repo.GetMacroGoals(context.Background(), "user-a")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -22,7 +24,7 @@ func TestMacroGoals_GetReturnsZeroWhenNeverSet(t *testing.T) {
 }
 
 func TestMacroGoals_UpsertSetsCreatedAndUpdatedOnInsert(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 	saved, err := repo.UpsertMacroGoals(context.Background(), MacroGoals{
 		UserID:   "user-a",
@@ -40,7 +42,7 @@ func TestMacroGoals_UpsertSetsCreatedAndUpdatedOnInsert(t *testing.T) {
 }
 
 func TestMacroGoals_UpsertPreservesCreatedAtOnUpdate(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	t0 := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 	first, _ := repo.UpsertMacroGoals(context.Background(), MacroGoals{
 		UserID: "user-a", ProteinG: 100, CarbsG: 200, FatG: 50, Calories: 1800,

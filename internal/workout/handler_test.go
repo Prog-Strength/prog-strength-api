@@ -11,14 +11,23 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// newExerciseHistoryHandler wires a workout handler over in-memory repos
-// seeded with the canonical exercise catalog.
-func newExerciseHistoryHandler() *Handler {
-	return NewHandler(NewMemoryRepository(), exercise.NewMemoryRepository(exercise.Catalog))
+// newExerciseHistoryHandler wires a workout handler over ephemeral SQLite
+// repos sharing one DB, seeded with the canonical exercise catalog. The
+// exercise SQLite repo needs the catalog rows populated via SyncCatalog
+// because these handlers read exercise metadata (name, muscle groups).
+func newExerciseHistoryHandler(t *testing.T) *Handler {
+	t.Helper()
+	d := dbtest.New(t)
+	exRepo := exercise.NewSQLiteRepository(d)
+	if err := exRepo.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
+		t.Fatalf("SyncCatalog: %v", err)
+	}
+	return NewHandler(NewSQLiteRepository(d), exRepo)
 }
 
 // withURLParam attaches a chi URL param to the request context.
@@ -39,9 +48,14 @@ type errCodeEnvelope struct {
 }
 
 func TestExerciseOneRMHistory_HappyPath(t *testing.T) {
-	repo := NewMemoryRepository()
-	h := NewHandler(repo, exercise.NewMemoryRepository(exercise.Catalog))
 	ctx := context.Background()
+	d := dbtest.New(t)
+	repo := NewSQLiteRepository(d)
+	exRepo := exercise.NewSQLiteRepository(d)
+	if err := exRepo.SyncCatalog(ctx, exercise.Catalog); err != nil {
+		t.Fatalf("SyncCatalog: %v", err)
+	}
+	h := NewHandler(repo, exRepo)
 
 	// Two workouts on the same exercise at different dates create two
 	// history points; create them out of chronological order to prove the
@@ -122,7 +136,7 @@ func callProgression(t *testing.T, h *Handler, rawQuery string) *httptest.Respon
 }
 
 func TestProgressionHandler_MovementPattern_Push(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "movement_pattern=push")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -147,7 +161,7 @@ func TestProgressionHandler_MovementPattern_Push(t *testing.T) {
 }
 
 func TestProgressionHandler_MovementPattern_All(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "movement_pattern=all")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -167,7 +181,7 @@ func TestProgressionHandler_MovementPattern_All(t *testing.T) {
 }
 
 func TestProgressionHandler_MissingFilter(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -182,7 +196,7 @@ func TestProgressionHandler_MissingFilter(t *testing.T) {
 }
 
 func TestProgressionHandler_ConflictingFilters(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "movement_pattern=push&muscle_group=chest")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -197,7 +211,7 @@ func TestProgressionHandler_ConflictingFilters(t *testing.T) {
 }
 
 func TestProgressionHandler_MuscleGroupLegacy(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "muscle_group=chest")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
@@ -218,7 +232,7 @@ func TestProgressionHandler_MuscleGroupLegacy(t *testing.T) {
 }
 
 func TestProgressionHandler_InvalidMuscleGroup(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 	w := callProgression(t, h, "muscle_group=not-a-muscle")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
@@ -238,7 +252,7 @@ func equalStrings(a, b []string) bool {
 }
 
 func TestExerciseOneRMHistory_UnknownExercise(t *testing.T) {
-	h := newExerciseHistoryHandler()
+	h := newExerciseHistoryHandler(t)
 
 	req := httptest.NewRequest("GET", "/personal-records/not-a-real-exercise/history", nil)
 	req = withURLParam(req, "exercise_id", "not-a-real-exercise")

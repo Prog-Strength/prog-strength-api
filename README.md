@@ -81,8 +81,7 @@ see [`AGENTS.md`](./AGENTS.md).
   types, repository interface, handler, and errors. There is no top-level
   `models/`, `services/`, or `handlers/` directory and no `pkg/` directory.
 - **Repository pattern** for persistence. Every domain defines a
-  `Repository` interface with an in-memory implementation today and a
-  SQLite implementation as the target.
+  `Repository` interface with a single SQLite implementation.
 - **SQLite + Litestream** for storage. The DB file is bind-mounted into the
   container and continuously replicated to S3 with a 24-hour PITR window.
 - **JWT (HS256) auth** with Google OAuth as the only identity provider.
@@ -118,15 +117,16 @@ A standard envelope (`internal/httpresp/`) wraps every response:
 
 ## Quick Start
 
-### Run locally (in-memory)
+### Run locally
 
-No Docker, no persistence — fastest path for poking at the API.
+`DATABASE_URL` is required; point it at a SQLite file (created on first
+run) — fastest path for poking at the API.
 
 ```bash
-go run cmd/api/main.go
+DATABASE_URL=./dev.db JWT_SIGNING_KEY=local-dev-do-not-ship go run ./cmd/api
 ```
 
-The server listens on `http://localhost:8080`. State is lost on restart.
+The server listens on `http://localhost:8080`. State persists in the SQLite file at `DATABASE_URL`, so it survives restarts.
 
 ### Run locally (Docker + SQLite)
 
@@ -197,12 +197,12 @@ plate math.
 ## Configuration
 
 All configuration is read from environment variables. Local development
-works with everything unset; production uses the secrets listed in
-[`DEPLOYMENT.md`](./DEPLOYMENT.md#repository-secrets).
+requires `DATABASE_URL`; the rest can be left unset. Production uses the
+secrets listed in [`DEPLOYMENT.md`](./DEPLOYMENT.md#repository-secrets).
 
 | Variable                | Default            | Purpose                                          |
 | ----------------------- | ------------------ | ------------------------------------------------ |
-| `DATABASE_URL`          | in-memory          | Path to the SQLite DB file.                      |
+| `DATABASE_URL`          | (required)         | Path to the SQLite DB file. Required — no default. |
 | `SERVER_ADDR`           | `:8080`            | HTTP listen address.                             |
 | `JWT_SIGNING_KEY`       | —                  | HMAC secret for app JWTs (HS256).                |
 | `GOOGLE_CLIENT_ID`      | —                  | OAuth client ID.                                 |
@@ -259,14 +259,12 @@ workflow itself); the highlights:
 - **Tiny `cmd/api/main.go`.** Signal handling, `server.New()`,
   `server.Run()`. No business logic.
 - **Repository interfaces with compile-time assertions.** Every
-  implementation is pinned with `var _ Repository = (*MemoryRepository)(nil)`
+  implementation is pinned with `var _ Repository = (*SQLiteRepository)(nil)`
   so intent is explicit and breaking changes fail at build time.
 - **`context.Context` is always the first parameter** on repository
-  methods, even when the in-memory implementation does not use it.
+  methods, so cancellation and deadlines propagate to every query.
 - **Soft deletes everywhere** (`DeletedAt *time.Time` with `json:"-"`).
   Read paths filter out deleted rows.
-- **Defensive copies in and out of in-memory repos.** Callers never hold
-  pointers to internal state.
 - **Slug IDs, not UUIDs**, for the exercise catalog. They are stable,
   human-readable, and referenced by workout logs forever.
 - **Closed enums** for `MuscleGroup` and `Equipment` with `Valid()`

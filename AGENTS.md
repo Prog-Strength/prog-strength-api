@@ -173,20 +173,18 @@ reason; raise it in a separate discussion before implementing.
 
 - **SQLite is the persistence target**, with Litestream → S3 for
   continuous replication. Both are wired up and running in prod.
-- **Repository pattern** with paired SQLite and in-memory
-  implementations for every domain. Compile-time assertions
+- **Repository pattern** with a single SQLite implementation per
+  domain. Compile-time assertions
   (`var _ Repository = (*SQLiteRepository)(nil)`) keep intent explicit
-  and catch interface drift at build time.
+  and catch interface drift at build time. Tests run against an
+  ephemeral SQLite DB via `internal/db/dbtest` (`dbtest.New(t)`).
 - **Migrations** are forward-only, embedded via `embed.FS`, applied on
   startup by `db.Migrate(database)`. `schema_migrations` tracks the
   applied set. Highest current: `014_running_dedup_live_only.sql`.
 - **Soft deletes everywhere.** `DeletedAt *time.Time` with `json:"-"`.
   All read paths filter them out.
-- **Defensive copies in/out of in-memory repos.** Callers never hold
-  pointers to internal state.
 - **`context.Context` first parameter on every repository method.**
-  Even when the in-memory impl doesn't use it — keeps the interface
-  shape stable.
+  Cancellation and deadlines propagate to every query.
 - **User scoping at the storage layer.** Repo methods take a `userID`
   and treat cross-user IDs as `ErrNotFound`. Handlers trust this and
   don't re-check.

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -94,7 +95,7 @@ func seedPlan(t *testing.T, repo Repository, userID string) string {
 }
 
 func TestSchedule_NoSchedulerReturns503(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/schedule", "{}")
 	if w.Code != http.StatusServiceUnavailable {
@@ -103,7 +104,7 @@ func TestSchedule_NoSchedulerReturns503(t *testing.T) {
 }
 
 func TestResync_NoSchedulerReturns503(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/resync", "{}")
 	if w.Code != http.StatusServiceUnavailable {
@@ -112,7 +113,7 @@ func TestResync_NoSchedulerReturns503(t *testing.T) {
 }
 
 func TestSchedule_HappyPathReflectsSynced(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{
 		onSchedule: func(userID, planID string) {
@@ -135,7 +136,7 @@ func TestSchedule_HappyPathReflectsSynced(t *testing.T) {
 }
 
 func TestSchedule_BestEffortFailureStill200WithFailed(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{
 		scheduleErr: errIns{}, // a generic write failure, not a connection error
@@ -152,7 +153,7 @@ func TestSchedule_BestEffortFailureStill200WithFailed(t *testing.T) {
 }
 
 func TestSchedule_NotConnectedMapsTo409(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{scheduleErr: ErrCalendarNotConnected}
 	w := doCal(t, repo, nil, sched, "u1", "POST", "/planned-workouts/"+id+"/schedule", "{}")
@@ -165,7 +166,7 @@ func TestSchedule_NotConnectedMapsTo409(t *testing.T) {
 }
 
 func TestSchedule_ReconnectNeededMapsTo409(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{scheduleErr: ErrCalendarReconnectNeeded}
 	w := doCal(t, repo, nil, sched, "u1", "POST", "/planned-workouts/"+id+"/schedule", "{}")
@@ -178,7 +179,7 @@ func TestSchedule_ReconnectNeededMapsTo409(t *testing.T) {
 }
 
 func TestSchedule_UnknownPlan404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	sched := &fakeScheduler{}
 	w := doCal(t, repo, nil, sched, "u1", "POST", "/planned-workouts/nope/schedule", "{}")
 	if w.Code != http.StatusNotFound {
@@ -190,7 +191,7 @@ func TestSchedule_UnknownPlan404(t *testing.T) {
 }
 
 func TestResync_HappyPath(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	eventID := "evt-1"
 	_ = repo.SetGoogleSync(context.Background(), "u1", id, &eventID, SyncSynced, nil)
@@ -203,7 +204,7 @@ func TestResync_HappyPath(t *testing.T) {
 }
 
 func TestCreate_CalendarSyncTriggersSchedule(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	sched := &fakeScheduler{
 		onSchedule: func(userID, planID string) {
 			eventID := "evt-1"
@@ -222,7 +223,7 @@ func TestCreate_CalendarSyncTriggersSchedule(t *testing.T) {
 }
 
 func TestCreate_NoCalendarSyncSkipsSchedule(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	sched := &fakeScheduler{}
 	body := `{"scheduled_start":"2026-07-01T09:00:00Z","scheduled_end":"2026-07-01T10:00:00Z","timezone":"UTC"}`
 	w := doCal(t, repo, nil, sched, "u1", "POST", "/planned-workouts/", body)
@@ -236,7 +237,7 @@ func TestUpdate_SyncedPlanPatchesWithoutFlag(t *testing.T) {
 	// A plan that's already synced to Google (has an event id) should have its
 	// event patched on EVERY edit — one-way sync — without the client needing
 	// to pass calendar_sync.
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	eventID := "evt-1"
 	_ = repo.SetGoogleSync(context.Background(), "u1", id, &eventID, SyncSynced, nil)
@@ -253,7 +254,7 @@ func TestUpdate_UnsyncedPlanNoFlagSkipsSchedule(t *testing.T) {
 	// A plan that was never synced must NOT spawn a Google event just because
 	// it was edited — that's only an opt-in (calendar_sync) or explicit
 	// /schedule action.
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 
 	sched := &fakeScheduler{}
@@ -267,7 +268,7 @@ func TestUpdate_UnsyncedPlanNoFlagSkipsSchedule(t *testing.T) {
 func TestUpdate_CalendarSyncFlagTriggersScheduleEvenUnsynced(t *testing.T) {
 	// The explicit opt-in still works on update: a never-synced plan edited
 	// with calendar_sync:true gets pushed.
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 
 	sched := &fakeScheduler{}
@@ -279,7 +280,7 @@ func TestUpdate_CalendarSyncFlagTriggersScheduleEvenUnsynced(t *testing.T) {
 }
 
 func TestDelete_RemovesCalendarEvent(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{}
 	w := doCal(t, repo, nil, sched, "u1", "DELETE", "/planned-workouts/"+id, "")

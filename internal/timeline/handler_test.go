@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 const (
@@ -138,8 +139,8 @@ type reactionsEnvelope struct {
 
 // --- helpers -------------------------------------------------------------
 
-func newTestHandler() (*Handler, *MemoryRepository, *fakeHydrator) {
-	h, repo, hyd, _, _, _ := newSocialTestHandler()
+func newTestHandler(t *testing.T) (*Handler, *SQLiteRepository, *fakeHydrator) {
+	h, repo, hyd, _, _, _ := newSocialTestHandler(t)
 	return h, repo, hyd
 }
 
@@ -149,8 +150,8 @@ func newTestHandler() (*Handler, *MemoryRepository, *fakeHydrator) {
 // usernames); the profile resolver is pre-seeded with authors for userA/userB
 // so the common posts have a resolvable identity. Tests populate/override as
 // needed.
-func newSocialTestHandler() (*Handler, *MemoryRepository, *fakeHydrator, *fakeFollowees, *fakeUsers, *fakeProfiles) {
-	repo := NewMemoryRepository()
+func newSocialTestHandler(t *testing.T) (*Handler, *SQLiteRepository, *fakeHydrator, *fakeFollowees, *fakeUsers, *fakeProfiles) {
+	repo := NewSQLiteRepository(dbtest.New(t))
 	hyd := &fakeHydrator{missing: map[string]bool{}}
 	followees := &fakeFollowees{accepted: map[string][]string{}}
 	users := &fakeUsers{byUsername: map[string]string{}}
@@ -163,7 +164,7 @@ func newSocialTestHandler() (*Handler, *MemoryRepository, *fakeHydrator, *fakeFo
 
 // seedPost inserts a feed-index row for userID via the repo's EnsurePost and
 // returns it.
-func seedPost(t *testing.T, repo *MemoryRepository, userID, sourceID string, occurredAt time.Time) Post {
+func seedPost(t *testing.T, repo *SQLiteRepository, userID, sourceID string, occurredAt time.Time) Post {
 	t.Helper()
 	p, err := repo.EnsurePost(context.Background(), PostRef{
 		UserID:     userID,
@@ -179,14 +180,18 @@ func seedPost(t *testing.T, repo *MemoryRepository, userID, sourceID string, occ
 
 // seedPostVis inserts a post for userID and forces its visibility (EnsurePost
 // always writes 'friends'), letting a test pin a 'private' or 'public' post.
-func seedPostVis(t *testing.T, repo *MemoryRepository, userID, sourceID string, occurredAt time.Time, vis Visibility) Post {
+// EnsurePost has no visibility argument, so the override is a direct UPDATE on
+// the shared test DB — the same backdoor the SQLite repo test uses to exercise
+// the per-post visibility fan-out.
+func seedPostVis(t *testing.T, repo *SQLiteRepository, userID, sourceID string, occurredAt time.Time, vis Visibility) Post {
 	t.Helper()
 	p := seedPost(t, repo, userID, sourceID, occurredAt)
-	repo.mu.Lock()
-	repo.posts[p.ID].Visibility = vis
-	stored := *repo.posts[p.ID]
-	repo.mu.Unlock()
-	return stored
+	if _, err := repo.db.ExecContext(context.Background(),
+		`UPDATE timeline_post SET visibility = ? WHERE id = ?`, string(vis), p.ID); err != nil {
+		t.Fatalf("set visibility for %s: %v", sourceID, err)
+	}
+	p.Visibility = vis
+	return p
 }
 
 // req builds a request as the given user with optional chi URL params (passed
@@ -213,7 +218,7 @@ func req(t *testing.T, method, target, userID, body string, params ...string) *h
 // --- feed pagination + shape ---------------------------------------------
 
 func TestFeedPaginationAndShape(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	// Three posts, ascending occurred_at. Newest-first feed order: c, b, a.
 	pa := seedPost(t, repo, userA, "a", base)
@@ -294,7 +299,7 @@ func TestFeedPaginationAndShape(t *testing.T) {
 }
 
 func TestFeedInvalidCursor(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	w := httptest.NewRecorder()
 	h.listFeed(w, req(t, "GET", "/timeline?before=not-a-valid-cursor!!", userA, ""))
 	if w.Code != http.StatusBadRequest {
@@ -306,7 +311,7 @@ func TestFeedInvalidCursor(t *testing.T) {
 }
 
 func TestFeedMissingHydrationOmitted(t *testing.T) {
-	h, repo, hyd := newTestHandler()
+	h, repo, hyd := newTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	keep := seedPost(t, repo, userA, "keep", base.Add(time.Hour))
 	seedPost(t, repo, userA, "gone", base) // source deleted
@@ -327,7 +332,7 @@ func TestFeedMissingHydrationOmitted(t *testing.T) {
 }
 
 func TestFeedScopedToViewer(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPost(t, repo, userA, "a1", base)
 	seedPost(t, repo, userB, "b1", base.Add(time.Hour)) // B's post must not appear in A's feed
@@ -347,7 +352,7 @@ func TestFeedScopedToViewer(t *testing.T) {
 }
 
 func TestFeedMissingUserContext(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	w := httptest.NewRecorder()
 	// No authctx.WithUserID on the request.
 	h.listFeed(w, req(t, "GET", "/timeline", "", ""))
@@ -359,7 +364,7 @@ func TestFeedMissingUserContext(t *testing.T) {
 // --- get post + comments thread ------------------------------------------
 
 func TestGetPostWithComments(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	if _, err := repo.AddComment(context.Background(), p.ID, userA, "first"); err != nil {
 		t.Fatalf("seed comment: %v", err)
@@ -386,7 +391,7 @@ func TestGetPostWithComments(t *testing.T) {
 }
 
 func TestGetPostNotFound(t *testing.T) {
-	h, _, _ := newTestHandler()
+	h, _, _ := newTestHandler(t)
 	w := httptest.NewRecorder()
 	h.getPost(w, req(t, "GET", "/timeline/posts/nope", userA, "", "id", "nope"))
 	if w.Code != http.StatusNotFound {
@@ -397,7 +402,7 @@ func TestGetPostNotFound(t *testing.T) {
 // --- reactions: add/remove + stacking ------------------------------------
 
 func TestReactionStackingAndRemoval(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 
 	put := func(rt ReactionType) reactionsDTO {
@@ -449,7 +454,7 @@ func TestReactionStackingAndRemoval(t *testing.T) {
 }
 
 func TestReactionUnknownType(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	w := httptest.NewRecorder()
 	h.addReaction(w, req(t, "PUT", "/timeline/posts/"+p.ID+"/reactions/bogus", userA, "", "id", p.ID, "type", "bogus"))
@@ -461,7 +466,7 @@ func TestReactionUnknownType(t *testing.T) {
 // --- comments: create + delete -------------------------------------------
 
 func TestAddCommentValidation(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 
 	// Happy path → 201.
@@ -489,7 +494,7 @@ func TestAddCommentValidation(t *testing.T) {
 }
 
 func TestDeleteComment(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	c, err := repo.AddComment(context.Background(), p.ID, userA, "mine")
 	if err != nil {
@@ -513,7 +518,7 @@ func TestDeleteComment(t *testing.T) {
 }
 
 func TestDeleteOthersCommentForbidden(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	// A comments on A's own post; B tries to delete it.
 	c, err := repo.AddComment(context.Background(), p.ID, userA, "A's comment")
@@ -553,7 +558,7 @@ func TestModerateOwnershipMasking(t *testing.T) {
 // --- authorization: second user locked out (critical) --------------------
 
 func TestSecondUserCannotViewCommentOrReact(t *testing.T) {
-	h, repo, _ := newTestHandler()
+	h, repo, _ := newTestHandler(t)
 	p := seedPost(t, repo, userA, "secret", time.Now().UTC())
 
 	// B GETs A's post → 404 (canView false, masked as not-found).
@@ -631,7 +636,7 @@ func sourceIDSet(posts []postDTO) map[string]bool {
 // posts; own-post visibility is unchanged (the viewer sees their own private +
 // friends). Removing the edge immediately revokes visibility.
 func TestFeedFanOutAcceptedFollower(t *testing.T) {
-	h, repo, _, followees, _, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 
 	// B's posts: one friends (visible to an accepted follower), one private (not).
@@ -668,7 +673,7 @@ func TestFeedFanOutAcceptedFollower(t *testing.T) {
 // A non-accepted (e.g. pending) follower has an empty accepted set, so they see
 // nothing of the other author.
 func TestFeedFanOutPendingSeesNothing(t *testing.T) {
-	h, repo, _, _, _, _ := newSocialTestHandler()
+	h, repo, _, _, _, _ := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userB, "b-friends", base, VisibilityFriends)
 	// followees.accepted[userA] left empty — A's request to B is pending.
@@ -682,7 +687,7 @@ func TestFeedFanOutPendingSeesNothing(t *testing.T) {
 // The multi-author keyset page orders correctly across authors with interleaved
 // occurred_at, paginating without gaps or repeats.
 func TestFeedFanOutKeysetAcrossAuthors(t *testing.T) {
-	h, repo, _, followees, _, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	// Interleave A and B by occurred_at: a0 < b1 < a2 < b3 (all friends/own).
 	seedPostVis(t, repo, userA, "a0", base, VisibilityFriends)
@@ -721,7 +726,7 @@ func TestFeedFanOutKeysetAcrossAuthors(t *testing.T) {
 // --- canView via getPost (single post) -----------------------------------
 
 func TestGetPostFollowerVisibility(t *testing.T) {
-	h, repo, _, followees, _, _ := newSocialTestHandler()
+	h, repo, _, followees, _, _ := newSocialTestHandler(t)
 	now := time.Now().UTC()
 	friends := seedPostVis(t, repo, userA, "a-friends", now, VisibilityFriends)
 	private := seedPostVis(t, repo, userA, "a-private", now, VisibilityPrivate)
@@ -755,7 +760,7 @@ func TestGetPostFollowerVisibility(t *testing.T) {
 // --- ?user= scoped feed --------------------------------------------------
 
 func TestScopedFeedAuthorSeesOwnIncludingPrivate(t *testing.T) {
-	h, repo, _, _, users, _ := newSocialTestHandler()
+	h, repo, _, _, users, _ := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
 	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
@@ -772,7 +777,7 @@ func TestScopedFeedAuthorSeesOwnIncludingPrivate(t *testing.T) {
 }
 
 func TestScopedFeedAcceptedFollowerSeesFriendsOnly(t *testing.T) {
-	h, repo, _, followees, users, _ := newSocialTestHandler()
+	h, repo, _, followees, users, _ := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userA, "a-friends", base, VisibilityFriends)
 	seedPostVis(t, repo, userA, "a-private", base.Add(time.Hour), VisibilityPrivate)
@@ -793,7 +798,7 @@ func TestScopedFeedAcceptedFollowerSeesFriendsOnly(t *testing.T) {
 }
 
 func TestScopedFeedNonFollowerLocked(t *testing.T) {
-	h, repo, _, _, users, _ := newSocialTestHandler()
+	h, repo, _, _, users, _ := newSocialTestHandler(t)
 	seedPostVis(t, repo, userA, "a-friends", time.Now().UTC(), VisibilityFriends)
 	users.byUsername["alice"] = userA
 	// userB does not follow A → gated locked-empty 200.
@@ -811,7 +816,7 @@ func TestScopedFeedNonFollowerLocked(t *testing.T) {
 }
 
 func TestScopedFeedUnknownUsername(t *testing.T) {
-	h, _, _, _, _, _ := newSocialTestHandler()
+	h, _, _, _, _, _ := newSocialTestHandler(t)
 	w := httptest.NewRecorder()
 	h.listFeed(w, req(t, "GET", "/timeline?user=ghost", userA, ""))
 	if w.Code != http.StatusNotFound {
@@ -826,7 +831,7 @@ func TestScopedFeedUnknownUsername(t *testing.T) {
 // set — the N+1 guard. Two posts by userA + one by userB (an accepted followee)
 // must dedupe to {userA, userB} in a single resolver call.
 func TestFeedEmbedsAuthorBatchedOnce(t *testing.T) {
-	h, repo, _, followees, _, profiles := newSocialTestHandler()
+	h, repo, _, followees, _, profiles := newSocialTestHandler(t)
 	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 	seedPostVis(t, repo, userA, "a1", base, VisibilityFriends)
 	seedPostVis(t, repo, userA, "a2", base.Add(time.Hour), VisibilityFriends)
@@ -877,7 +882,7 @@ func TestFeedEmbedsAuthorBatchedOnce(t *testing.T) {
 // commenters resolved in ONE batch call. Two comments from the same user dedupe
 // to a single id in that call.
 func TestGetPostEmbedsCommentAuthorsBatchedOnce(t *testing.T) {
-	h, repo, _, _, _, profiles := newSocialTestHandler()
+	h, repo, _, _, _, profiles := newSocialTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	// Two comments from userA (dedupe) + one from userB.
 	if _, err := repo.AddComment(context.Background(), p.ID, userA, "first"); err != nil {
@@ -940,7 +945,7 @@ func TestGetPostEmbedsCommentAuthorsBatchedOnce(t *testing.T) {
 // post with a minimal author carrying just the UserID — the post is NOT dropped,
 // and there is no panic.
 func TestFeedMissingAuthorRendersMinimal(t *testing.T) {
-	h, repo, _, _, _, profiles := newSocialTestHandler()
+	h, repo, _, _, _, profiles := newSocialTestHandler(t)
 	// Resolver knows nobody.
 	profiles.authors = map[string]Author{}
 	seedPost(t, repo, userA, "orphan", time.Now().UTC())
@@ -961,7 +966,7 @@ func TestFeedMissingAuthorRendersMinimal(t *testing.T) {
 // The comment's user_id field survives author embedding (the delete affordance
 // depends on it), even when its author resolves successfully.
 func TestCommentRetainsUserIDForDeleteAffordance(t *testing.T) {
-	h, repo, _, _, _, _ := newSocialTestHandler()
+	h, repo, _, _, _, _ := newSocialTestHandler(t)
 	p := seedPost(t, repo, userA, "p", time.Now().UTC())
 	if _, err := repo.AddComment(context.Background(), p.ID, userA, "mine"); err != nil {
 		t.Fatalf("seed comment: %v", err)

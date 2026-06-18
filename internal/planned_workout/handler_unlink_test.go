@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
 // completePlan marks a seeded plan completed via the complete endpoint so the
@@ -18,7 +20,7 @@ func completePlan(t *testing.T, repo Repository, userID, id, sessionID, kind str
 }
 
 func TestUnlink_CompletedPlan200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	completePlan(t, repo, "u1", id, "sess-1", "workout")
 
@@ -36,7 +38,7 @@ func TestUnlink_CompletedPlan200(t *testing.T) {
 }
 
 func TestUnlink_SyncedResyncs(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	completePlan(t, repo, "u1", id, "sess-1", "workout")
 	eventID := "evt-1"
@@ -53,7 +55,7 @@ func TestUnlink_SyncedResyncs(t *testing.T) {
 }
 
 func TestUnlink_UnknownID404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/nope/unlink", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d want 404, body=%s", w.Code, w.Body.String())
@@ -61,7 +63,7 @@ func TestUnlink_UnknownID404(t *testing.T) {
 }
 
 func TestBySession_Found200(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	completePlan(t, repo, "u1", id, "sess-1", "workout")
 
@@ -76,7 +78,7 @@ func TestBySession_Found200(t *testing.T) {
 }
 
 func TestBySession_MissingParams400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=sess-1", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
@@ -84,7 +86,7 @@ func TestBySession_MissingParams400(t *testing.T) {
 }
 
 func TestBySession_InvalidKind400(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=sess-1&session_kind=bogus", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
@@ -92,7 +94,7 @@ func TestBySession_InvalidKind400(t *testing.T) {
 }
 
 func TestBySession_NoMatch404(t *testing.T) {
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=ghost&session_kind=workout", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d want 404, body=%s", w.Code, w.Body.String())

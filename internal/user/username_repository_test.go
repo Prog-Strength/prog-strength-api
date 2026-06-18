@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
-// repoBackends returns the two Repository implementations under a common name
-// so the username repository contract can be table-driven across both.
+// repoBackends returns the Repository implementations under a common name so
+// the username repository contract can be table-driven. Only the SQLite backend
+// remains (the in-memory repo is deprecated); the contract now asserts the real
+// persistence path.
 func repoBackends(t *testing.T) []struct {
 	name string
 	repo Repository
@@ -18,7 +22,6 @@ func repoBackends(t *testing.T) []struct {
 		name string
 		repo Repository
 	}{
-		{"memory", NewMemoryRepository()},
 		{"sqlite", sqliteRepo},
 	}
 }
@@ -73,12 +76,12 @@ func TestRepo_GetByUsernameNotFound(t *testing.T) {
 }
 
 // TestRepo_UsernameCaseInsensitiveCollision checks that two different users
-// cannot hold case-variant forms of the same canonical handle. Repos compare
-// case-insensitively (SQLite via the canonical stored value + the handler
-// canonicalizing; memory via a lowercased compare), so jimlifts vs JimLifts
-// collide. We feed the second user the canonical-but-same value too, since the
-// canonicalization happens at the handler edge — here we simulate a second
-// user trying to store the same lowercased handle.
+// cannot hold case-variant forms of the same canonical handle. The repo's
+// unique index is case-sensitive, so the case-insensitive guarantee comes from
+// the handler canonicalizing (lowercasing) handles in ValidateUsername before
+// they ever reach the repo: jimlifts and JimLifts both canonicalize to
+// jimlifts and collide. We feed the second user that same canonical value to
+// simulate what the handler edge would have produced.
 func TestRepo_UsernameCaseInsensitiveCollision(t *testing.T) {
 	for _, b := range repoBackends(t) {
 		t.Run(b.name, func(t *testing.T) {
@@ -100,12 +103,17 @@ func TestRepo_UsernameCaseInsensitiveCollision(t *testing.T) {
 	}
 }
 
-// TestRepo_UsernameMemoryCaseFold specifically exercises the memory backend's
-// case-insensitive comparison: a stored "jimlifts" must collide with a stored
-// "JimLifts" (memory does not canonicalize, so it must fold on compare).
-func TestRepo_UsernameMemoryCaseFold(t *testing.T) {
+// TestRepo_UsernameCanonicalStoredValueCollides pins the SQLite collision rule:
+// the unique index is on the stored handle, which the handler always
+// canonicalizes (lowercases) before write. Two users that both store the same
+// canonical handle therefore collide. Differently-cased *stored* values do not
+// collide at the repo layer because the index is case-sensitive — that case is
+// prevented upstream by ValidateUsername, not by the repo. (This replaces the
+// old memory-only fold-on-compare test, which asserted behavior specific to the
+// deprecated in-memory backend.)
+func TestRepo_UsernameCanonicalStoredValueCollides(t *testing.T) {
 	ctx := context.Background()
-	repo := NewMemoryRepository()
+	repo := NewSQLiteRepository(dbtest.New(t))
 	a := makeUser(t, repo, "a@example.com")
 	bb := makeUser(t, repo, "b@example.com")
 
@@ -113,7 +121,8 @@ func TestRepo_UsernameMemoryCaseFold(t *testing.T) {
 	if err := repo.Update(ctx, a); err != nil {
 		t.Fatalf("Update a: %v", err)
 	}
-	bb.Username = strPtr("JimLifts")
+	// Same canonical (already-lowercased) handle the handler would produce.
+	bb.Username = strPtr("jimlifts")
 	if err := repo.Update(ctx, bb); !errors.Is(err, ErrUsernameTaken) {
 		t.Fatalf("Update b error = %v, want ErrUsernameTaken", err)
 	}
@@ -177,10 +186,10 @@ func TestRepo_KeepingOwnUsernameIsNotCollision(t *testing.T) {
 }
 
 // TestRepo_DeletedUsernameIsReusable verifies that soft-deleting an account
-// frees its handle for another user on BOTH backends. SQLite enforces this via
-// the partial unique index (WHERE deleted_at IS NULL); memory excludes deleted
-// users from its collision check. This locks the two implementations to the
-// same rule (and to the SOW's "freed handle is immediately available").
+// frees its handle for another user. SQLite enforces this via the partial
+// unique index (WHERE deleted_at IS NULL), so a soft-deleted row no longer
+// participates in the uniqueness constraint and its handle becomes available
+// again (matching the SOW's "freed handle is immediately available").
 func TestRepo_DeletedUsernameIsReusable(t *testing.T) {
 	for _, b := range repoBackends(t) {
 		t.Run(b.name, func(t *testing.T) {

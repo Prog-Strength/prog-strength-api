@@ -264,6 +264,14 @@ func TestDownsampleEstimated1RM(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("maxPoints of 1 returns the newest value", func(t *testing.T) {
+		// newest-first input 320, 312, 305 -> ascending newest is 320.
+		got := DownsampleEstimated1RM(mk(320, 312, 305), 1)
+		if len(got) != 1 || got[0] != 320 {
+			t.Fatalf("want [320], got %v", got)
+		}
+	})
 }
 
 func TestRecencyWeightedBaseline_Empty(t *testing.T) {

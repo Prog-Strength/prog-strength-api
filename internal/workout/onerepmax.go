@@ -213,6 +213,12 @@ func DownsampleEstimated1RM(entries []OneRepMaxEntry, maxPoints int) []float64 {
 		return asc
 	}
 
+	if maxPoints == 1 {
+		// A one-point spark is just the latest estimate; the stride
+		// formula below divides by maxPoints-1, so handle it here.
+		return []float64{asc[len(asc)-1]}
+	}
+
 	n := len(asc)
 	out := make([]float64, maxPoints)
 	for i := 0; i < maxPoints; i++ {

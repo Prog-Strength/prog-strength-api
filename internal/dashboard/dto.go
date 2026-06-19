@@ -8,8 +8,14 @@ import "time"
 // distinguish "no data" from "data that happens to be zero". Later tasks add
 // the remaining sections (steps, nutrition, bodyweight, streak).
 type Summary struct {
-	Running *RunningSection `json:"running"`
-	Lifting *LiftingSection `json:"lifting"`
+	Running    *RunningSection    `json:"running"`
+	Lifting    *LiftingSection    `json:"lifting"`
+	Steps      *StepsSection      `json:"steps"`
+	Nutrition  *NutritionSection  `json:"nutrition"`
+	Bodyweight *BodyweightSection `json:"bodyweight"`
+	// Streak is a value, not a pointer: it is always meaningful (an empty
+	// streak is zero, not "no data"), so it always serializes as an object.
+	Streak StreakSection `json:"streak"`
 }
 
 // RunningSection is the running tile. nil at the Summary level when the user
@@ -61,4 +67,68 @@ type Headline1RM struct {
 	ExerciseName string  `json:"exercise_name"`
 	Value        float64 `json:"value"`
 	Unit         string  `json:"unit"`
+}
+
+// StepsSection is the steps tile. nil at the Summary level when the user has
+// logged no step data at all.
+type StepsSection struct {
+	Avg   int `json:"avg"`
+	Today int `json:"today"`
+	// Goal is nil when no daily goal is set (serializes as null).
+	Goal *int `json:"goal"`
+	// DailySpark is the last 7 local calendar days oldest→newest, each day's
+	// step count, zero-filled for days without an entry.
+	DailySpark []int `json:"daily_spark"`
+}
+
+// NutritionSection is the nutrition tile. nil at the Summary level when there
+// is no aggregate row for the local day.
+type NutritionSection struct {
+	Today NutritionMacros `json:"today"`
+	// Goals is nil when no macro goals are set (serializes as null).
+	Goals *NutritionGoals `json:"goals"`
+}
+
+type NutritionMacros struct {
+	Calories float64 `json:"calories"`
+	ProteinG float64 `json:"protein_g"`
+	CarbsG   float64 `json:"carbs_g"`
+	FatG     float64 `json:"fat_g"`
+}
+
+type NutritionGoals struct {
+	Calories int `json:"calories"`
+	ProteinG int `json:"protein_g"`
+	CarbsG   int `json:"carbs_g"`
+	FatG     int `json:"fat_g"`
+}
+
+// BodyweightSection is the bodyweight tile. nil at the Summary level when the
+// user has logged no measurements.
+type BodyweightSection struct {
+	Current float64 `json:"current"`
+	Unit    string  `json:"unit"`
+	// RatePerWeek is the least-squares trend slope scaled to per-week. nil
+	// when it cannot be computed (<2 points or zero time span).
+	RatePerWeek *float64 `json:"rate_per_week"`
+	// Goal is nil when no goal is set (serializes as null).
+	Goal *BodyweightGoal `json:"goal"`
+	// TrendSpark is measured weights oldest→newest, downsampled to <=8.
+	TrendSpark []float64 `json:"trend_spark"`
+}
+
+type BodyweightGoal struct {
+	Weight float64 `json:"weight"`
+	Unit   string  `json:"unit"`
+}
+
+// StreakSection is the training-streak tile. Always present (a value on
+// Summary): an empty streak is a real, zero-valued state, not "no data".
+type StreakSection struct {
+	// Weeks is the run of consecutive active weeks counting backward.
+	Weeks int `json:"weeks"`
+	// ActiveDaysThisWeek is the count of active days in the current local week.
+	ActiveDaysThisWeek int `json:"active_days_this_week"`
+	// Week is the 7 days of the current local week, Mon→Sun, true when active.
+	Week [7]bool `json:"week"`
 }

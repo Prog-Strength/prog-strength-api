@@ -20,6 +20,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarsync"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/dashboard"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
@@ -435,6 +436,10 @@ func New(cfg config.Config) (*Server, error) {
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
 		activityHandler.Mount(r)
+		// Dashboard "command center" — the read-only aggregate that composes
+		// every domain's tile into one GET /dashboard/summary. Shares the
+		// JWT-gated group; reads from every domain repo, owns no writes.
+		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo).Mount(r)
 		// Wire the shared planned-workout service into the activity + workout
 		// plan-matcher seams so a logged run/lift best-effort completes a
 		// matching planned workout. One service instance backs both adapters;

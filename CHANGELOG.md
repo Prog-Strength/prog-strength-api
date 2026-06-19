@@ -1,3 +1,10 @@
+# [0.63.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.62.0...v0.63.0) (2026-06-19)
+
+
+### Features
+
+* **dashboard:** add GET /dashboard/summary aggregate endpoint ([#51](https://github.com/Prog-Strength/prog-strength-api/issues/51)) ([73c5ced](https://github.com/Prog-Strength/prog-strength-api/commit/73c5ced665b8fa31961cf7ba68e2617719913e5d))
+
 # [0.62.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.61.0...v0.62.0) (2026-06-19)
 
 

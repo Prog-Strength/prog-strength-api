@@ -185,3 +185,46 @@ func RecencyWeightedBaseline(
 	}
 	return weightedSum / weightSum, true
 }
+
+// DownsampleEstimated1RM returns a compact ascending (oldest→newest)
+// slice of rounded MaxEstimated1RM values for a per-tile trend spark.
+//
+// entries are expected DESC by PerformedAt (as ListOneRepMaxHistory
+// returns them); the result is reversed to ascending. When more than
+// maxPoints entries are present they are downsampled to exactly
+// maxPoints points by even stride, always retaining the oldest and
+// newest. Returns nil for empty input or a non-positive maxPoints so the
+// JSON field renders as null.
+//
+// Pure: no IO, no time.Now — a downsample of values already in hand, not
+// a new series. The estimated-1RM math is unchanged; this only thins it.
+func DownsampleEstimated1RM(entries []OneRepMaxEntry, maxPoints int) []float64 {
+	if len(entries) == 0 || maxPoints <= 0 {
+		return nil
+	}
+
+	// Reverse to ascending: entries[0] is newest.
+	asc := make([]float64, len(entries))
+	for i, e := range entries {
+		asc[len(entries)-1-i] = round1(e.MaxEstimated1RM)
+	}
+
+	if len(asc) <= maxPoints {
+		return asc
+	}
+
+	if maxPoints == 1 {
+		// A one-point spark is just the latest estimate; the stride
+		// formula below divides by maxPoints-1, so handle it here.
+		return []float64{asc[len(asc)-1]}
+	}
+
+	n := len(asc)
+	out := make([]float64, maxPoints)
+	for i := 0; i < maxPoints; i++ {
+		// Even stride across [0, n-1] inclusive of both ends.
+		idx := int(math.Round(float64(i) * float64(n-1) / float64(maxPoints-1)))
+		out[i] = asc[idx]
+	}
+	return out
+}

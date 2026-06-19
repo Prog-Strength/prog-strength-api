@@ -819,7 +819,17 @@ type personalRecordDTO struct {
 	AchievedAt          *time.Time `json:"achieved_at"`
 	CurrentEstimated1RM *float64   `json:"current_estimated_1rm"`
 	Estimated1RMUnit    *string    `json:"estimated_1rm_unit"`
+	// RecentEstimated1RMPoints is a compact, downsampled ascending
+	// (oldest→newest) trend of the estimated 1RM, for the list view's
+	// per-tile spark. Built from the same in-window history entries used
+	// for CurrentEstimated1RM — no extra query. null when no history.
+	RecentEstimated1RMPoints []float64 `json:"recent_estimated_1rm_points"`
 }
+
+// recentEstimated1RMPointCap bounds the per-tile trend spark on the
+// /personal-records list row so a long-history lift doesn't bloat the
+// response. ~10 points is enough to read as a trend.
+const recentEstimated1RMPointCap = 10
 
 // personalRecords handles GET /personal-records.
 //
@@ -916,6 +926,12 @@ func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+
+		// Per-tile trend spark: a downsampled, ascending series of the
+		// same in-window history entries already fetched for the
+		// baseline above. Capped small so a long-history lift doesn't
+		// bloat the row; nil (JSON null) when there's no history.
+		dto.RecentEstimated1RMPoints = DownsampleEstimated1RM(entries, recentEstimated1RMPointCap)
 
 		out = append(out, dto)
 	}

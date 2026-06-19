@@ -271,3 +271,94 @@ func TestExerciseOneRMHistory_UnknownExercise(t *testing.T) {
 		t.Errorf("code = %q, want unknown_exercise_id", env.Code)
 	}
 }
+
+type personalRecordsEnvelope struct {
+	Message string              `json:"message"`
+	Data    []personalRecordDTO `json:"data"`
+}
+
+func TestPersonalRecords_RecentEstimated1RMPoints(t *testing.T) {
+	ctx := context.Background()
+	d := dbtest.New(t)
+	repo := NewSQLiteRepository(d)
+	exRepo := exercise.NewSQLiteRepository(d)
+	if err := exRepo.SyncCatalog(ctx, exercise.Catalog); err != nil {
+		t.Fatalf("SyncCatalog: %v", err)
+	}
+	h := NewHandler(repo, exRepo)
+
+	// Two real headline exercises from the curated default
+	// (HeadlineExercises, a []string of catalog slugs): train one, leave
+	// the other never-trained.
+	trained := HeadlineExercises[0]
+	neverTrained := HeadlineExercises[1]
+
+	mkWorkout := func(at time.Time, weight float64) {
+		w := &Workout{
+			UserID:      "u1",
+			Name:        "session",
+			PerformedAt: at,
+			Exercises: []WorkoutExercise{{
+				ExerciseID: trained,
+				Order:      0,
+				Sets:       []Set{{Reps: 3, Weight: weight, Unit: user.WeightUnitPounds}},
+			}},
+		}
+		if err := repo.Create(ctx, w); err != nil {
+			t.Fatalf("create workout: %v", err)
+		}
+	}
+	now := time.Now()
+	mkWorkout(now.Add(-40*24*time.Hour), 300)
+	mkWorkout(now.Add(-20*24*time.Hour), 310)
+	mkWorkout(now.Add(-5*24*time.Hour), 320)
+
+	req := httptest.NewRequest("GET", "/personal-records", nil)
+	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
+	w := httptest.NewRecorder()
+	h.personalRecords(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: want 200 got %d (%s)", w.Code, w.Body.String())
+	}
+	var env personalRecordsEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	byID := make(map[string]personalRecordDTO, len(env.Data))
+	for _, r := range env.Data {
+		byID[r.ExerciseID] = r
+	}
+
+	tr, ok := byID[trained]
+	if !ok {
+		t.Fatalf("trained exercise %q missing from response", trained)
+	}
+	if len(tr.RecentEstimated1RMPoints) == 0 {
+		t.Fatalf("trained lift: want a non-empty trend, got %v", tr.RecentEstimated1RMPoints)
+	}
+	if len(tr.RecentEstimated1RMPoints) > recentEstimated1RMPointCap {
+		t.Fatalf("trend exceeds cap %d: %v", recentEstimated1RMPointCap, tr.RecentEstimated1RMPoints)
+	}
+	pts := tr.RecentEstimated1RMPoints
+	for i := 1; i < len(pts); i++ {
+		if pts[i] < pts[i-1] {
+			t.Fatalf("trend not ascending: %v", pts)
+		}
+	}
+	if tr.CurrentEstimated1RM == nil {
+		t.Fatalf("current_estimated_1rm should be set for a trained lift")
+	}
+
+	nt, ok := byID[neverTrained]
+	if !ok {
+		t.Fatalf("never-trained exercise %q missing from response", neverTrained)
+	}
+	if nt.RecentEstimated1RMPoints != nil {
+		t.Fatalf("never-trained lift: want nil trend, got %v", nt.RecentEstimated1RMPoints)
+	}
+	if nt.CurrentEstimated1RM != nil {
+		t.Fatalf("never-trained lift: want nil current_estimated_1rm, got %v", *nt.CurrentEstimated1RM)
+	}
+}

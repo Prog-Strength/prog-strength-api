@@ -1,3 +1,10 @@
+# [0.62.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.61.0...v0.62.0) (2026-06-19)
+
+
+### Features
+
+* **personal-records:** add recent_estimated_1rm_points to list response ([#50](https://github.com/Prog-Strength/prog-strength-api/issues/50)) ([ea7bead](https://github.com/Prog-Strength/prog-strength-api/commit/ea7beadccf000a83f73763b878c2a87c5d7e284b))
+
 # [0.61.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.60.3...v0.61.0) (2026-06-18)
 
 

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -323,6 +324,82 @@ func TestSummary_BrandNew(t *testing.T) {
 		if active {
 			t.Errorf("streak week[%d] active, want all false", i)
 		}
+	}
+}
+
+// errBodyweightRepo embeds a real bodyweight repository but forces List to
+// fail, simulating a recoverable read error in exactly one domain. Every other
+// method delegates to the embedded real repo, so it satisfies the full
+// bodyweight.Repository interface with a single overridden method.
+type errBodyweightRepo struct {
+	bodyweight.Repository
+}
+
+func (errBodyweightRepo) List(ctx context.Context, userID string, since, until *time.Time) ([]bodyweight.Entry, error) {
+	return nil, errors.New("bodyweight list boom")
+}
+
+// TestSummary_DomainReadError_DegradesToNilSection pins the handler's central
+// resilience guarantee: a recoverable error in one domain's read yields a nil
+// section while the request still returns 200 and the other sections + streak
+// stay present. Here the bodyweight List read fails (via a fake repo) while the
+// other repos are real and seeded with steps + a workout.
+func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
+	db := dbtest.New(t)
+	rp := &repos{
+		activity:   activity.NewSQLiteRepository(db, activity.NewMemoryArchiver()),
+		workout:    workout.NewSQLiteRepository(db),
+		exercise:   exercise.NewSQLiteRepository(db),
+		steps:      steps.NewSQLiteRepository(db),
+		nutrition:  nutrition.NewSQLiteRepository(db),
+		bodyweight: bodyweight.NewSQLiteRepository(db),
+		user:       user.NewSQLiteRepository(db),
+	}
+	if err := rp.exercise.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
+		t.Fatalf("SyncCatalog: %v", err)
+	}
+	u := &user.User{
+		Email:        "dash-err@example.com",
+		DisplayName:  "Dash Err",
+		WeightUnit:   user.WeightUnitPounds,
+		DistanceUnit: user.DistanceUnitMiles,
+		Timezone:     "UTC",
+	}
+	if err := rp.user.Create(context.Background(), u); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	userID := u.ID
+
+	now := time.Now().UTC()
+	todayStr := now.Format("2006-01-02")
+	// Seed at least one other domain so its section proves the request didn't
+	// abort early. Bodyweight is left seeded too — its read still fails, so the
+	// section must be nil regardless of underlying data.
+	seedSteps(t, rp, userID, todayStr, 8000)
+	seedWorkout(t, rp, userID, now.Add(-2*time.Hour), "barbell-bench-press", 185, 5)
+	seedBodyweight(t, rp, userID, now.AddDate(0, 0, -3), 180)
+
+	// Wire the handler with the failing bodyweight repo; all others are real.
+	r := chi.NewRouter()
+	NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user).Mount(r)
+
+	rec := get(t, r, userID, "?timezone=UTC")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	s := decode(t, rec)
+
+	if s.Bodyweight != nil {
+		t.Errorf("bodyweight section = %+v, want nil (its read errored)", s.Bodyweight)
+	}
+	if s.Steps == nil {
+		t.Error("steps section nil, want present (request must not abort early)")
+	}
+	if s.Lifting == nil {
+		t.Error("lifting section nil, want present (request must not abort early)")
+	}
+	if s.Streak.ActiveDaysThisWeek < 1 {
+		t.Errorf("streak active days this week = %d, want >= 1 (streak must still be derived)", s.Streak.ActiveDaysThisWeek)
 	}
 }
 

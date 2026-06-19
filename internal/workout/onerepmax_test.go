@@ -200,6 +200,72 @@ func TestAggregateOneRepMax_ExerciseWithNoSets_Skipped(t *testing.T) {
 	}
 }
 
+func TestDownsampleEstimated1RM(t *testing.T) {
+	mk := func(vals ...float64) []OneRepMaxEntry {
+		// DESC by PerformedAt, like ListOneRepMaxHistory returns: index 0
+		// is newest. Provide values newest-first so the helper must reverse.
+		entries := make([]OneRepMaxEntry, len(vals))
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		for i, v := range vals {
+			entries[i] = OneRepMaxEntry{
+				MaxEstimated1RM: v,
+				PerformedAt:     base.Add(time.Duration(-i) * 24 * time.Hour),
+				Unit:            user.WeightUnitPounds,
+			}
+		}
+		return entries
+	}
+
+	t.Run("nil for empty", func(t *testing.T) {
+		if got := DownsampleEstimated1RM(nil, 10); got != nil {
+			t.Fatalf("want nil, got %v", got)
+		}
+	})
+
+	t.Run("nil for non-positive cap", func(t *testing.T) {
+		if got := DownsampleEstimated1RM(mk(100, 90), 0); got != nil {
+			t.Fatalf("want nil, got %v", got)
+		}
+	})
+
+	t.Run("ascending and rounded under cap", func(t *testing.T) {
+		// newest-first input 320, 312.34, 305 -> ascending 305, 312.3, 320.
+		got := DownsampleEstimated1RM(mk(320, 312.34, 305), 10)
+		want := []float64{305, 312.3, 320}
+		if len(got) != len(want) {
+			t.Fatalf("len: want %v got %v", want, got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("at %d: want %v got %v (full %v)", i, want[i], got[i], got)
+			}
+		}
+	})
+
+	t.Run("downsamples to cap keeping oldest and newest", func(t *testing.T) {
+		// 11 ascending values 100..110; newest-first input is 110..100.
+		vals := make([]float64, 11)
+		for i := range vals { // newest-first: 110,109,...,100
+			vals[i] = float64(110 - i)
+		}
+		got := DownsampleEstimated1RM(mk(vals...), 5)
+		if len(got) != 5 {
+			t.Fatalf("want 5 points, got %d (%v)", len(got), got)
+		}
+		if got[0] != 100 {
+			t.Fatalf("want oldest 100 first, got %v", got[0])
+		}
+		if got[len(got)-1] != 110 {
+			t.Fatalf("want newest 110 last, got %v", got[len(got)-1])
+		}
+		for i := 1; i < len(got); i++ {
+			if got[i] <= got[i-1] {
+				t.Fatalf("not ascending at %d: %v", i, got)
+			}
+		}
+	})
+}
+
 func TestRecencyWeightedBaseline_Empty(t *testing.T) {
 	_, ok := RecencyWeightedBaseline(nil, time.Now(), DefaultBaselineWindow, DefaultBaselineTau)
 	if ok {

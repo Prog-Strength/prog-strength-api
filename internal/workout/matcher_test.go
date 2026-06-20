@@ -84,7 +84,7 @@ func doCreate(t *testing.T, h *Handler, performedAt time.Time) (*httptest.Respon
 func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
 	d := dbtest.New(t)
 	seedExerciseCatalog(t, d, "barbell-bench-press")
-	h := NewHandler(NewSQLiteRepository(d), exercise.NewSQLiteRepository(d))
+	h := NewHandler(NewSQLiteRepository(d), exercise.NewSQLiteRepository(d), testActivityRepo(d))
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -112,7 +112,7 @@ func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
 	d := dbtest.New(t)
 	seedExerciseCatalog(t, d, "barbell-bench-press")
 	repo := NewSQLiteRepository(d)
-	h := NewHandler(repo, exercise.NewSQLiteRepository(d))
+	h := NewHandler(repo, exercise.NewSQLiteRepository(d), testActivityRepo(d))
 	fake := &fakePlanMatcher{}
 	h.SetPlanMatcher(fake)
 
@@ -158,7 +158,7 @@ func TestPlanMatcher_NilIsNoOp(t *testing.T) {
 	d := dbtest.New(t)
 	seedExerciseCatalog(t, d, "barbell-bench-press")
 	repo := NewSQLiteRepository(d)
-	h := NewHandler(repo, exercise.NewSQLiteRepository(d))
+	h := NewHandler(repo, exercise.NewSQLiteRepository(d), testActivityRepo(d))
 	// no SetPlanMatcher call — planMatcher stays nil.
 
 	_, created := doCreate(t, h, time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC))

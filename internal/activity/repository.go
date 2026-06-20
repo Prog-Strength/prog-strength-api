@@ -45,6 +45,13 @@ type Repository interface {
 	// soft-deleted, or owned by another user.
 	Get(ctx context.Context, userID, id string) (*Activity, error)
 
+	// SummariesByIDs returns the user's live activities whose id is in ids,
+	// keyed by id and WITHOUT their trackpoint streams. Unlike List it does
+	// not exclude strength_training rows — it's the batch read the workout
+	// list endpoint uses to embed each workout's lightweight HR/calorie
+	// enrichment. IDs that don't resolve to a live row are simply absent.
+	SummariesByIDs(ctx context.Context, userID string, ids []string) (map[string]Activity, error)
+
 	// Rename updates a live activity's name and returns the updated
 	// activity (without trackpoints). Returns ErrNotFound when no live
 	// row matches.

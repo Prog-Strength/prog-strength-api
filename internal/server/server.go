@@ -390,7 +390,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Capture the workout + activity handlers so the timeline publisher
 		// can be injected before mounting — best-effort publishing of
 		// workouts/PRs (workout) and runs/best efforts (activity).
-		workoutHandler := workout.NewHandler(workoutRepo, exerciseRepo)
+		workoutHandler := workout.NewHandler(workoutRepo, exerciseRepo, activityRepo)
 		workoutHandler.SetPublisher(timelinePublisher)
 		workoutHandler.Mount(r)
 		// Nutrition + pantry routes share the JWT-gated group with

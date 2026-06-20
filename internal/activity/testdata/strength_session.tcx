@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Other">
+      <Id>strength-2026-06-19</Id>
+      <Notes>Bench day</Notes>
+      <Lap StartTime="2026-06-19T13:12:00Z">
+        <TotalTimeSeconds>120.0</TotalTimeSeconds>
+        <DistanceMeters>0.00</DistanceMeters>
+        <Calories>240</Calories>
+        <Track>
+          <Trackpoint>
+            <Time>2026-06-19T13:12:00Z</Time>
+            <HeartRateBpm><Value>100</Value></HeartRateBpm>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T13:12:30Z</Time>
+            <HeartRateBpm><Value>120</Value></HeartRateBpm>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T13:13:00Z</Time>
+            <HeartRateBpm><Value>140</Value></HeartRateBpm>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T13:13:30Z</Time>
+            <HeartRateBpm><Value>160</Value></HeartRateBpm>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T13:14:00Z</Time>
+            <HeartRateBpm><Value>180</Value></HeartRateBpm>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>

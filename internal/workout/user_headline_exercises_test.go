@@ -113,7 +113,7 @@ func TestEffectiveHeadlineExerciseSlugs_DefaultsWhenNoCustom(t *testing.T) {
 	d := dbtest.New(t)
 	repo := NewSQLiteRepository(d)
 	exRepo := exercise.NewSQLiteRepository(d)
-	h := NewHandler(repo, exRepo)
+	h := NewHandler(repo, exRepo, testActivityRepo(d))
 
 	got, err := h.effectiveHeadlineExerciseSlugs(context.Background(), "u-never-customized")
 	if err != nil {
@@ -137,7 +137,7 @@ func TestEffectiveHeadlineExerciseSlugs_ReturnsCustom(t *testing.T) {
 	seedExerciseCatalog(t, d, "barbell-overhead-press", "neutral-grip-pull-up")
 	repo := NewSQLiteRepository(d)
 	exRepo := exercise.NewSQLiteRepository(d)
-	h := NewHandler(repo, exRepo)
+	h := NewHandler(repo, exRepo, testActivityRepo(d))
 	ctx := context.Background()
 	now := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC)
 

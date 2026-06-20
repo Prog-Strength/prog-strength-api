@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
@@ -29,6 +30,12 @@ import (
 type Handler struct {
 	repo         Repository
 	exerciseRepo exercise.Repository
+	// activityRepo owns the activities domain that holds a workout's Garmin
+	// TCX enrichment (heart rate, calories, downsampled trackpoints). The
+	// workout-TCX endpoints create/load/soft-delete the linked activity
+	// through it. The cross-package coupling lives here at the HTTP edge,
+	// mirroring exerciseRepo — the workout domain types never import activity.
+	activityRepo activity.Repository
 	// publisher pushes completed workouts and the PR breaks they set into
 	// the timeline feed index. Optional and nil-safe: existing handler
 	// constructions (incl. every test) leave it nil and skip publishing, so
@@ -46,9 +53,11 @@ type Handler struct {
 
 // NewHandler builds a Handler backed by the given repositories. The
 // exercise repo is used by the progression endpoint to resolve a
-// muscle-group filter into a list of catalog exercises.
-func NewHandler(repo Repository, exerciseRepo exercise.Repository) *Handler {
-	return &Handler{repo: repo, exerciseRepo: exerciseRepo}
+// muscle-group filter into a list of catalog exercises; the activity repo
+// backs the workout-TCX enrichment endpoints (import / attach / detach) and
+// is loaded to embed enrichment in the workout DTOs.
+func NewHandler(repo Repository, exerciseRepo exercise.Repository, activityRepo activity.Repository) *Handler {
+	return &Handler{repo: repo, exerciseRepo: exerciseRepo, activityRepo: activityRepo}
 }
 
 // SetPublisher wires the timeline publisher into the handler so workout
@@ -133,10 +142,16 @@ func (h *Handler) Mount(r chi.Router) {
 		// Registered before any /{id} routes so chi matches literal
 		// path segments instead of trying to interpret them as workout IDs.
 		r.Get("/progression", h.progression)
+		// Create-from-TCX: mint an empty workout from a Garmin TCX. Literal
+		// segment, so it's registered before /{id} routes for the same reason.
+		r.Post("/imports", h.importFromTCX)
 		r.Get("/{id}", h.get)
 		r.Post("/", h.create)
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
+		// TCX enrichment attach/detach on an existing workout.
+		r.Post("/{id}/tcx", h.attachTCX)
+		r.Delete("/{id}/tcx", h.detachTCX)
 	})
 	r.Get("/personal-records", h.personalRecords)
 	r.Get("/personal-records/{exercise_id}/history", h.exerciseOneRMHistory)
@@ -205,6 +220,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	if wrapped == nil {
 		wrapped = []workoutWithEvents{}
+	}
+	// List load: embed each workout's lightweight enrichment summary
+	// (HR/calories) but NOT the per-second trackpoints array.
+	if err := h.attachEnrichment(r.Context(), wrapped, false); err != nil {
+		httpresp.ServerError(w, r.Context(), "load workout enrichment", err)
+		return
 	}
 
 	// Echo the effective limit/offset so the caller doesn't have to
@@ -295,6 +316,12 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	wrapped, err := h.attachPersonalRecordEvents(r.Context(), []Workout{*existing})
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "fetch personal record events", err)
+		return
+	}
+	// Detail load: embed the linked activity's enrichment WITH its
+	// downsampled HR trackpoints.
+	if err := h.attachEnrichment(r.Context(), wrapped, true); err != nil {
+		httpresp.ServerError(w, r.Context(), "load workout enrichment", err)
 		return
 	}
 	httpresp.OK(w, "fetched workout", wrapped[0])
@@ -594,7 +621,12 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		PerformedAt: performedAt,
 		EndedAt:     endedAt,
 		Notes:       req.Notes,
-		Exercises:   make([]WorkoutExercise, len(req.Exercises)),
+		// Carry the existing TCX link through: a workout edit never changes
+		// activity_id (the repo's UPDATE doesn't touch the column), so the
+		// returned DTO must reflect the link the DB still holds rather than a
+		// stale null.
+		ActivityID: existing.ActivityID,
+		Exercises:  make([]WorkoutExercise, len(req.Exercises)),
 	}
 	for i, exReq := range req.Exercises {
 		workout.Exercises[i] = WorkoutExercise{
@@ -731,6 +763,11 @@ func mapWorkoutValidationError(w http.ResponseWriter, err error) bool {
 type workoutWithEvents struct {
 	Workout
 	PersonalRecordsSet []personalRecordEventDTO `json:"personal_records_set"`
+	// Enrichment carries the linked activity's heart-rate / effort summary
+	// (and, on the detail path, its downsampled trackpoints). Null when the
+	// workout has no TCX attached (activity_id is null). On list responses
+	// the trackpoints array is omitted — see toWorkoutEnrichment.
+	Enrichment *workoutEnrichmentDTO `json:"enrichment"`
 }
 
 // personalRecordEventDTO is the JSON shape for a PR break event. Defined

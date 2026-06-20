@@ -37,6 +37,23 @@ type Repository interface {
 	// Returns ErrNotFound if the workout doesn't exist or is already deleted.
 	Delete(ctx context.Context, id string) error
 
+	// AttachActivity links a live workout to an activity (its Garmin TCX
+	// enrichment) by setting activity_id; it never touches performed_at or
+	// ended_at. Returns ErrNotFound when no live workout matches (id + user).
+	AttachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error
+
+	// DetachActivity clears a live workout's activity_id and soft-deletes the
+	// linked activity in one transaction (the activity's trackpoints and
+	// archived file are retained). Returns ErrNotFound when no live workout
+	// matches.
+	DetachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error
+
+	// GetByActivityID returns the live workout linked to activityID (at most
+	// one, per the partial unique index), hydrated with its exercises, or
+	// ErrNotFound. Used to resolve a duplicate-upload 409's run-vs-workout
+	// target.
+	GetByActivityID(ctx context.Context, userID, activityID string) (*Workout, error)
+
 	// ListOneRepMaxHistory returns the user's per-workout estimated 1RM
 	// entries for a single exercise, sorted most recent first. Optional
 	// since/until bounds filter on performed_at. Returns an empty slice

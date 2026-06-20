@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Other">
+      <Id>strength-no-hr-2026-06-19</Id>
+      <Notes>Strap off</Notes>
+      <Lap StartTime="2026-06-19T09:00:00Z">
+        <TotalTimeSeconds>60.0</TotalTimeSeconds>
+        <DistanceMeters>0.00</DistanceMeters>
+        <Calories>200</Calories>
+        <Track>
+          <Trackpoint>
+            <Time>2026-06-19T09:00:00Z</Time>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T09:00:30Z</Time>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-06-19T09:01:00Z</Time>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>

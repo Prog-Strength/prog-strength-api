@@ -24,6 +24,11 @@ type parsedTCX struct {
 	// We track presence separately from the sum because a real summed
 	// value of 0 is meaningful, whereas "no calories reported" is nil.
 	hasCalories bool
+	// LapStartTimes holds each lap's parsed StartTime attribute, in order.
+	// Used by the strength summarizer as a start-time fallback when a file
+	// somehow carries laps but no trackpoints. A lap whose StartTime is
+	// absent or unparseable contributes nothing.
+	LapStartTimes []time.Time
 }
 
 // parsedTrackpoint is one raw sample. Time is absolute (RFC3339 from the
@@ -103,6 +108,11 @@ func parseTCX(data []byte) (*parsedTCX, error) {
 		if lap.Calories != nil {
 			p.hasCalories = true
 			p.LapCalories = append(p.LapCalories, *lap.Calories)
+		}
+		if lap.StartTime != "" {
+			if t, err := time.Parse(time.RFC3339, lap.StartTime); err == nil {
+				p.LapStartTimes = append(p.LapStartTimes, t)
+			}
 		}
 		for _, tp := range lap.Trackpoints {
 			t, err := time.Parse(time.RFC3339, tp.Time)

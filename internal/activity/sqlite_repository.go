@@ -235,7 +235,11 @@ func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID str
 
 func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time) ([]Activity, error) {
 	args := []any{userID}
-	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
+	// strength_training rows live in this table but their canonical surface
+	// is the workout they enrich, not the standalone activities feed — so the
+	// feed and the day-bucketed overview (which calls List/ListInRange)
+	// exclude them. The type-scoped running queries are unaffected.
+	clauses := []string{"user_id = ?", "deleted_at IS NULL", "activity_type != 'strength_training'"}
 	if before != nil {
 		clauses = append(clauses, "start_time < ?")
 		args = append(args, *before)
@@ -268,7 +272,9 @@ func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, b
 
 func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Activity, error) {
 	args := []any{userID}
-	clauses := []string{"user_id = ?", "deleted_at IS NULL"}
+	// See List: strength_training rows are excluded from the activities feed
+	// and the day-bucketed overview that this range query backs.
+	clauses := []string{"user_id = ?", "deleted_at IS NULL", "activity_type != 'strength_training'"}
 	if since != nil {
 		clauses = append(clauses, "start_time >= ?")
 		args = append(args, *since)
@@ -320,6 +326,39 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID, activityID string) (
 	}
 	a.Trackpoints = points
 	return a, nil
+}
+
+func (r *SQLiteRepository) SummariesByIDs(ctx context.Context, userID string, ids []string) (map[string]Activity, error) {
+	out := make(map[string]Activity, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, userID)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	// No activity_type filter: callers fetch by explicit id and want the
+	// strength_training rows that List/ListInRange exclude from the feed.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT `+activityColumns+`
+		FROM activities
+		WHERE user_id = ? AND deleted_at IS NULL AND id IN (`+placeholders+`)
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		a, err := scanActivity(rows)
+		if err != nil {
+			return nil, err
+		}
+		out[a.ID] = *a
+	}
+	return out, rows.Err()
 }
 
 func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID string) ([]Trackpoint, error) {

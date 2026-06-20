@@ -13,6 +13,14 @@ const (
 	ActivityWalking ActivityType = "walking"
 	ActivityCycling ActivityType = "cycling"
 	ActivityOther   ActivityType = "other"
+	// ActivityStrengthTraining is a strength session enriched from a Garmin
+	// "Strength Training" TCX. Unlike the other types it is never produced
+	// by normalizeActivityType from a TCX <Sport> tag — it is set explicitly
+	// by the workout-TCX endpoints, which own the only path that creates it.
+	// A strength row carries HR/calories but no distance/pace/elevation, and
+	// is deliberately excluded from the standalone activities feed (its
+	// canonical surface is the workout it enriches).
+	ActivityStrengthTraining ActivityType = "strength_training"
 )
 
 // Valid reports whether t is one of the known members. Used by the S3
@@ -20,7 +28,7 @@ const (
 // untrusted input.
 func (t ActivityType) Valid() bool {
 	switch t {
-	case ActivityRunning, ActivityWalking, ActivityCycling, ActivityOther:
+	case ActivityRunning, ActivityWalking, ActivityCycling, ActivityOther, ActivityStrengthTraining:
 		return true
 	}
 	return false

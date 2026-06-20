@@ -2,6 +2,7 @@ package workout
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,11 +11,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
+
+// testActivityRepo builds an activity repository over the shared test DB with
+// an in-memory archiver, for wiring the workout handler's TCX-enrichment
+// dependency in tests.
+func testActivityRepo(d *sql.DB) activity.Repository {
+	return activity.NewSQLiteRepository(d, activity.NewMemoryArchiver())
+}
 
 // newExerciseHistoryHandler wires a workout handler over ephemeral SQLite
 // repos sharing one DB, seeded with the canonical exercise catalog. The
@@ -27,7 +36,7 @@ func newExerciseHistoryHandler(t *testing.T) *Handler {
 	if err := exRepo.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}
-	return NewHandler(NewSQLiteRepository(d), exRepo)
+	return NewHandler(NewSQLiteRepository(d), exRepo, testActivityRepo(d))
 }
 
 // withURLParam attaches a chi URL param to the request context.
@@ -55,7 +64,7 @@ func TestExerciseOneRMHistory_HappyPath(t *testing.T) {
 	if err := exRepo.SyncCatalog(ctx, exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}
-	h := NewHandler(repo, exRepo)
+	h := NewHandler(repo, exRepo, testActivityRepo(d))
 
 	// Two workouts on the same exercise at different dates create two
 	// history points; create them out of chronological order to prove the
@@ -285,7 +294,7 @@ func TestPersonalRecords_RecentEstimated1RMPoints(t *testing.T) {
 	if err := exRepo.SyncCatalog(ctx, exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
 	}
-	h := NewHandler(repo, exRepo)
+	h := NewHandler(repo, exRepo, testActivityRepo(d))
 
 	// Two real headline exercises from the curated default
 	// (HeadlineExercises, a []string of catalog slugs): train one, leave

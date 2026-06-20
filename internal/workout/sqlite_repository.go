@@ -46,9 +46,9 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 
 	// Insert workout.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO workouts (id, user_id, name, performed_at, ended_at, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, w.ID, w.UserID, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.CreatedAt, w.UpdatedAt)
+		INSERT INTO workouts (id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, w.ID, w.UserID, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.ActivityID, w.CreatedAt, w.UpdatedAt)
 	if err != nil {
 		return err
 	}
@@ -107,10 +107,10 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, error) {
 	var w Workout
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, name, performed_at, ended_at, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
 		FROM workouts
 		WHERE id = ? AND deleted_at IS NULL
-	`, id).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
+	`, id).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -134,7 +134,7 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, er
 func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts ListOptions) ([]Workout, error) {
 	// Build query with filters.
 	query := `
-		SELECT id, user_id, name, performed_at, ended_at, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
 		FROM workouts
 		WHERE user_id = ? AND deleted_at IS NULL
 	`
@@ -176,7 +176,7 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	var workouts []Workout
 	for rows.Next() {
 		var w Workout
-		if err = rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
+		if err = rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
 			return nil, err
 		}
 		workouts = append(workouts, w)
@@ -409,6 +409,103 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	}
 
 	return tx.Commit()
+}
+
+// AttachActivity links a live workout to an activity (its Garmin TCX
+// enrichment) by setting activity_id and bumping updated_at. It never
+// touches performed_at/ended_at. Returns ErrNotFound when no live workout
+// matches (id + user). The partial unique index idx_workouts_activity
+// guarantees one live workout per activity; a violation there surfaces as a
+// raw error (it cannot happen in the normal flow, where the activity is
+// freshly created for this attach).
+func (r *SQLiteRepository) AttachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE workouts
+		SET activity_id = ?, updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, now.UTC(), workoutID, userID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DetachActivity clears a live workout's activity_id and soft-deletes the
+// linked activity, both in one transaction so the link and the activity's
+// liveness flip together (a half-applied detach would either orphan a live
+// activity — blocking re-attach via the dedup index — or strand a workout
+// pointing at a deleted activity). The activity's trackpoints and archived
+// S3 object are intentionally retained, matching run soft-delete. This is
+// the one place the workout repo writes the activities table directly; it's
+// justified by the atomicity the SOW requires and both tables sharing this
+// repo's *sql.DB. Returns ErrNotFound when no live workout matches.
+func (r *SQLiteRepository) DetachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	ts := now.UTC()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE workouts
+		SET activity_id = NULL, updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, ts, workoutID, userID)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrNotFound
+	}
+
+	// Soft-delete the linked activity. Scoped to the user and to a still-live
+	// row so a double detach is a no-op on the activity side.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities
+		SET deleted_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, ts, activityID, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// GetByActivityID returns the live workout linked to activityID (at most one,
+// per idx_workouts_activity), hydrated with its exercises. Returns ErrNotFound
+// when no live workout points at the activity. Used to resolve the "kind"
+// (run vs workout) and target id of a duplicate-upload 409.
+func (r *SQLiteRepository) GetByActivityID(ctx context.Context, userID, activityID string) (*Workout, error) {
+	var w Workout
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
+		FROM workouts
+		WHERE activity_id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	byWorkout, err := r.loadWorkoutExercisesForWorkoutIDs(ctx, []string{w.ID})
+	if err != nil {
+		return nil, err
+	}
+	w.Exercises = byWorkout[w.ID]
+	return &w, nil
 }
 
 // loadWorkoutExercisesForWorkoutIDs hydrates every workout_exercise +

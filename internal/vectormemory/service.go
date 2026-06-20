@@ -216,6 +216,14 @@ func (s *Service) Dump(ctx context.Context, userID string, limit, offset int) ([
 	return s.repo.Dump(ctx, userID, limit, offset)
 }
 
+// DefaultThreshold is the configured distance cap the agent path applies when a
+// caller omits a threshold (i.e. passes the -1 sentinel). The admin search
+// handler echoes this back so an operator can see the active cap without a
+// config round-trip.
+func (s *Service) DefaultThreshold() float64 {
+	return s.cfg.DistanceThreshold
+}
+
 // renderConversation flattens turns into the plain transcript the distiller
 // reads, one "role: content" line per turn.
 func renderConversation(messages []ConversationMessage) string {

@@ -18,7 +18,7 @@ import (
 // against the same statically-linked SQLite the mattn driver uses, so every
 // connection opened afterwards (including dbtest and migrations) gets the vec0
 // virtual table. Done in init so it runs before any db.Open; the registration
-// is global and idempotent. See sows/agent-vector-memory.md.
+// is global and idempotent. See prog-strength-docs/sows/agent-vector-memory.md.
 func init() {
 	sqlite_vec.Auto()
 }

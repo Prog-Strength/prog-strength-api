@@ -34,6 +34,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
@@ -197,7 +198,8 @@ func New(cfg config.Config) (*Server, error) {
 	bodyweightRepo = bodyweight.NewSQLiteRepository(database)
 	plannedWorkoutRepo = plannedworkout.NewSQLiteRepository(database)
 	stepsRepo = steps.NewSQLiteRepository(database)
-	chatRepo = chat.NewSQLiteRepository(database)
+	chatSQLiteRepo := chat.NewSQLiteRepository(database)
+	chatRepo = chatSQLiteRepo
 	activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
 	nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 	timelineRepo = timeline.NewSQLiteRepository(database)
@@ -276,6 +278,29 @@ func New(cfg config.Config) (*Server, error) {
 		log.Println("telemetry: agent event recording enabled")
 	} else {
 		log.Println("telemetry: disabled (TELEMETRY_DATABASE_URL unset)")
+	}
+
+	// Agent vector memory: per-user durable recollections distilled from
+	// idle chat sessions (Anthropic) and embedded (OpenAI) into sqlite-vec
+	// for semantic retrieval by the agent. Everything is gated on Enabled —
+	// when off we mount nothing and start no background job, so an
+	// unconfigured deploy never spends against the paid providers. The
+	// handler is declared in the outer scope so the route-group blocks below
+	// can mount it (admin search + internal retrieve); it stays nil when the
+	// feature is disabled and the mounts nil-guard.
+	var vmHandler *vectormemory.Handler
+	if cfg.VectorMemory.Enabled {
+		vmClient := &http.Client{Timeout: 15 * time.Second} // embedding + distillation round-trips (job/backfill); the agent bounds its own retrieve timeout
+		vmLogger := logging.NewLogger(os.Stdout, cfg.LogLevel)
+		vmRepo := vectormemory.NewSQLiteRepository(database)
+		vmEmbedder := vectormemory.NewOpenAIEmbedder(vmClient, cfg.VectorMemory.OpenAIAPIKey, cfg.VectorMemory.EmbedModel)
+		vmDistiller := vectormemory.NewAnthropicDistiller(vmClient, cfg.VectorMemory.AnthropicAPIKey, cfg.VectorMemory.DistillModel)
+		vmService := vectormemory.NewService(vmRepo, vmEmbedder, vmDistiller, cfg.VectorMemory, vmLogger)
+		vmHandler = vectormemory.NewHandler(vmService, vmLogger)
+		vmService.StartDistillation(context.Background(), vmSessionSource{chat: chatSQLiteRepo})
+		log.Println("vectormemory: enabled (distillation + retrieval)")
+	} else {
+		log.Println("vectormemory: disabled (enabled=false)")
 	}
 
 	// Nutrition lookup service: FatSecret first (restaurant + branded),
@@ -516,6 +541,13 @@ func New(cfg config.Config) (*Server, error) {
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAdmin(userRepo, cfg.AdminEmails))
 			beta.NewHandler(betaRepo, userRepo).Mount(r)
+			// Admin vector-memory surface — GET /admin/memories +
+			// POST /admin/memories/search, gated by the RequireAdmin
+			// middleware on this group (MountAdmin itself is ungated).
+			// Only present when the feature is enabled.
+			if vmHandler != nil {
+				vmHandler.MountAdmin(r)
+			}
 		})
 		// Calendar sync (authed half): GET /auth/google/calendar/connect plus
 		// GET/DELETE /me/calendar/connection. Only present when calendar sync
@@ -531,6 +563,14 @@ func New(cfg config.Config) (*Server, error) {
 	// Lives OUTSIDE the JWT-gated group — auth boundary is the docker
 	// network, identical to /internal/telemetry/*.
 	chat.NewHandler(chatRepo).MountInternal(r)
+
+	// Internal vector-memory retrieval (POST /internal/memory/retrieve) for
+	// the agent. Lives OUTSIDE the JWT-gated group — same docker-network auth
+	// boundary as /internal/chat/* and /internal/telemetry/*. Only present
+	// when the feature is enabled.
+	if vmHandler != nil {
+		vmHandler.MountInternal(r)
+	}
 
 	return &Server{
 		httpServer: &http.Server{

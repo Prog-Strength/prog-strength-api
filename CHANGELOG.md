@@ -1,3 +1,10 @@
+# [0.64.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.63.0...v0.64.0) (2026-06-20)
+
+
+### Features
+
+* **workout:** enrich strength workouts with Garmin TCX heart-rate data ([#52](https://github.com/Prog-Strength/prog-strength-api/issues/52)) ([844937b](https://github.com/Prog-Strength/prog-strength-api/commit/844937bc028c9eb922f219cb9ffe68861832ff3b))
+
 # [0.63.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.62.0...v0.63.0) (2026-06-19)
 
 

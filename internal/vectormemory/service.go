@@ -86,8 +86,9 @@ func (s *Service) Retrieve(ctx context.Context, userID, query string, k int, thr
 	if err != nil {
 		return nil, fmt.Errorf("vectormemory: embed query: %w", err)
 	}
+	embedLatency := s.now().Sub(embedStart)
 	s.log.DebugContext(ctx, "vectormemory embedded query",
-		slog.Duration("latency", s.now().Sub(embedStart)),
+		slog.Duration("latency", embedLatency),
 		slog.Int("vectors", len(vecs)),
 	)
 	if len(vecs) == 0 {
@@ -103,6 +104,7 @@ func (s *Service) Retrieve(ctx context.Context, userID, query string, k int, thr
 		slog.Int("k", k),
 		slog.Float64("threshold", resolvedCap),
 		slog.Int("matches", len(matches)),
+		slog.Int64("embed_latency_ms", embedLatency.Milliseconds()),
 	)
 	return matches, nil
 }
@@ -169,6 +171,7 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 			}
 			if found && dist <= s.cfg.DedupThreshold {
 				s.log.DebugContext(ctx, "vectormemory skipping near-duplicate",
+					slog.String("user_id", userID),
 					slog.String("session_id", sessionID),
 					slog.Float64("distance", dist),
 				)
@@ -190,8 +193,9 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		}); err != nil {
 			// Continue rather than abort: see the method's insert-failure policy.
 			s.log.WarnContext(ctx, "vectormemory insert failed, skipping observation",
+				slog.String("user_id", userID),
 				slog.String("session_id", sessionID),
-				slog.String("error", err.Error()),
+				slog.Any("error", err),
 			)
 			continue
 		}

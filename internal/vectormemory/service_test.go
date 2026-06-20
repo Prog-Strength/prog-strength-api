@@ -54,6 +54,22 @@ func (f *fakeDistiller) Distill(_ context.Context, _ string) ([]string, error) {
 
 func (f *fakeDistiller) Configured() bool { return true }
 
+// failInsertRepo wraps a real Repository and fails the Insert whose
+// DistilledText matches failText, delegating every other call. It lets a test
+// exercise the per-observation insert-failure-continue policy against a real
+// store so the surviving rows are genuinely persisted and observable via Dump.
+type failInsertRepo struct {
+	Repository
+	failText string
+}
+
+func (r *failInsertRepo) Insert(ctx context.Context, m NewMemory) (int64, error) {
+	if m.DistilledText == r.failText {
+		return 0, errors.New("insert boom")
+	}
+	return r.Repository.Insert(ctx, m)
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
@@ -295,6 +311,51 @@ func TestServiceDistillSessionDedup(t *testing.T) {
 	// Seed + the one fresh observation.
 	if len(dumped) != 2 {
 		t.Fatalf("expected 2 memories total, got %d", len(dumped))
+	}
+}
+
+func TestServiceDistillSessionInsertFailureContinues(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "s1", "userA")
+
+	cfg := baseCfg() // DedupThreshold 0 ⇒ dedup off, insert everything
+
+	// Three observations; the middle one's insert is forced to fail. Per the
+	// documented policy the failure is logged and skipped, the other two still
+	// insert, and DistillSession returns (2, nil).
+	emb := &fakeEmbedder{vectors: map[string][]float32{
+		"first":  oneHot(0),
+		"second": oneHot(1),
+		"third":  oneHot(2),
+	}}
+	dis := &fakeDistiller{observations: []string{"first", "second", "third"}}
+	frepo := &failInsertRepo{Repository: repo, failText: "second"}
+	svc := NewService(frepo, emb, dis, cfg, testLogger())
+
+	n, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{
+		{Role: "user", Content: "stuff"},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error despite one insert failing, got %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 successful inserts (one failed), got %d", n)
+	}
+
+	// The surviving observations are actually persisted; the failed one is not.
+	dumped, err := svc.Dump(ctx, "userA", 10, 0)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	if len(dumped) != 2 {
+		t.Fatalf("expected 2 persisted memories, got %d", len(dumped))
+	}
+	for _, m := range dumped {
+		if m.DistilledText == "second" {
+			t.Fatalf("failed observation %q should not be persisted", m.DistilledText)
+		}
 	}
 }
 

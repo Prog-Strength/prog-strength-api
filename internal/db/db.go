@@ -6,11 +6,22 @@ import (
 	"fmt"
 	"time"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
+
 	// Registers the sqlite3 driver under the name "sqlite3" so sql.Open
 	// can resolve it. The blank import is the standard driver-registration
 	// pattern from database/sql.
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// why: sqlite_vec.Auto registers the extension via sqlite3_auto_extension
+// against the same statically-linked SQLite the mattn driver uses, so every
+// connection opened afterwards (including dbtest and migrations) gets the vec0
+// virtual table. Done in init so it runs before any db.Open; the registration
+// is global and idempotent. See sows/agent-vector-memory.md.
+func init() {
+	sqlite_vec.Auto()
+}
 
 // Open opens a SQLite database at the given path and configures connection pooling.
 // The path is typically a file path like "/data/app.db" or ":memory:" for in-memory.

@@ -3,6 +3,7 @@ module github.com/jwallace145/progressive-overload-fitness-tracker
 go 1.25.11
 
 require (
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/aws/aws-sdk-go-v2 v1.41.12
 	github.com/aws/aws-sdk-go-v2/config v1.32.23
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.103.2

@@ -1,0 +1,113 @@
+# prog-strength-api configuration — single source of truth.
+#
+# This file is PUBLIC. It contains tuning knobs and non-sensitive config
+# ONLY. It never contains secrets.
+#   • literal value  → public, version-controlled config. Edit + review + deploy.
+#   • "${ENV_VAR}"   → supplied by the environment at runtime. Used for
+#                      secrets (GitHub secrets), Terraform-owned resource
+#                      identities, and PII. A label here, never a value.
+#
+# Resolution precedence (highest wins):
+#   1. explicit env override for a key (emergency tuning without a rebuild)
+#   2. ${VAR} interpolation from the environment
+#   3. the literal value below
+#   4. built-in default / required-missing is a startup error
+#
+# CONFIG_FILE may point at an external file to replace this embedded default.
+
+[server]
+addr = ":8080"
+# Mounts POST /auth/dev/token. Local/dev only — MUST be false in production.
+# Not a secret; local dev overrides with env DEV_AUTH=true.
+dev_auth = false
+
+[database]
+# Container path to the app SQLite DB. Local dev overrides via env.
+url = "/data/app.db"
+# Empty → sibling telemetry.db next to `url` (e.g. /data/telemetry.db).
+telemetry_url = ""
+
+[logging]
+# debug | info | warn | error. Public tunable (was a compose default).
+level = "info"
+
+[auth]
+# HMAC secret for signing/verifying JWTs. REQUIRED — secret → env.
+jwt_signing_key = "${JWT_SIGNING_KEY}"
+# Operator allowlist gating /admin/*. PII → env (NOT committed). Empty =
+# admin surface fail-closed (every /admin route 403s).
+admin_emails = "${ADMIN_EMAILS}"
+
+[auth.google]
+# OAuth client id: deployment-bound identifier (not a hard secret) → env.
+client_id = "${GOOGLE_CLIENT_ID}"
+# OAuth client secret → secret → env.
+client_secret = "${GOOGLE_CLIENT_SECRET}"
+# Public OAuth callback URLs — NOT secrets. Prod literals; local dev
+# overrides via env. Empty client_id/secret/redirect ⇒ Google login routes
+# are not mounted (local-only iteration with dev_auth).
+login_redirect_url = "https://api.progstrength.fitness/auth/google/callback"
+calendar_redirect_url = "https://api.progstrength.fitness/auth/google/calendar/callback"
+# base64 32-byte AES-256-GCM key encrypting stored Google refresh tokens.
+# Secret → env. Empty disables Google Calendar sync.
+calendar_token_enc_key = "${CALENDAR_TOKEN_ENC_KEY}"
+
+[cors]
+# Browser origins permitted credentialed access. Public domains — NOT
+# secrets. Each entry may contain a SINGLE "*" wildcard (Vercel previews).
+# Empty disables CORS. Local dev appends localhost via env override.
+allowed_origins = [
+  "https://progstrength.fitness",
+  "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
+]
+# Origins /auth/google/login may redirect back to via ?return_to. Public.
+return_to_allowed_origins = [
+  "https://app.progstrength.fitness",
+  "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
+]
+
+[beta]
+# One-time seed for the DB-backed beta allowlist. PII → env (NOT committed).
+# Slated for removal once the SQLite-backed allowlist fully lands.
+seed_allowed_emails = "${BETA_ALLOWED_EMAILS}"
+
+[storage]
+# S3 buckets are provisioned by Terraform — it owns these names. Env-sourced
+# from Terraform outputs; NOT committed as literals (would duplicate TF).
+# Empty → in-memory fallback (uploads vanish on restart; DB rows survive).
+avatar_bucket_name = "${AVATAR_BUCKET_NAME}"
+tcx_bucket_name = "${TCX_BUCKET_NAME}"   # folded in from the former stray os.Getenv
+# AWS region for the S3 clients. Terraform-owned; REQUIRED when a bucket is set.
+aws_region = "${AWS_REGION}"
+
+[usage]
+# Per-user daily external-API spend ceiling (USD). 0 = disabled. Public
+# tunable — moved out of compose. ~$20/user/month at 0.67.
+daily_cap_usd = 0.67
+# Optional override of usage.DefaultPriceTable (emergency escape hatch).
+# Empty = built-in defaults. Public rates live in source as reviewable diffs.
+price_table = ""
+
+[nutrition_lookup]
+# Provider credentials → secrets → env. Empty ⇒ provider skipped and
+# GET /nutrition/lookup degrades to 503/agent estimation.
+fatsecret_client_id = "${FATSECRET_CLIENT_ID}"
+fatsecret_client_secret = "${FATSECRET_CLIENT_SECRET}"
+usda_fdc_api_key = "${USDA_FDC_API_KEY}"
+
+[vectormemory]
+# Seeds the Agent Vector Memory feature (sows/agent-vector-memory.md).
+# Master kill-switch: false ⇒ no distillation, no retrieval, no behavior change.
+enabled = true
+# Secrets → env.
+openai_api_key = "${OPENAI_API_KEY}"
+anthropic_api_key = "${ANTHROPIC_API_KEY}"
+# Tuning knobs (public). distance_threshold / dedup_threshold are TBD — to be
+# calibrated empirically via the probe tooling before retrieval goes live.
+distance_threshold = 0.0
+dedup_threshold = 0.0
+top_k = 5
+session_idle_minutes = 30
+distill_model = "claude-haiku-4-5-20251001"
+embed_model = "text-embedding-3-small"
+embed_dim = 1536

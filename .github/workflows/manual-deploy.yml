@@ -58,23 +58,22 @@ jobs:
       - name: Deploy tagged version to EC2
         uses: appleboy/ssh-action@v1.0.3
         env:
+          # Only true secrets, Terraform-owned identities, PII, and deploy
+          # orchestration are forwarded now. Non-secret app config lives in
+          # config.toml in this repo — see
+          # prog-strength-docs/sows/centralized-api-config.md.
           JWT_SIGNING_KEY: ${{ secrets.JWT_SIGNING_KEY }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REDIRECT_URL: ${{ secrets.GOOGLE_REDIRECT_URL }}
-          # Google Calendar sync. Both must be set for the calendar OAuth /
-          # connection routes to mount (server.go gates on them); missing
-          # secrets deploy as empty strings and the feature stays dormant —
-          # the rest of planned-workouts is unaffected.
-          GOOGLE_CALENDAR_REDIRECT_URL: ${{ secrets.GOOGLE_CALENDAR_REDIRECT_URL }}
           CALENDAR_TOKEN_ENC_KEY: ${{ secrets.CALENDAR_TOKEN_ENC_KEY }}
-          DEV_AUTH: ${{ secrets.DEV_AUTH }}
-          CORS_ALLOWED_ORIGIN: ${{ secrets.CORS_ALLOWED_ORIGIN }}
           LITESTREAM_REPLICA_BUCKET: ${{ secrets.LITESTREAM_REPLICA_BUCKET }}
           LITESTREAM_REPLICA_REGION: ${{ secrets.LITESTREAM_REPLICA_REGION }}
+          # Terraform-owned bucket identities (config.toml references these as
+          # ${VAR} labels; the values stay env-sourced).
           TCX_BUCKET_NAME: ${{ secrets.TCX_BUCKET_NAME }}
           AVATAR_BUCKET_NAME: ${{ secrets.AVATAR_BUCKET_NAME }}
-          RETURN_TO_ALLOWED_ORIGINS: ${{ secrets.RETURN_TO_ALLOWED_ORIGINS }}
+          # PII (real email addresses) — kept env-sourced, never committed to
+          # the public config.toml.
           BETA_ALLOWED_EMAILS: ${{ secrets.BETA_ALLOWED_EMAILS }}
           ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
           # See release.yml for rationale — same secrets here so manual
@@ -89,12 +88,16 @@ jobs:
           FATSECRET_CLIENT_ID: ${{ secrets.FATSECRET_CLIENT_ID }}
           FATSECRET_CLIENT_SECRET: ${{ secrets.FATSECRET_CLIENT_SECRET }}
           USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
+          # Agent Vector Memory provider keys (config.toml [vectormemory]
+          # ${VAR} labels). Optional until that feature ships.
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           RELEASE_VERSION: ${{ steps.resolve.outputs.version }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,GOOGLE_CALENDAR_REDIRECT_URL,CALENDAR_TOKEN_ENC_KEY,DEV_AUTH,CORS_ALLOWED_ORIGIN,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,RETURN_TO_ALLOWED_ORIGINS,BETA_ALLOWED_EMAILS,ADMIN_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,RELEASE_VERSION
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,CALENDAR_TOKEN_ENC_KEY,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,BETA_ALLOWED_EMAILS,ADMIN_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,RELEASE_VERSION
           script: |
             # Abort on the first failing command — see release.yml for the
             # full rationale on why this matters with appleboy/ssh-action.
@@ -120,16 +123,11 @@ jobs:
             JWT_SIGNING_KEY=${JWT_SIGNING_KEY}
             GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
             GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-            GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
-            GOOGLE_CALENDAR_REDIRECT_URL=${GOOGLE_CALENDAR_REDIRECT_URL}
             CALENDAR_TOKEN_ENC_KEY=${CALENDAR_TOKEN_ENC_KEY}
-            DEV_AUTH=${DEV_AUTH}
-            CORS_ALLOWED_ORIGIN=${CORS_ALLOWED_ORIGIN}
             LITESTREAM_REPLICA_BUCKET=${LITESTREAM_REPLICA_BUCKET}
             LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION}
             TCX_BUCKET_NAME=${TCX_BUCKET_NAME}
             AVATAR_BUCKET_NAME=${AVATAR_BUCKET_NAME}
-            RETURN_TO_ALLOWED_ORIGINS=${RETURN_TO_ALLOWED_ORIGINS}
             BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
             ADMIN_EMAILS=${ADMIN_EMAILS}
             GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
@@ -137,6 +135,8 @@ jobs:
             FATSECRET_CLIENT_ID=${FATSECRET_CLIENT_ID}
             FATSECRET_CLIENT_SECRET=${FATSECRET_CLIENT_SECRET}
             USDA_FDC_API_KEY=${USDA_FDC_API_KEY}
+            OPENAI_API_KEY=${OPENAI_API_KEY}
+            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
             AWS_REGION=us-east-2
             APP_VERSION=v${RELEASE_VERSION}
             ECR_REGISTRY=${ECR_REGISTRY}

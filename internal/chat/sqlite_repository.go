@@ -367,3 +367,87 @@ func (r *SQLiteRepository) ListMessages(ctx context.Context, userID, sessionID s
 	}
 	return out, rows.Err()
 }
+
+// IdleUndistilled returns sessions that have gone quiet (last_message_at
+// before cutoff) and have not yet been distilled, oldest-idle first, up
+// to limit.
+//
+// why: backs the vectormemory distillation job's batch selection. The
+// job runs cross-user (no caller user), so this is intentionally NOT
+// user-scoped — it sweeps every user's idle sessions. The
+// memory_distilled_at IS NULL gate is the distillation-state filter that
+// makes the job idempotent: a session drops out of this set the moment
+// MarkDistilled stamps it.
+func (r *SQLiteRepository) IdleUndistilled(ctx context.Context, cutoff time.Time, limit int) ([]IdleSession, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, user_id
+		FROM chat_sessions
+		WHERE last_message_at < ?
+		  AND memory_distilled_at IS NULL
+		  AND deleted_at IS NULL
+		ORDER BY last_message_at ASC
+		LIMIT ?
+	`, cutoff.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IdleSession
+	for rows.Next() {
+		var s IdleSession
+		if err := rows.Scan(&s.ID, &s.UserID); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// SessionMessages returns every message for a session in position order.
+//
+// why: backs the vectormemory distillation job. Unlike ListMessages it is
+// NOT user-scoped — the cross-user job selects sessions via
+// IdleUndistilled and has no caller user to authorize against, so it reads
+// the transcript by session id alone.
+func (r *SQLiteRepository) SessionMessages(ctx context.Context, sessionID string) ([]Message, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, session_id, position, role, content, model, tools_json, created_at
+		FROM chat_messages
+		WHERE session_id = ?
+		ORDER BY position ASC
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		var m Message
+		var role string
+		if err := rows.Scan(
+			&m.ID, &m.SessionID, &m.Position, &role,
+			&m.Content, &m.Model, &m.ToolsJSON, &m.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		m.Role = Role(role)
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// MarkDistilled stamps a session as distilled so it stops appearing in
+// IdleUndistilled.
+//
+// why: backs the vectormemory distillation job — this is the
+// distillation-state write that pairs with IdleUndistilled's NULL gate.
+// at is normalized to UTC to match the rest of the chat schema's
+// timestamp storage.
+func (r *SQLiteRepository) MarkDistilled(ctx context.Context, sessionID string, at time.Time) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE chat_sessions
+		SET memory_distilled_at = ?
+		WHERE id = ?
+	`, at.UTC(), sessionID)
+	return err
+}

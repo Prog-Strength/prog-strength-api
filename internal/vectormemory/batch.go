@@ -216,7 +216,10 @@ func (e *BatchEmbedder) pollBatch(ctx context.Context, batchID string) (string, 
 				return "", fmt.Errorf("openai batch: completed batch has no output_file_id")
 			}
 			return out.OutputFileID, nil
-		case "failed", "expired", "cancelled", "cancelling": //nolint:misspell // OpenAI's literal batch status values use British spelling
+		// OpenAI's literal batch status values use British spelling; misspell
+		// is told to ignore these words in .golangci.yml rather than rewriting
+		// the API contract.
+		case "failed", "expired", "cancelled", "cancelling":
 			return "", fmt.Errorf("openai batch: terminal status %q", out.Status)
 		}
 

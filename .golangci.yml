@@ -126,6 +126,11 @@ linters:
 
     misspell:
       locale: US
+      # OpenAI's batch API returns these literal status strings in British
+      # spelling; the code must match them verbatim, so don't flag them.
+      ignore-rules:
+        - cancelled
+        - cancelling
 
     revive:
       rules:

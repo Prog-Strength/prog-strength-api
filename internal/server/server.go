@@ -100,7 +100,7 @@ func New(cfg config.Config) (*Server, error) {
 	// Health check.
 	r.Get("/health", HealthCheck)
 
-	// TCX archiver for imported running files. When TCX_BUCKET_NAME is set
+	// TCX archiver for imported running files. When the TCX bucket is set
 	// we archive to S3 (prod); otherwise an in-memory archiver keeps the
 	// dev/test path working without object storage. NewS3Archiver only does
 	// a one-time AWS config/client init here, so context.Background() is the
@@ -108,7 +108,7 @@ func New(cfg config.Config) (*Server, error) {
 	// configured-but-broken bucket is a startup error — fail loudly rather
 	// than silently dropping uploads.
 	var activityArchiver activity.Archiver
-	if bucket := os.Getenv("TCX_BUCKET_NAME"); bucket != "" {
+	if bucket := cfg.TCXBucketName; bucket != "" {
 		s3Archiver, err := activity.NewS3Archiver(context.Background(), bucket)
 		if err != nil {
 			return nil, err

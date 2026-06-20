@@ -12,6 +12,7 @@ import (
 	// developer's macOS laptop.
 	_ "time/tzdata"
 
+	progstrength "github.com/jwallace145/progressive-overload-fitness-tracker"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/server"
 )
@@ -20,7 +21,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(progstrength.DefaultConfigTOML)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}

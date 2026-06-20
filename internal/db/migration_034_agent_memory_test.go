@@ -64,6 +64,16 @@ func TestMigrate034_AgentMemory(t *testing.T) {
 		t.Fatal("chat_sessions should have a memory_distilled_at column after migration 034")
 	}
 
+	// Both indexes exist (guards against a silent name typo or drop).
+	for _, idx := range []string{"idx_agent_memories_user", "idx_agent_memories_source_session"} {
+		var name string
+		if err := conn.QueryRow(
+			`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`, idx,
+		).Scan(&name); err != nil {
+			t.Fatalf("index %s should exist after migration 034: %v", idx, err)
+		}
+	}
+
 	// Seed a chat session to satisfy the source_session_id FK.
 	const sessionID = "sess-1"
 	const userID = "u1"
@@ -113,7 +123,9 @@ func TestMigrate034_AgentMemory(t *testing.T) {
 	}
 
 	// Deleting the source session cascades to agent_memories (FK ON DELETE
-	// CASCADE; dbtest opens with foreign_keys on).
+	// CASCADE; newEmptyDB opens with foreign_keys on). The vec0 row carries no
+	// FK so it intentionally persists as a harmless orphan — retrieval inner-
+	// joins vec rows back to agent_memories, so an orphan is never returned.
 	if _, err := conn.Exec(`DELETE FROM chat_sessions WHERE id = ?`, sessionID); err != nil {
 		t.Fatalf("delete chat_sessions: %v", err)
 	}

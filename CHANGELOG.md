@@ -1,3 +1,10 @@
+# [0.65.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.64.0...v0.65.0) (2026-06-20)
+
+
+### Features
+
+* **config:** centralize configuration in a committed config.toml ([#53](https://github.com/Prog-Strength/prog-strength-api/issues/53)) ([74defff](https://github.com/Prog-Strength/prog-strength-api/commit/74defff32fe00e8d6999b0aa5b345300e17f6181))
+
 # [0.64.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.63.0...v0.64.0) (2026-06-20)
 
 

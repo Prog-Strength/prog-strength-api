@@ -55,9 +55,13 @@ func NewAnthropicDistiller(client *http.Client, apiKey, model string) *Anthropic
 
 func (d *AnthropicDistiller) Configured() bool { return d.apiKey != "" }
 
-func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) ([]string, error) {
-	reqBody, err := json.Marshal(map[string]any{
-		"model":      d.model,
+// distillRequestBody builds the Anthropic message-create params that force the
+// model through the record_observations tool. Shared by the synchronous
+// AnthropicDistiller and the batch BatchDistiller so the tool schema and
+// system prompt live in exactly one place.
+func distillRequestBody(model, conversation string) map[string]any {
+	return map[string]any{
+		"model":      model,
 		"max_tokens": distillMaxTokens,
 		"system":     distillSystemPrompt,
 		"messages": []map[string]any{
@@ -79,7 +83,42 @@ func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) (
 			},
 		}},
 		"tool_choice": map[string]any{"type": "tool", "name": distillToolName},
-	})
+	}
+}
+
+// parseObservations extracts the observations array from a message's content
+// blocks (the JSON array under a record_observations tool_use), trimming and
+// dropping empties. A response with no matching tool_use block yields an empty
+// slice — not an error — because the model declining is a valid "nothing
+// durable" outcome. Shared by both the synchronous and batch distillers.
+func parseObservations(content json.RawMessage) []string {
+	var blocks []struct {
+		Type  string `json:"type"`
+		Name  string `json:"name"`
+		Input struct {
+			Observations []string `json:"observations"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(content, &blocks); err != nil {
+		return []string{}
+	}
+	for _, block := range blocks {
+		if block.Type != "tool_use" || block.Name != distillToolName {
+			continue
+		}
+		out := make([]string, 0, len(block.Input.Observations))
+		for _, obs := range block.Input.Observations {
+			if trimmed := strings.TrimSpace(obs); trimmed != "" {
+				out = append(out, trimmed)
+			}
+		}
+		return out
+	}
+	return []string{}
+}
+
+func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) ([]string, error) {
+	reqBody, err := json.Marshal(distillRequestBody(d.model, conversation))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic distill: marshal request: %w", err)
 	}
@@ -104,32 +143,14 @@ func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) (
 	}
 
 	var payload struct {
-		Content []struct {
-			Type  string `json:"type"`
-			Name  string `json:"name"`
-			Input struct {
-				Observations []string `json:"observations"`
-			} `json:"input"`
-		} `json:"content"`
+		Content json.RawMessage `json:"content"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("anthropic distill: decode response: %w", err)
 	}
 
-	for _, block := range payload.Content {
-		if block.Type != "tool_use" || block.Name != distillToolName {
-			continue
-		}
-		out := make([]string, 0, len(block.Input.Observations))
-		for _, obs := range block.Input.Observations {
-			if trimmed := strings.TrimSpace(obs); trimmed != "" {
-				out = append(out, trimmed)
-			}
-		}
-		return out, nil
-	}
-
-	// No tool_use block: the model declined (e.g. answered with text
-	// only). Nothing durable to record — not an error.
-	return []string{}, nil
+	// parseObservations returns an empty slice when there is no tool_use
+	// block (the model declined with text only) — that is "nothing durable
+	// to record", not an error.
+	return parseObservations(payload.Content), nil
 }

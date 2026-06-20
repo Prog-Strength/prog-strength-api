@@ -9,6 +9,9 @@ const (
 	SlugParseFailed = "tcx_parse_failed"
 	SlugNotRunning  = "tcx_not_running"
 	SlugEmpty       = "tcx_empty"
+	// SlugNoEffortData rejects a strength TCX that carries neither heart-rate
+	// samples nor calories — there is nothing to enrich the workout with.
+	SlugNoEffortData = "tcx_no_effort_data"
 )
 
 // ValidationError carries a machine-readable Slug alongside the human
@@ -46,4 +49,25 @@ func validate(p *parsedTCX) error {
 		}
 	}
 	return validationErr(SlugEmpty, "tcx has no trackpoint with non-zero distance")
+}
+
+// validateStrength is the distance-free counterpart used by the workout-TCX
+// import/attach path. A strength session is stationary, so the run validator's
+// "must have non-zero distance" rule would reject every valid file. The only
+// thing worth rejecting here is a file with no effort signal at all: no HR
+// samples AND no calories means there is nothing to put on the heart-rate &
+// effort card. (HR-or-calories is accepted; the card degrades gracefully when
+// one is missing.) Parse failures are reported by parseTCX itself.
+func validateStrength(p *parsedTCX) error {
+	hasHR := false
+	for _, tp := range p.Trackpoints {
+		if tp.HeartRateBpm != nil {
+			hasHR = true
+			break
+		}
+	}
+	if !hasHR && !p.hasCalories {
+		return validationErr(SlugNoEffortData, "tcx has no heart-rate samples and no calories")
+	}
+	return nil
 }

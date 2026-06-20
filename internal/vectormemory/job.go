@@ -93,7 +93,10 @@ func (s *Service) runDistill(ctx context.Context, src SessionSource) {
 // (the session reappears in the next sweep and re-distills idempotently —
 // dedup catches the re-inserts).
 func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
-	cutoff := s.now().Add(-time.Duration(s.cfg.SessionIdleMinutes) * time.Minute)
+	// One clock read per sweep keeps the cutoff and the mark timestamps on a
+	// single consistent moment rather than drifting across the loop.
+	now := s.now()
+	cutoff := now.Add(-time.Duration(s.cfg.SessionIdleMinutes) * time.Minute)
 
 	sessions, err := src.IdleUndistilled(ctx, cutoff, distillBatchSize)
 	if err != nil {
@@ -102,7 +105,11 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 		)
 		return err
 	}
+	if len(sessions) == 0 {
+		return nil
+	}
 
+	distilled := 0
 	for _, sess := range sessions {
 		msgs, err := src.Conversation(ctx, sess.ID)
 		if err != nil {
@@ -127,7 +134,7 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 
 		// Success (including the zero-observation case): stamp it so it
 		// stops showing up in IdleUndistilled.
-		if err := src.MarkDistilled(ctx, sess.ID, s.now()); err != nil {
+		if err := src.MarkDistilled(ctx, sess.ID, now); err != nil {
 			s.log.WarnContext(ctx, "vectormemory distillation: mark distilled failed",
 				slog.String("session_id", sess.ID),
 				slog.String("user_id", sess.UserID),
@@ -135,7 +142,14 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 			)
 			continue
 		}
+		distilled++
 	}
 
+	// One summary line per non-empty sweep so the paid loop is observable
+	// (how many of the selected batch were distilled this tick).
+	s.log.InfoContext(ctx, "vectormemory distillation: sweep complete",
+		slog.Int("selected", len(sessions)),
+		slog.Int("distilled", distilled),
+	)
 	return nil
 }

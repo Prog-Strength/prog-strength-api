@@ -85,6 +85,14 @@ func (r *SQLiteRepository) Search(ctx context.Context, userID, model string, que
 	// JOIN to agent_memories applies the model/superseded/text filters and
 	// drops orphaned vec rows automatically. The distance cap is expressed
 	// as (? <= 0 OR v.distance <= ?) so maxDistance <= 0 disables it.
+	//
+	// Ordering caveat: vec0 applies the k limit DURING the KNN scan, before
+	// the JOIN-side filters. So nearer superseded/other-model rows can crowd
+	// out valid ones within the k window, under-returning (never leaking — a
+	// dropped match means the coach recalls less, never wrong). At launch the
+	// index is single-model with no superseded rows, so this can't bite; if a
+	// future model migration leaves a mixed index thin on recall, over-fetch
+	// with an internal k multiplier here.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT am.distilled_text, v.distance, am.source_session_id, am.created_at
 		FROM vec_agent_memories v

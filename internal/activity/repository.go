@@ -3,6 +3,8 @@ package activity
 import (
 	"context"
 	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 )
 
 // Repository persists activities and their downsampled trackpoint
@@ -90,6 +92,16 @@ type Repository interface {
 	// running-specific, mirroring RunningMetrics' filter. Bucketing into local
 	// weeks happens in the handler.
 	ListRunningSamplesSince(ctx context.Context, userID string, since time.Time) ([]RunSample, error)
+
+	// RecentHRStats summarizes the user's recent running HR history for the
+	// zone engine: over their non-deleted ActivityRunning rows with
+	// start_time >= now-window and id != excludeActivityID, HistoryRunCount
+	// is the number of those runs carrying at least one HR-bearing
+	// trackpoint and RecentHRSamplesP99 is hrzones.P99 over all HR samples
+	// across them (nil when none). CurrentRunP99 is left nil — the handler
+	// fills it from the viewed run. excludeActivityID is typically the run
+	// being viewed so its own samples don't bias its reference.
+	RecentHRStats(ctx context.Context, userID string, window time.Duration, excludeActivityID string) (hrzones.Stats, error)
 }
 
 // RunSample is the minimal (start, distance) projection for one running

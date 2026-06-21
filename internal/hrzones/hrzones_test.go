@@ -193,6 +193,113 @@ func TestComputeNoHR(t *testing.T) {
 	}
 }
 
+func TestEstimateReference(t *testing.T) {
+	e := New(defaultConfig())
+
+	tests := []struct {
+		name           string
+		stats          Stats
+		wantBpm        int
+		wantSource     string
+		wantConfidence Confidence
+	}{
+		{
+			name:           "cold start no data",
+			stats:          Stats{},
+			wantBpm:        190,
+			wantSource:     "population_default",
+			wantConfidence: ConfidenceEstimated,
+		},
+		{
+			name:           "cold start current run above default",
+			stats:          Stats{CurrentRunP99: ptrInt(200)},
+			wantBpm:        200,
+			wantSource:     "current_run",
+			wantConfidence: ConfidenceEstimated,
+		},
+		{
+			name:           "cold start current run below default",
+			stats:          Stats{CurrentRunP99: ptrInt(150)},
+			wantBpm:        190,
+			wantSource:     "population_default",
+			wantConfidence: ConfidenceEstimated,
+		},
+		{
+			name:           "calibrating uses max of recent p99 and current",
+			stats:          Stats{HistoryRunCount: 2, RecentHRSamplesP99: ptrInt(180), CurrentRunP99: ptrInt(195)},
+			wantBpm:        195,
+			wantSource:     "p99_recent_runs",
+			wantConfidence: ConfidenceCalibrating,
+		},
+		{
+			name:           "calibrating with nil current run",
+			stats:          Stats{HistoryRunCount: 2, RecentHRSamplesP99: ptrInt(180)},
+			wantBpm:        180,
+			wantSource:     "p99_recent_runs",
+			wantConfidence: ConfidenceCalibrating,
+		},
+		{
+			name:           "calibrated uses recent p99",
+			stats:          Stats{HistoryRunCount: 5, RecentHRSamplesP99: ptrInt(191)},
+			wantBpm:        191,
+			wantSource:     "p99_recent_runs",
+			wantConfidence: ConfidenceCalibrated,
+		},
+		{
+			name:           "clamp ceiling",
+			stats:          Stats{CurrentRunP99: ptrInt(250)},
+			wantBpm:        230,
+			wantSource:     "current_run",
+			wantConfidence: ConfidenceEstimated,
+		},
+		{
+			name:           "clamp floor",
+			stats:          Stats{HistoryRunCount: 5, RecentHRSamplesP99: ptrInt(80)},
+			wantBpm:        100,
+			wantSource:     "p99_recent_runs",
+			wantConfidence: ConfidenceCalibrated,
+		},
+		{
+			name: "spike rejection via p99 not max",
+			// RecentHRSamplesP99 is fed as P99 of a set containing a lone 220 spike.
+			stats:          Stats{HistoryRunCount: 5, RecentHRSamplesP99: spikeSetP99(t)},
+			wantBpm:        191,
+			wantSource:     "p99_recent_runs",
+			wantConfidence: ConfidenceCalibrated,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ref := e.EstimateReference(tt.stats)
+			if ref.MaxHRBpm != tt.wantBpm {
+				t.Errorf("MaxHRBpm = %d, want %d", ref.MaxHRBpm, tt.wantBpm)
+			}
+			if ref.Source != tt.wantSource {
+				t.Errorf("Source = %q, want %q", ref.Source, tt.wantSource)
+			}
+			if ref.Confidence != tt.wantConfidence {
+				t.Errorf("Confidence = %q, want %q", ref.Confidence, tt.wantConfidence)
+			}
+		})
+	}
+}
+
+// spikeSetP99 builds a recent-sample p99 from a set whose only high value is a
+// lone 220 spike; the p99 must resolve to 191, not the 220 max.
+func spikeSetP99(t *testing.T) *int {
+	t.Helper()
+	samples := make([]int, 0, 100)
+	for i := 0; i < 99; i++ {
+		samples = append(samples, 191)
+	}
+	samples = append(samples, 220)
+	p := P99(samples)
+	if p == nil || *p != 191 {
+		t.Fatalf("spike set p99 = %v, want 191", p)
+	}
+	return p
+}
+
 func TestP99(t *testing.T) {
 	t.Run("empty -> nil", func(t *testing.T) {
 		if got := P99(nil); got != nil {

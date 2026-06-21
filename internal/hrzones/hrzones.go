@@ -132,6 +132,58 @@ func (e *Engine) classify(value float64, maxHR int) int {
 	return len(e.cfg.ZoneUpperBounds)
 }
 
+// EstimateReference resolves a max-HR reference along a cold-start -> calibrated
+// ladder. As HR history accumulates the source shifts from a population default
+// to the run's own p99 and finally to the p99 over recent runs, with confidence
+// rising in step. The final value is clamped to the configured plausible band
+// without altering the chosen source or confidence.
+func (e *Engine) EstimateReference(s Stats) Reference {
+	var ref Reference
+
+	switch {
+	case s.HistoryRunCount >= e.cfg.CalibratedRunThreshold && s.RecentHRSamplesP99 != nil:
+		ref = Reference{
+			MaxHRBpm:   *s.RecentHRSamplesP99,
+			Source:     "p99_recent_runs",
+			Confidence: ConfidenceCalibrated,
+		}
+	case s.HistoryRunCount > 0 && s.RecentHRSamplesP99 != nil:
+		currentOr0 := 0
+		if s.CurrentRunP99 != nil {
+			currentOr0 = *s.CurrentRunP99
+		}
+		ref = Reference{
+			MaxHRBpm:   max(*s.RecentHRSamplesP99, currentOr0),
+			Source:     "p99_recent_runs",
+			Confidence: ConfidenceCalibrating,
+		}
+	default:
+		ref = Reference{
+			MaxHRBpm:   e.cfg.PopulationDefaultMaxHR,
+			Source:     "population_default",
+			Confidence: ConfidenceEstimated,
+		}
+		if s.CurrentRunP99 != nil && *s.CurrentRunP99 > e.cfg.PopulationDefaultMaxHR {
+			ref.MaxHRBpm = *s.CurrentRunP99
+			ref.Source = "current_run"
+		}
+	}
+
+	ref.MaxHRBpm = clamp(ref.MaxHRBpm, e.cfg.MinReferenceBpm, e.cfg.MaxReferenceBpm)
+	return ref
+}
+
+// clamp bounds v to [lo, hi].
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
 // Compute accumulates time-in-zone over consecutive trackpoint pairs.
 //
 // A pair contributes only when both endpoints carry HR and dt > 0; the pair's

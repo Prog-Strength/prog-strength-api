@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
@@ -52,6 +53,15 @@ type Handler struct {
 	// implementation lives in server wiring so this package never imports
 	// planned_workout. Injected post-construction via SetPlanMatcher.
 	planMatcher PlanMatcher
+	// hrEngine computes the percent-of-max-HR zone breakdown attached to a
+	// running activity's detail response. Optional and nil-safe, mirroring
+	// publisher/planMatcher: when nil the get handler skips the zones block
+	// entirely. Injected post-construction via SetHRZonesEngine.
+	hrEngine *hrzones.Engine
+	// hrWindow is the recency window over which RecentHRStats summarizes the
+	// user's HR history for the reference-max-HR estimate. Set alongside
+	// hrEngine; derived from the [hr_zones] recency_window_days config.
+	hrWindow time.Duration
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -67,6 +77,15 @@ func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
 // from server wiring after construction. Safe to never call — matching is
 // best-effort and nil-guarded.
 func (h *Handler) SetPlanMatcher(m PlanMatcher) { h.planMatcher = m }
+
+// SetHRZonesEngine wires the heart-rate-zone engine (and its recency window)
+// in so a running activity's detail response carries a heart_rate_zones block.
+// Called from server wiring after construction. Safe to never call — the get
+// handler nil-guards and simply omits the block when the engine is unset.
+func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
+	h.hrEngine = e
+	h.hrWindow = window
+}
 
 // matchSession best-effort-notifies the plan matcher that ref was logged. It
 // NEVER affects the HTTP response: a nil matcher is a no-op.
@@ -174,6 +193,36 @@ type activityDTO struct {
 	ElevationGainMeters *float64        `json:"elevation_gain_meters"`
 	CreatedAt           time.Time       `json:"created_at"`
 	Trackpoints         []trackpointDTO `json:"trackpoints,omitempty"`
+	// HeartRateZones is the percent-of-max-HR time-in-zone breakdown. Only
+	// populated on the single-activity detail path for running activities with
+	// usable HR data; omitempty drops the key otherwise (no HR / not running /
+	// engine unwired).
+	HeartRateZones *heartRateZonesDTO `json:"heart_rate_zones,omitempty"`
+}
+
+// heartRateZoneDTO is one band of the five-zone model with its accumulated
+// time. The wire keys match the SOW response shape exactly.
+type heartRateZoneDTO struct {
+	Zone        int     `json:"zone"`
+	Name        string  `json:"name"`
+	LowerPct    float64 `json:"lower_pct"`
+	UpperPct    float64 `json:"upper_pct"`
+	MinBpm      int     `json:"min_bpm"`
+	MaxBpm      int     `json:"max_bpm"`
+	TimeSeconds int     `json:"time_seconds"`
+	TimePct     float64 `json:"time_pct"`
+}
+
+// heartRateZonesDTO is the heart_rate_zones block: the resolved reference, its
+// provenance/confidence, and the per-zone breakdown.
+type heartRateZonesDTO struct {
+	Model               string             `json:"model"`
+	MaxHRReferenceBpm   int                `json:"max_hr_reference_bpm"`
+	ReferenceSource     string             `json:"reference_source"`
+	ReferenceConfidence string             `json:"reference_confidence"`
+	Calibrating         bool               `json:"calibrating"`
+	TotalHRSeconds      int                `json:"total_hr_seconds"`
+	Zones               []heartRateZoneDTO `json:"zones"`
 }
 
 func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
@@ -440,7 +489,62 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "get activity", err)
 		return
 	}
-	httpresp.OK(w, "fetched activity", toActivityDTO(*a, true))
+
+	dto := toActivityDTO(*a, true)
+
+	// Attach the heart-rate-zone breakdown for running activities when the
+	// engine is wired. Kept out of toActivityDTO (which is pure and shared by
+	// the list/import paths) — only the detail path has the trackpoint stream
+	// and the ctx/userID needed to resolve the reference. A no-HR run yields
+	// ok=false from Compute, leaving the block nil (omitempty drops the key).
+	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
+		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
+		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
+		for _, tp := range a.Trackpoints {
+			tps = append(tps, hrzones.Trackpoint{
+				ElapsedSeconds: tp.ElapsedSeconds,
+				HeartRateBpm:   tp.HeartRateBpm,
+			})
+			if tp.HeartRateBpm != nil {
+				currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
+			}
+		}
+
+		stats, err := h.repo.RecentHRStats(r.Context(), userID, h.hrWindow, a.ID)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "recent hr stats", err)
+			return
+		}
+		stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
+
+		ref := h.hrEngine.EstimateReference(stats)
+		if res, ok := h.hrEngine.Compute(ref, tps); ok {
+			zones := make([]heartRateZoneDTO, 0, len(res.Zones))
+			for _, z := range res.Zones {
+				zones = append(zones, heartRateZoneDTO{
+					Zone:        z.Number,
+					Name:        z.Name,
+					LowerPct:    z.LowerPct,
+					UpperPct:    z.UpperPct,
+					MinBpm:      z.MinBpm,
+					MaxBpm:      z.MaxBpm,
+					TimeSeconds: z.TimeSeconds,
+					TimePct:     z.TimePct,
+				})
+			}
+			dto.HeartRateZones = &heartRateZonesDTO{
+				Model:               res.Model,
+				MaxHRReferenceBpm:   res.Reference.MaxHRBpm,
+				ReferenceSource:     res.Reference.Source,
+				ReferenceConfidence: string(res.Reference.Confidence),
+				Calibrating:         res.Calibrating,
+				TotalHRSeconds:      res.TotalHRSeconds,
+				Zones:               zones,
+			}
+		}
+	}
+
+	httpresp.OK(w, "fetched activity", dto)
 }
 
 func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {

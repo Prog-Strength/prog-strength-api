@@ -39,6 +39,16 @@ type Session struct {
 	LastIntentAt *time.Time `json:"-"`
 }
 
+// IdleSession is the minimal session identity the vectormemory
+// distillation job needs to pull a transcript and stamp progress: the
+// session id and its owning user. The job runs cross-user (no caller
+// user in hand), so it carries the user_id forward to DistillSession
+// rather than re-deriving it.
+type IdleSession struct {
+	ID     string
+	UserID string
+}
+
 // ValidateForCreate runs on the input the handler builds from the
 // authed user + the client's POST body. UserID + ID must be set;
 // anything else is the repo's responsibility to fill.

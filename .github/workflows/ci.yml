@@ -72,6 +72,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install SQLite dev headers (sqlite-vec cgo)
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
       - uses: actions/setup-go@v5
         with:
           # Read the toolchain version from go.mod so a Go bump here is a
@@ -113,6 +116,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install SQLite dev headers (sqlite-vec cgo)
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -130,6 +136,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install SQLite dev headers (sqlite-vec cgo)
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
       - uses: actions/setup-go@v5
         with:

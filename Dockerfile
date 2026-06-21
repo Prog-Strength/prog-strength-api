@@ -6,8 +6,9 @@
 # install the matching toolchain.
 FROM golang:1.25.11-alpine AS builder
 
-# Install build dependencies for CGo (required for go-sqlite3)
-RUN apk add --no-cache gcc musl-dev
+# Install build dependencies for CGo (required for go-sqlite3).
+# sqlite-dev provides sqlite3.h, which the sqlite-vec cgo bindings #include.
+RUN apk add --no-cache gcc musl-dev sqlite-dev
 
 WORKDIR /build
 

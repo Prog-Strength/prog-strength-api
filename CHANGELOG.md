@@ -1,3 +1,10 @@
+## [0.66.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.66.0...v0.66.1) (2026-06-21)
+
+
+### Bug Fixes
+
+* **build:** compile sqlite-vec against musl in the Docker builder ([#55](https://github.com/Prog-Strength/prog-strength-api/issues/55)) ([7832192](https://github.com/Prog-Strength/prog-strength-api/commit/7832192ed7f84aa834ec8dc110633fcea189b1a5))
+
 # [0.66.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.65.0...v0.66.0) (2026-06-21)
 
 

@@ -24,6 +24,14 @@ COPY . .
 # response's "version" field via internal/version.Version.
 ARG APP_VERSION=dev
 
+# sqlite-vec.c (vendored by the asg017/sqlite-vec-go-bindings cgo package)
+# references the BSD type aliases u_int8_t / u_int16_t / u_int64_t. glibc
+# exposes these via <sys/types.h>, but musl (Alpine) does not — so the cgo
+# compile fails with "unknown type name 'u_int8_t'". Map them to the standard
+# <stdint.h> names for the C compiler. Scoped to this builder stage; the
+# runtime stage below is a fresh image and is unaffected.
+ENV CGO_CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
+
 # Build the binary.
 # CGO_ENABLED=1 is required for go-sqlite3.
 # -ldflags injects the version string into internal/version.Version.

@@ -1,3 +1,10 @@
+# [0.67.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.66.1...v0.67.0) (2026-06-21)
+
+
+### Features
+
+* **vectormemory:** set calibrated retrieval + dedup thresholds ([#56](https://github.com/Prog-Strength/prog-strength-api/issues/56)) ([3d699af](https://github.com/Prog-Strength/prog-strength-api/commit/3d699aff85345b9529e94a074f439b7c34aab4e6))
+
 ## [0.66.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.66.0...v0.66.1) (2026-06-21)
 
 

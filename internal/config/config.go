@@ -172,6 +172,28 @@ type Config struct {
 	// (sows/agent-vector-memory.md). This SOW registers the section as the
 	// foundation that feature builds on; see VectorMemoryConfig.
 	VectorMemory VectorMemoryConfig
+
+	// HRZones configures the running heart-rate-zone engine
+	// (sows/running-heart-rate-zones.md): the reference-max-HR estimation
+	// tunables and the five-zone percent-of-max model. See HRZonesConfig.
+	HRZones HRZonesConfig
+}
+
+// HRZonesConfig groups the heart-rate-zone engine tunables. All are non-secret
+// public literals (no ${VAR} interpolation, no env override): PopulationDefaultMaxHR
+// seeds the cold-start reference, CalibratedRunThreshold is the run count at which
+// the reference is trusted, RecencyWindowDays bounds the history considered,
+// MinReferenceBpm/MaxReferenceBpm clamp the estimate to a plausible band, and
+// ZoneUpperBounds/ZoneNames define the zone model (len(ZoneNames) ==
+// len(ZoneUpperBounds)+1).
+type HRZonesConfig struct {
+	PopulationDefaultMaxHR int
+	CalibratedRunThreshold int
+	RecencyWindowDays      int
+	MinReferenceBpm        int
+	MaxReferenceBpm        int
+	ZoneUpperBounds        []float64
+	ZoneNames              []string
 }
 
 // VectorMemoryConfig groups the Agent Vector Memory settings. Enabled is the
@@ -255,6 +277,15 @@ type fileConfig struct {
 		EmbedModel         string  `toml:"embed_model"`
 		EmbedDim           int     `toml:"embed_dim"`
 	} `toml:"vectormemory"`
+	HRZones struct {
+		PopulationDefaultMaxHR int       `toml:"population_default_max_hr"`
+		CalibratedRunThreshold int       `toml:"calibrated_run_threshold"`
+		RecencyWindowDays      int       `toml:"recency_window_days"`
+		MinReferenceBpm        int       `toml:"min_reference_bpm"`
+		MaxReferenceBpm        int       `toml:"max_reference_bpm"`
+		ZoneUpperBounds        []float64 `toml:"zone_upper_bounds"`
+		ZoneNames              []string  `toml:"zone_names"`
+	} `toml:"hr_zones"`
 }
 
 // toStringList normalizes a decoded list value — a native TOML array, a
@@ -378,6 +409,15 @@ func Load(defaultTOML []byte) (Config, error) {
 			DistillModel:       fc.VectorMemory.DistillModel,
 			EmbedModel:         fc.VectorMemory.EmbedModel,
 			EmbedDim:           fc.VectorMemory.EmbedDim,
+		},
+		HRZones: HRZonesConfig{
+			PopulationDefaultMaxHR: fc.HRZones.PopulationDefaultMaxHR,
+			CalibratedRunThreshold: fc.HRZones.CalibratedRunThreshold,
+			RecencyWindowDays:      fc.HRZones.RecencyWindowDays,
+			MinReferenceBpm:        fc.HRZones.MinReferenceBpm,
+			MaxReferenceBpm:        fc.HRZones.MaxReferenceBpm,
+			ZoneUpperBounds:        fc.HRZones.ZoneUpperBounds,
+			ZoneNames:              fc.HRZones.ZoneNames,
 		},
 	}
 

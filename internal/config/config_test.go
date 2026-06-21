@@ -513,9 +513,49 @@ func TestGoldenManifest(t *testing.T) {
 			EmbedModel:         "text-embedding-3-small",
 			EmbedDim:           1536,
 		},
+		HRZones: HRZonesConfig{
+			PopulationDefaultMaxHR: 190,
+			CalibratedRunThreshold: 5,
+			RecencyWindowDays:      90,
+			MinReferenceBpm:        100,
+			MaxReferenceBpm:        230,
+			ZoneUpperBounds:        []float64{0.60, 0.70, 0.80, 0.90},
+			ZoneNames:              []string{"Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"},
+		},
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
 		t.Errorf("golden config mismatch:\n got = %#v\nwant = %#v", cfg, want)
+	}
+}
+
+// TestHRZonesSectionParses pins the [hr_zones] tunables: the committed manifest
+// decodes into the typed HRZonesConfig the engine consumes. These are plain
+// literals (no ${VAR} interpolation, no env override), so a direct Load of the
+// golden config is the assertion surface.
+func TestHRZonesSectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "hrzones-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.HRZones.PopulationDefaultMaxHR != 190 {
+		t.Errorf("PopulationDefaultMaxHR = %d, want 190", cfg.HRZones.PopulationDefaultMaxHR)
+	}
+	if cfg.HRZones.CalibratedRunThreshold != 5 {
+		t.Errorf("CalibratedRunThreshold = %d, want 5", cfg.HRZones.CalibratedRunThreshold)
+	}
+	if len(cfg.HRZones.ZoneUpperBounds) != 4 {
+		t.Errorf("len(ZoneUpperBounds) = %d, want 4", len(cfg.HRZones.ZoneUpperBounds))
+	}
+	if len(cfg.HRZones.ZoneNames) != 5 || cfg.HRZones.ZoneNames[4] != "VO2max" {
+		t.Errorf("ZoneNames = %#v, want [...]/[4]==VO2max", cfg.HRZones.ZoneNames)
 	}
 }

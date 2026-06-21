@@ -102,10 +102,17 @@ enabled = true
 # Secrets → env.
 openai_api_key = "${OPENAI_API_KEY}"
 anthropic_api_key = "${ANTHROPIC_API_KEY}"
-# Tuning knobs (public). distance_threshold / dedup_threshold are TBD — to be
-# calibrated empirically via the probe tooling before retrieval goes live.
-distance_threshold = 0.0
-dedup_threshold = 0.0
+# Tuning knobs (public), calibrated 2026-06-21 via the admin probe
+# (POST /admin/memories/search, full sweep). On real distilled memories,
+# relevant hits clustered <=~0.68 and noise began >=~0.77, leaving a clean
+# gap; near-duplicates sat at ~0.28 and the first distinct fact at ~0.51.
+# Retrieval semantics: 0 = no cap (inject top_k unconditionally), so these
+# replace the unset 0.0 with the real relevance/dedup gates.
+#   distance_threshold: relevance cap — exclude matches farther than this.
+#   dedup_threshold:    write-time skip — drop observations nearer than this
+#                       to an existing one (0 disables dedup entirely).
+distance_threshold = 0.70
+dedup_threshold = 0.40
 top_k = 5
 session_idle_minutes = 30
 distill_model = "claude-haiku-4-5-20251001"

@@ -1,3 +1,10 @@
+# [0.66.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.65.0...v0.66.0) (2026-06-21)
+
+
+### Features
+
+* **vectormemory:** semantic agent memory over app.db via sqlite-vec ([#54](https://github.com/Prog-Strength/prog-strength-api/issues/54)) ([8146781](https://github.com/Prog-Strength/prog-strength-api/commit/81467818128e08e2edc20fccfd3ba4458d9ff9d1))
+
 # [0.65.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.64.0...v0.65.0) (2026-06-20)
 
 

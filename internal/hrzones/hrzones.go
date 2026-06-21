@@ -98,13 +98,19 @@ func (e *Engine) buildZones(maxHR int) []Zone {
 		lower := e.lowerPct(i)
 		upper := e.upperPct(i)
 
-		minBpm := int(math.Round(lower * float64(maxHR)))
+		// Bounds must derive from the SAME threshold classify uses: the lower
+		// zone contains every integer v < upper*maxHR. So MinBpm is the first
+		// integer at/above lower*maxHR (ceil), and MaxBpm is one below the first
+		// integer at/above upper*maxHR (ceil - 1). Using Round here would let the
+		// displayed range contradict where classify counts time whenever
+		// upper*maxHR has a fractional part below 0.5.
+		minBpm := int(math.Ceil(lower * float64(maxHR)))
 		var maxBpm int
 		if i == n-1 {
 			// Top zone is open-ended; its ceiling is the reference itself.
 			maxBpm = maxHR
 		} else {
-			maxBpm = int(math.Round(upper*float64(maxHR))) - 1
+			maxBpm = int(math.Ceil(upper*float64(maxHR))) - 1
 		}
 
 		zones[i] = Zone{

@@ -57,6 +57,85 @@ func TestZoneBpmBounds(t *testing.T) {
 	}
 }
 
+// TestZoneBoundsMatchClassification pins the invariant that the displayed
+// [MinBpm, MaxBpm] of each zone agrees exactly with where Compute/classify
+// attributes time. It uses maxHR=188, a "rounds-down" reference: e.g.
+// 0.80*188 = 150.4, so a value of 150 bpm classifies into Z3 (150 < 150.4).
+// With math.Round the display would have shown Z3 ending at 149 and Z4 starting
+// at 150 — contradicting the classification. With math.Ceil they agree.
+func TestZoneBoundsMatchClassification(t *testing.T) {
+	e := New(defaultConfig())
+	const maxHR = 188
+	ref := Reference{MaxHRBpm: maxHR, Confidence: ConfidenceCalibrated}
+
+	res, ok := e.Compute(ref, []Trackpoint{
+		{ElapsedSeconds: 0, HeartRateBpm: ptrInt(150)},
+		{ElapsedSeconds: 1, HeartRateBpm: ptrInt(150)},
+	})
+	if !ok {
+		t.Fatalf("expected ok result")
+	}
+	zones := res.Zones
+
+	// classifyBpm returns the 1-indexed zone number Compute attributes a flat
+	// interval at the given bpm to.
+	classifyBpm := func(bpm int) int {
+		r, ok := e.Compute(ref, []Trackpoint{
+			{ElapsedSeconds: 0, HeartRateBpm: ptrInt(bpm)},
+			{ElapsedSeconds: 1, HeartRateBpm: ptrInt(bpm)},
+		})
+		if !ok {
+			t.Fatalf("expected ok for bpm=%d", bpm)
+		}
+		for _, z := range r.Zones {
+			if z.TimeSeconds > 0 {
+				return z.Number
+			}
+		}
+		t.Fatalf("no zone accumulated time for bpm=%d", bpm)
+		return 0
+	}
+
+	// zoneContaining returns the 1-indexed zone whose displayed [MinBpm, MaxBpm]
+	// range contains bpm, or 0 if none.
+	zoneContaining := func(bpm int) int {
+		for _, z := range zones {
+			if bpm >= z.MinBpm && bpm <= z.MaxBpm {
+				return z.Number
+			}
+		}
+		return 0
+	}
+
+	// For every integer bpm across the full range, the displayed zone whose
+	// range contains it must equal the zone classify actually counts it in. The
+	// displayed ranges must also be contiguous and exhaustive (every bpm lands
+	// in exactly one zone), which zoneContaining returning a non-zero match for
+	// every bpm enforces.
+	for bpm := 0; bpm <= maxHR; bpm++ {
+		display := zoneContaining(bpm)
+		if display == 0 {
+			t.Errorf("bpm=%d falls in no displayed zone range", bpm)
+			continue
+		}
+		if got := classifyBpm(bpm); got != display {
+			t.Errorf("bpm=%d: classify -> Z%d, but displayed range -> Z%d", bpm, got, display)
+		}
+	}
+
+	// Spell out the rounds-down boundary explicitly so a regression is obvious:
+	// 0.80*188 = 150.4 -> Z3 = [..,150], Z4 = [151,..]; classify(150) must be Z3.
+	if got := classifyBpm(150); got != 3 {
+		t.Errorf("classify(150) at maxHR=188 = Z%d, want Z3", got)
+	}
+	if zones[2].MaxBpm != 150 {
+		t.Errorf("Z3 MaxBpm = %d, want 150", zones[2].MaxBpm)
+	}
+	if zones[3].MinBpm != 151 {
+		t.Errorf("Z4 MinBpm = %d, want 151", zones[3].MinBpm)
+	}
+}
+
 func TestClassifyBoundaries(t *testing.T) {
 	e := New(defaultConfig())
 	const maxHR = 191

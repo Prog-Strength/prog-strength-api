@@ -13,11 +13,12 @@
 // open-ended at both ends on purpose: the bottom zone starts at 0 so very low
 // HR (and the warm-up ramp) always lands somewhere, and the top zone has no
 // ceiling so a maximal effort that briefly exceeds the reference is still
-// counted rather than dropped. Per-zone bpm bounds are rounded for display, but
-// classification compares the fractional threshold (value < UpperPct*maxHR)
-// directly so a value is binned exactly once and never disagrees with the
-// rounded bounds shown beside it. Intervals are classified by the mean of their
-// two endpoint bpms.
+// counted rather than dropped. Classification compares the fractional threshold
+// (value < UpperPct*maxHR) directly, and the per-zone bpm bounds shown for
+// display are derived from that same threshold (MinBpm = ceil(LowerPct*maxHR),
+// MaxBpm = ceil(UpperPct*maxHR)-1) so a value is binned exactly once and the
+// displayed range never disagrees with where its time is counted. Intervals are
+// classified by the mean of their two endpoint bpms.
 //
 // # Estimation ladder and confidence
 //

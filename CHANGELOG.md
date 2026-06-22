@@ -1,3 +1,10 @@
+## [0.69.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.0...v0.69.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* **dashboard:** streak counts only completed activity ([#60](https://github.com/Prog-Strength/prog-strength-api/issues/60)) ([b14b6f0](https://github.com/Prog-Strength/prog-strength-api/commit/b14b6f0854e8efb558360ff83ca56f59cd07e347))
+
 # [0.69.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.68.0...v0.69.0) (2026-06-22)
 
 

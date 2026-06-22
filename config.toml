@@ -62,7 +62,7 @@ allowed_origins = [
 ]
 # Origins /auth/google/login may redirect back to via ?return_to. Public.
 return_to_allowed_origins = [
-  "https://app.progstrength.fitness",
+  "https://progstrength.fitness",
   "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
 ]
 

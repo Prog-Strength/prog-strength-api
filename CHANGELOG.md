@@ -1,3 +1,10 @@
+# [0.72.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.71.0...v0.72.0) (2026-06-22)
+
+
+### Features
+
+* **deploy:** deploy via SSM Run Command; retire SSH deploy key ([#64](https://github.com/Prog-Strength/prog-strength-api/issues/64)) ([86dee29](https://github.com/Prog-Strength/prog-strength-api/commit/86dee298110b074a62be1549837745f0d20e674b))
+
 # [0.71.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.70.0...v0.71.0) (2026-06-22)
 
 

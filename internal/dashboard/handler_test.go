@@ -26,6 +26,15 @@ import (
 
 // --- harness ----------------------------------------------------------
 
+// testNow pins the handler's clock to a fixed Wednesday 13:00 UTC so the
+// integration tests' relative seed offsets ("yesterday", "this week") land in a
+// deterministic local week regardless of when CI actually runs. Without this the
+// week-boundary assertions flake when the suite runs early in a calendar week
+// (e.g. Monday 00:xx UTC), where "yesterday" is the prior week and seeds dated
+// later in the week fall in the future. It mirrors the fixed reference instant
+// the pure-builder unit tests already use.
+var testNow = time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
+
 // repos bundles the real SQLite repositories backed by one shared *sql.DB so a
 // test can seed across domains and read them all back through the handler.
 type repos struct {
@@ -69,7 +78,9 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	}
 
 	r := chi.NewRouter()
-	NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user).Mount(r)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user)
+	h.now = func() time.Time { return testNow }
+	h.Mount(r)
 	return r, rp, u.ID
 }
 
@@ -182,7 +193,7 @@ func seedBodyweight(t *testing.T, rp *repos, userID string, measuredAt time.Time
 
 func TestSummary_Full(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
-	now := time.Now().UTC()
+	now := testNow
 	thisWeek := now.Add(-24 * time.Hour)
 	lastWeek := now.AddDate(0, 0, -8)
 	todayStr := now.Format("2006-01-02")
@@ -281,7 +292,7 @@ func TestSummary_Full(t *testing.T) {
 
 func TestSummary_Partial(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
-	now := time.Now().UTC()
+	now := testNow
 	todayStr := now.Format("2006-01-02")
 
 	seedWorkout(t, rp, userID, now.Add(-2*time.Hour), "barbell-bench-press", 185, 5)
@@ -370,7 +381,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 	}
 	userID := u.ID
 
-	now := time.Now().UTC()
+	now := testNow
 	todayStr := now.Format("2006-01-02")
 	// Seed at least one other domain so its section proves the request didn't
 	// abort early. Bodyweight is left seeded too — its read still fails, so the
@@ -381,7 +392,9 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 
 	// Wire the handler with the failing bodyweight repo; all others are real.
 	r := chi.NewRouter()
-	NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user).Mount(r)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user)
+	h.now = func() time.Time { return testNow }
+	h.Mount(r)
 
 	rec := get(t, r, userID, "?timezone=UTC")
 	if rec.Code != http.StatusOK {
@@ -406,7 +419,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 func TestSummary_Streak(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	loc := time.UTC
-	now := time.Now().In(loc)
+	now := testNow.In(loc)
 	monday := localWeekStart(now, loc)
 
 	// Active on Monday and Wednesday of the current local week, plus a workout
@@ -447,7 +460,7 @@ func TestSummary_Timezone(t *testing.T) {
 	// thus which weekday flag lights up in the streak — depends on the
 	// requested timezone. This pins down that bucketing happens in `loc`, not
 	// in UTC.
-	now := time.Now().UTC()
+	now := testNow
 	boundaryUTC := time.Date(now.Year(), now.Month(), now.Day(), 5, 0, 0, 0, time.UTC)
 	seedRun(t, rp, userID, boundaryUTC, 4000)
 

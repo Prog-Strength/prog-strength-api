@@ -1,3 +1,10 @@
+## [0.69.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.1...v0.69.2) (2026-06-22)
+
+
+### Bug Fixes
+
+* **auth:** allow apex origin as OAuth return_to target ([#61](https://github.com/Prog-Strength/prog-strength-api/issues/61)) ([f4b110b](https://github.com/Prog-Strength/prog-strength-api/commit/f4b110b8967275e06d9d09d3eef94ab06f177665)), closes [#53](https://github.com/Prog-Strength/prog-strength-api/issues/53)
+
 ## [0.69.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.0...v0.69.1) (2026-06-22)
 
 

@@ -1,3 +1,10 @@
+# [0.71.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.70.0...v0.71.0) (2026-06-22)
+
+
+### Features
+
+* **vectormemory:** multi-source agent memory (workout-note ingestion) ([#63](https://github.com/Prog-Strength/prog-strength-api/issues/63)) ([97b23ef](https://github.com/Prog-Strength/prog-strength-api/commit/97b23ef6a336e0cddbca534ba43ab85e2900b900))
+
 # [0.70.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.2...v0.70.0) (2026-06-22)
 
 

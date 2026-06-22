@@ -76,11 +76,22 @@ jobs:
           # only the non-secret version tag travels with the command. Run as
           # the ubuntu user so the infra checkout + docker creds keep their
           # ownership.
+          # Pull guard: bring the infra checkout up to date BEFORE invoking the
+          # on-host deploy script, so a missing/stale deploy/api.sh — e.g. the
+          # first deploy after a new on-host script merges — can't fail the
+          # release. The && chain fails fast: a failed pull never runs a stale
+          # script, and its non-zero exit surfaces as an SSM Failed status.
+          # api.sh self-updates too; this is the bootstrap belt-and-braces.
+          # jq builds the params so the embedded quotes survive the CLI parser.
+          remote_params="$(jq -n --arg c \
+            "sudo -u ubuntu -H bash -c 'cd /home/ubuntu/prog-strength-infra && git fetch --prune && git checkout main && git pull --ff-only && bash deploy/api.sh v${RELEASE_VERSION}'" \
+            '{commands: [$c]}')"
+
           command_id="$(aws ssm send-command \
             --document-name AWS-RunShellScript \
             --comment "Deploy api v${RELEASE_VERSION}" \
             --targets "Key=tag:Name,Values=prog-strength-prod-backend" \
-            --parameters commands="sudo -u ubuntu -H bash /home/ubuntu/prog-strength-infra/deploy/api.sh v${RELEASE_VERSION}" \
+            --parameters "${remote_params}" \
             --query 'Command.CommandId' --output text)"
           echo "SSM command dispatched: ${command_id}"
 

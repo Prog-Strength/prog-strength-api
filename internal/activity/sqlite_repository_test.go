@@ -13,6 +13,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 )
 
 // newMigratedDB opens a fresh migrated database in a temp dir with
@@ -621,5 +622,100 @@ func TestGetRunningBestEffortHistory_Ascending(t *testing.T) {
 	}
 	if pts[0].ActivityID != earliest.ID || pts[2].ActivityID != latest.ID {
 		t.Errorf("order wrong: first=%s last=%s", pts[0].ActivityID, pts[2].ActivityID)
+	}
+}
+
+// hrActivity is newActivity with an explicit trackpoint set so the test can
+// control which HR samples a run contributes (newActivity hardcodes 140/150).
+func hrActivity(userID, sourceID string, start time.Time, hrSamples []int) *Activity {
+	a := newActivity(userID, IngestManualTCX, sourceID, start, 5000, 1500)
+	pts := make([]Trackpoint, len(hrSamples))
+	for i, hr := range hrSamples {
+		pts[i] = Trackpoint{
+			Sequence:       i,
+			ElapsedSeconds: i * 10,
+			DistanceMeters: float64(i * 30),
+			HeartRateBpm:   ptrInt(hr),
+		}
+	}
+	a.Trackpoints = pts
+	return a
+}
+
+func TestRecentHRStats(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	window := 90 * 24 * time.Hour
+
+	// A and B are in-window HR-bearing runs (the only two that should count).
+	aSamples := []int{140, 150, 160, 170}
+	bSamples := []int{145, 155, 165, 175, 185}
+	a := hrActivity("u1", "a", now.Add(-10*24*time.Hour), aSamples)
+	b := hrActivity("u1", "b", now.Add(-20*24*time.Hour), bSamples)
+	// C is out of the window (older than now-window).
+	c := hrActivity("u1", "c", now.Add(-200*24*time.Hour), []int{200, 205})
+	// D is in-window with HR but soft-deleted → excluded.
+	d := hrActivity("u1", "d", now.Add(-5*24*time.Hour), []int{210, 215})
+	// X is the "current" run, passed as excludeActivityID → excluded.
+	x := hrActivity("u1", "x", now.Add(-1*24*time.Hour), []int{120, 130})
+	// A non-running in-window activity → excluded by the activity_type filter.
+	walk := hrActivity("u1", "walk", now.Add(-3*24*time.Hour), []int{100, 110})
+	walk.ActivityType = ActivityWalking
+
+	for _, act := range []*Activity{a, b, c, d, x, walk} {
+		if err := repo.Create(ctx, act, []byte("<x/>")); err != nil {
+			t.Fatalf("Create %s: %v", act.SourceActivityID, err)
+		}
+	}
+	if err := repo.SoftDelete(ctx, "u1", d.ID); err != nil {
+		t.Fatalf("SoftDelete D: %v", err)
+	}
+
+	stats, err := repo.RecentHRStats(ctx, "u1", window, x.ID)
+	if err != nil {
+		t.Fatalf("RecentHRStats: %v", err)
+	}
+
+	if stats.HistoryRunCount != 2 {
+		t.Errorf("HistoryRunCount = %d, want 2 (A, B)", stats.HistoryRunCount)
+	}
+	want := hrzones.P99(append(append([]int{}, aSamples...), bSamples...))
+	if stats.RecentHRSamplesP99 == nil || want == nil || *stats.RecentHRSamplesP99 != *want {
+		t.Errorf("RecentHRSamplesP99 = %v, want %v", stats.RecentHRSamplesP99, want)
+	}
+	if stats.CurrentRunP99 != nil {
+		t.Errorf("CurrentRunP99 = %v, want nil (handler fills it)", stats.CurrentRunP99)
+	}
+}
+
+func TestRecentHRStats_NoQualifyingRuns(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	now := time.Now()
+	window := 90 * 24 * time.Hour
+
+	// Only an out-of-window run exists for u1; nothing qualifies.
+	old := hrActivity("u1", "old", now.Add(-200*24*time.Hour), []int{150, 160})
+	if err := repo.Create(ctx, old, []byte("<x/>")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	stats, err := repo.RecentHRStats(ctx, "u1", window, "")
+	if err != nil {
+		t.Fatalf("RecentHRStats: %v", err)
+	}
+	if stats.HistoryRunCount != 0 {
+		t.Errorf("HistoryRunCount = %d, want 0", stats.HistoryRunCount)
+	}
+	if stats.RecentHRSamplesP99 != nil {
+		t.Errorf("RecentHRSamplesP99 = %v, want nil", stats.RecentHRSamplesP99)
+	}
+	if stats.CurrentRunP99 != nil {
+		t.Errorf("CurrentRunP99 = %v, want nil", stats.CurrentRunP99)
 	}
 }

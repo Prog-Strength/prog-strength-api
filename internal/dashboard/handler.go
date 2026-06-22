@@ -41,6 +41,11 @@ type Handler struct {
 	nutritionRepo  nutrition.Repository
 	bodyweightRepo bodyweight.Repository
 	userRepo       user.Repository
+
+	// now sources the current instant for all local-week/local-day bucketing.
+	// It defaults to time.Now; tests override it to pin a fixed reference time so
+	// week-boundary assertions don't flake on the real calendar.
+	now func() time.Time
 }
 
 // NewHandler builds a dashboard Handler backed by the given read repositories.
@@ -61,6 +66,7 @@ func NewHandler(
 		nutritionRepo:  nutritionRepo,
 		bodyweightRepo: bodyweightRepo,
 		userRepo:       userRepo,
+		now:            time.Now,
 	}
 }
 
@@ -100,7 +106,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
+	now := h.now()
 
 	// The authed user must exist; failing to load them (for the lifting unit)
 	// is a server fault, not a recoverable per-section miss.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
 )
 
@@ -509,6 +510,59 @@ func (r *SQLiteRepository) ListRunningSamplesSince(ctx context.Context, userID s
 		return nil, err
 	}
 	return out, nil
+}
+
+// RecentHRStats summarizes the user's recent running HR history for the zone
+// engine. It scans the HR samples of every non-deleted ActivityRunning row in
+// the [now-window, now] window (excluding excludeActivityID), feeding them to
+// hrzones.P99 for a spike-resistant reference, and counts how many of those
+// runs carried at least one HR sample. CurrentRunP99 is deliberately left nil:
+// the handler fills it from the run being viewed.
+func (r *SQLiteRepository) RecentHRStats(ctx context.Context, userID string, window time.Duration, excludeActivityID string) (hrzones.Stats, error) {
+	since := r.now().Add(-window)
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT t.heart_rate_bpm
+		FROM activity_trackpoints t
+		JOIN activities a ON a.id = t.activity_id
+		WHERE a.user_id = ? AND a.activity_type = ? AND a.deleted_at IS NULL
+		  AND a.start_time >= ? AND a.id != ? AND t.heart_rate_bpm IS NOT NULL
+	`, userID, ActivityRunning, since, excludeActivityID)
+	if err != nil {
+		return hrzones.Stats{}, err
+	}
+	defer rows.Close()
+
+	var samples []int
+	for rows.Next() {
+		var hr int
+		if err := rows.Scan(&hr); err != nil {
+			return hrzones.Stats{}, err
+		}
+		samples = append(samples, hr)
+	}
+	if err := rows.Err(); err != nil {
+		return hrzones.Stats{}, err
+	}
+
+	// Count distinct HR-bearing runs separately so the history count reflects
+	// only runs that actually carry HR (the p99 alone can't distinguish runs).
+	var runCount int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT t.activity_id)
+		FROM activity_trackpoints t
+		JOIN activities a ON a.id = t.activity_id
+		WHERE a.user_id = ? AND a.activity_type = ? AND a.deleted_at IS NULL
+		  AND a.start_time >= ? AND a.id != ? AND t.heart_rate_bpm IS NOT NULL
+	`, userID, ActivityRunning, since, excludeActivityID).Scan(&runCount); err != nil {
+		return hrzones.Stats{}, err
+	}
+
+	return hrzones.Stats{
+		RecentHRSamplesP99: hrzones.P99(samples),
+		HistoryRunCount:    runCount,
+		CurrentRunP99:      nil,
+	}, nil
 }
 
 // scanActivity reads one activities row out of a Row or Rows.

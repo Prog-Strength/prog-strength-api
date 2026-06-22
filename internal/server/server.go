@@ -24,6 +24,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/logging"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
@@ -460,6 +461,19 @@ func New(cfg config.Config) (*Server, error) {
 		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
+		// Heart-rate-zone engine: tunables come from the [hr_zones] config
+		// section; the recency window for the reference-max-HR estimate is
+		// derived from recency_window_days.
+		hrEngine := hrzones.New(hrzones.Config{
+			PopulationDefaultMaxHR: cfg.HRZones.PopulationDefaultMaxHR,
+			CalibratedRunThreshold: cfg.HRZones.CalibratedRunThreshold,
+			RecencyWindowDays:      cfg.HRZones.RecencyWindowDays,
+			MinReferenceBpm:        cfg.HRZones.MinReferenceBpm,
+			MaxReferenceBpm:        cfg.HRZones.MaxReferenceBpm,
+			ZoneUpperBounds:        cfg.HRZones.ZoneUpperBounds,
+			ZoneNames:              cfg.HRZones.ZoneNames,
+		})
+		activityHandler.SetHRZonesEngine(hrEngine, time.Duration(cfg.HRZones.RecencyWindowDays)*24*time.Hour)
 		activityHandler.Mount(r)
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the

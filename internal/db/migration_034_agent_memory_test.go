@@ -85,12 +85,14 @@ func TestMigrate034_AgentMemory(t *testing.T) {
 		t.Fatalf("insert chat_sessions: %v", err)
 	}
 
-	// Insert the durable memory row.
+	// Insert the durable memory row. This test runs on a fully migrated DB
+	// (through 035), so the insert must satisfy the post-035 schema: a
+	// source_type discriminator with the matching typed FK populated.
 	res, err := conn.Exec(`
 		INSERT INTO agent_memories (
-			user_id, distilled_text, source_session_id,
+			user_id, distilled_text, source_type, source_session_id,
 			embedding_model, embedding_dim, created_at
-		) VALUES (?, 'lifts heavy on mondays', ?, 'text-embedding-3-small', 1536, ?)
+		) VALUES (?, 'lifts heavy on mondays', 'chat_session', ?, 'text-embedding-3-small', 1536, ?)
 	`, userID, sessionID, now)
 	if err != nil {
 		t.Fatalf("insert agent_memories: %v", err)

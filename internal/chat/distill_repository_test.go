@@ -72,6 +72,41 @@ func TestSQLite_IdleUndistilled(t *testing.T) {
 	})
 }
 
+func TestSQLite_CountIdleUndistilled(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * time.Hour)
+	recent := now.Add(-1 * time.Minute)
+	distilled := now.Add(-90 * time.Minute)
+	deleted := now.Add(-30 * time.Minute)
+
+	// Three idle + undistilled + live sessions; the excluded three mirror the
+	// IdleUndistilled filters (not idle, already distilled, soft-deleted).
+	seedDistillSession(t, repo, uuid(1), "u1", old.Add(-time.Hour), nil, nil)
+	seedDistillSession(t, repo, uuid(2), "u2", old, nil, nil)
+	seedDistillSession(t, repo, uuid(6), "u4", old, nil, nil)
+	seedDistillSession(t, repo, uuid(3), "u1", recent, nil, nil)
+	seedDistillSession(t, repo, uuid(4), "u1", old, &distilled, nil)
+	seedDistillSession(t, repo, uuid(5), "u3", old, nil, &deleted)
+
+	cutoff := now.Add(-30 * time.Minute)
+
+	// The count is the full backlog and is independent of any batch limit:
+	// IdleUndistilled capped at 1 still leaves CountIdleUndistilled at 3.
+	if _, err := repo.IdleUndistilled(ctx, cutoff, 1); err != nil {
+		t.Fatalf("IdleUndistilled: %v", err)
+	}
+	got, err := repo.CountIdleUndistilled(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("CountIdleUndistilled: %v", err)
+	}
+	if got != 3 {
+		t.Fatalf("expected backlog of 3 idle undistilled sessions, got %d", got)
+	}
+}
+
 func TestSQLite_SessionMessages_NotUserScoped(t *testing.T) {
 	repo, _ := newSQLiteRepo(t)
 	ctx := context.Background()

@@ -403,6 +403,28 @@ func (r *SQLiteRepository) IdleUndistilled(ctx context.Context, cutoff time.Time
 	return out, rows.Err()
 }
 
+// CountIdleUndistilled returns the full count of idle, undistilled sessions —
+// the same WHERE clause as IdleUndistilled but without the batch LIMIT.
+//
+// why: the distillation job processes at most distillBatchSize sessions per
+// tick, so IdleUndistilled never reveals the true backlog. This one indexed
+// COUNT per tick (negligible) feeds the dashboard's idle-backlog gauge, which
+// surfaces the goroutine falling behind even while each batch caps at 20.
+func (r *SQLiteRepository) CountIdleUndistilled(ctx context.Context, cutoff time.Time) (int, error) {
+	var count int
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM chat_sessions
+		WHERE last_message_at < ?
+		  AND memory_distilled_at IS NULL
+		  AND deleted_at IS NULL
+	`, cutoff.UTC()).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // SessionMessages returns every message for a session in position order.
 //
 // why: backs the vectormemory distillation job. Unlike ListMessages it is

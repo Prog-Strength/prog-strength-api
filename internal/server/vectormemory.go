@@ -28,6 +28,10 @@ func (s vmSessionSource) IdleUndistilled(ctx context.Context, cutoff time.Time, 
 	return out, nil
 }
 
+func (s vmSessionSource) CountIdleUndistilled(ctx context.Context, cutoff time.Time) (int, error) {
+	return s.chat.CountIdleUndistilled(ctx, cutoff)
+}
+
 func (s vmSessionSource) Conversation(ctx context.Context, sessionID string) ([]vectormemory.ConversationMessage, error) {
 	msgs, err := s.chat.SessionMessages(ctx, sessionID)
 	if err != nil {

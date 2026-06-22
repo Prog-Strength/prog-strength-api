@@ -32,14 +32,14 @@ func TestAnthropicDistillParsesToolUse(t *testing.T) {
 			t.Errorf("unmarshal request body: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"content":[{"type":"tool_use","name":"record_observations","input":{"observations":["Trains in hotel gyms.","Left shoulder flares on overhead pressing."]}}]}`))
+		_, _ = w.Write([]byte(`{"content":[{"type":"tool_use","name":"record_observations","input":{"observations":["Trains in hotel gyms.","Left shoulder flares on overhead pressing."]}}],"usage":{"input_tokens":412,"output_tokens":37}}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, err := d.Distill(context.Background(), "user and coach talk")
+	got, usage, err := d.Distill(context.Background(), "user and coach talk")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -47,6 +47,9 @@ func TestAnthropicDistillParsesToolUse(t *testing.T) {
 	want := []string{"Trains in hotel gyms.", "Left shoulder flares on overhead pressing."}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("observations = %v, want %v", got, want)
+	}
+	if usage.InputTokens != 412 || usage.OutputTokens != 37 {
+		t.Errorf("usage = %+v, want {InputTokens:412 OutputTokens:37}", usage)
 	}
 	if gotAPIKey != "key-123" {
 		t.Errorf("x-api-key = %q, want key-123", gotAPIKey)
@@ -75,7 +78,7 @@ func TestAnthropicDistillEmptyObservations(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, err := d.Distill(context.Background(), "nothing durable here")
+	got, _, err := d.Distill(context.Background(), "nothing durable here")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -94,7 +97,7 @@ func TestAnthropicDistillTextOnlyNoToolUse(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, err := d.Distill(context.Background(), "chit chat")
+	got, _, err := d.Distill(context.Background(), "chit chat")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestAnthropicDistillNon200Errors(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	if _, err := d.Distill(context.Background(), "x"); err == nil {
+	if _, _, err := d.Distill(context.Background(), "x"); err == nil {
 		t.Fatal("Distill: expected error on 500, got nil")
 	}
 }

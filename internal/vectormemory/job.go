@@ -22,6 +22,9 @@ const distillBatchSize = 20
 // the chat package; server.go adapts *chat.SQLiteRepository to it.
 type SessionSource interface {
 	IdleUndistilled(ctx context.Context, cutoff time.Time, limit int) ([]IdleSession, error)
+	// CountIdleUndistilled returns the full, un-capped backlog for the same
+	// cutoff IdleUndistilled selects against — the idle_sessions gauge.
+	CountIdleUndistilled(ctx context.Context, cutoff time.Time) (int, error)
 	Conversation(ctx context.Context, sessionID string) ([]ConversationMessage, error)
 	MarkDistilled(ctx context.Context, sessionID string, at time.Time) error
 }
@@ -98,22 +101,51 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 	now := s.now()
 	cutoff := now.Add(-time.Duration(s.cfg.SessionIdleMinutes) * time.Minute)
 
+	// last_sweep_timestamp marks "the loop is executing" — stamped at the end
+	// of every attempt, success or batch error, so its absence is the
+	// dead-goroutine signal. Sweep duration is timed across the whole tick.
+	start := now
+	defer func() {
+		end := s.now()
+		sweepDuration.Observe(end.Sub(start).Seconds())
+		lastSweepTimestamp.Set(float64(end.Unix()))
+	}()
+
+	// Sample the full backlog before processing this batch. A count failure is
+	// non-fatal — it only feeds a gauge — so it is logged and the gauge left
+	// untouched rather than aborting the sweep.
+	if backlog, err := src.CountIdleUndistilled(ctx, cutoff); err != nil {
+		s.log.WarnContext(ctx, "vectormemory distillation: count idle sessions failed",
+			slog.Any("error", err),
+		)
+	} else {
+		idleSessions.Set(float64(backlog))
+	}
+
 	sessions, err := src.IdleUndistilled(ctx, cutoff, distillBatchSize)
 	if err != nil {
+		stageErrorsTotal.WithLabelValues("select").Inc()
+		sweepsTotal.WithLabelValues("error").Inc()
 		s.log.ErrorContext(ctx, "vectormemory distillation: select idle sessions failed",
 			slog.Any("error", err),
 		)
 		return err
 	}
-	if len(sessions) == 0 {
-		return nil
-	}
+	sessionsSelectedTotal.Add(float64(len(sessions)))
 
+	// sawStageError tracks whether any session hit a per-stage failure, which
+	// classifies an otherwise-complete sweep as "partial" rather than
+	// "success". Per-observation insert loss is counted inside DistillSession
+	// (it returns nil per the insert-failure policy) and surfaces via the
+	// observation-counter gap instead.
 	distilled := 0
+	sawStageError := false
 	for _, sess := range sessions {
 		msgs, err := src.Conversation(ctx, sess.ID)
 		if err != nil {
 			// Leave unmarked so the next sweep retries reading it.
+			stageErrorsTotal.WithLabelValues("load").Inc()
+			sawStageError = true
 			s.log.WarnContext(ctx, "vectormemory distillation: load conversation failed, skipping",
 				slog.String("session_id", sess.ID),
 				slog.String("user_id", sess.UserID),
@@ -123,7 +155,10 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 		}
 
 		if _, err := s.DistillSession(ctx, sess.UserID, sess.ID, msgs); err != nil {
-			// Leave unmarked so the next sweep retries the paid distillation.
+			// DistillSession already incremented the specific stage error
+			// (distill/embed/dedup). Leave unmarked so the next sweep retries
+			// the paid distillation.
+			sawStageError = true
 			s.log.WarnContext(ctx, "vectormemory distillation: distill session failed, leaving unmarked for retry",
 				slog.String("session_id", sess.ID),
 				slog.String("user_id", sess.UserID),
@@ -135,6 +170,8 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 		// Success (including the zero-observation case): stamp it so it
 		// stops showing up in IdleUndistilled.
 		if err := src.MarkDistilled(ctx, sess.ID, now); err != nil {
+			stageErrorsTotal.WithLabelValues("mark").Inc()
+			sawStageError = true
 			s.log.WarnContext(ctx, "vectormemory distillation: mark distilled failed",
 				slog.String("session_id", sess.ID),
 				slog.String("user_id", sess.UserID),
@@ -142,14 +179,26 @@ func (s *Service) distillOnce(ctx context.Context, src SessionSource) error {
 			)
 			continue
 		}
+		sessionsDistilledTotal.Inc()
 		distilled++
 	}
 
-	// One summary line per non-empty sweep so the paid loop is observable
-	// (how many of the selected batch were distilled this tick).
+	// The batch select succeeded, so the loop completed and last_success
+	// advances even when no sessions were selected. The result is "partial" if
+	// any session hit a stage error, "success" otherwise.
+	lastSuccessTimestamp.Set(float64(s.now().Unix()))
+	result := "success"
+	if sawStageError {
+		result = "partial"
+	}
+	sweepsTotal.WithLabelValues(result).Inc()
+
+	// One summary line per sweep so the paid loop is observable (how many of
+	// the selected batch were distilled this tick).
 	s.log.InfoContext(ctx, "vectormemory distillation: sweep complete",
 		slog.Int("selected", len(sessions)),
 		slog.Int("distilled", distilled),
+		slog.String("result", result),
 	)
 	return nil
 }

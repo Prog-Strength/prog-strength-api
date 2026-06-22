@@ -193,16 +193,17 @@ type HRZonesConfig struct {
 // are public tuning knobs. DistanceThreshold / DedupThreshold default to 0
 // pending empirical calibration.
 type VectorMemoryConfig struct {
-	Enabled            bool
-	OpenAIAPIKey       string
-	AnthropicAPIKey    string
-	DistanceThreshold  float64
-	DedupThreshold     float64
-	TopK               int
-	SessionIdleMinutes int
-	DistillModel       string
-	EmbedModel         string
-	EmbedDim           int
+	Enabled              bool
+	OpenAIAPIKey         string
+	AnthropicAPIKey      string
+	DistanceThreshold    float64
+	DedupThreshold       float64
+	TopK                 int
+	SessionIdleMinutes   int
+	WorkoutSettleMinutes int
+	DistillModel         string
+	EmbedModel           string
+	EmbedDim             int
 }
 
 // fileConfig mirrors the config.toml sections. It is the decode target; Load
@@ -254,16 +255,17 @@ type fileConfig struct {
 		USDAFDCAPIKey         string `toml:"usda_fdc_api_key"`
 	} `toml:"nutrition_lookup"`
 	VectorMemory struct {
-		Enabled            bool    `toml:"enabled"`
-		OpenAIAPIKey       string  `toml:"openai_api_key"`
-		AnthropicAPIKey    string  `toml:"anthropic_api_key"`
-		DistanceThreshold  float64 `toml:"distance_threshold"`
-		DedupThreshold     float64 `toml:"dedup_threshold"`
-		TopK               int     `toml:"top_k"`
-		SessionIdleMinutes int     `toml:"session_idle_minutes"`
-		DistillModel       string  `toml:"distill_model"`
-		EmbedModel         string  `toml:"embed_model"`
-		EmbedDim           int     `toml:"embed_dim"`
+		Enabled              bool    `toml:"enabled"`
+		OpenAIAPIKey         string  `toml:"openai_api_key"`
+		AnthropicAPIKey      string  `toml:"anthropic_api_key"`
+		DistanceThreshold    float64 `toml:"distance_threshold"`
+		DedupThreshold       float64 `toml:"dedup_threshold"`
+		TopK                 int     `toml:"top_k"`
+		SessionIdleMinutes   int     `toml:"session_idle_minutes"`
+		WorkoutSettleMinutes int     `toml:"workout_settle_minutes"`
+		DistillModel         string  `toml:"distill_model"`
+		EmbedModel           string  `toml:"embed_model"`
+		EmbedDim             int     `toml:"embed_dim"`
 	} `toml:"vectormemory"`
 	HRZones struct {
 		PopulationDefaultMaxHR int       `toml:"population_default_max_hr"`
@@ -386,16 +388,17 @@ func Load(defaultTOML []byte) (Config, error) {
 		CalendarTokenEncKey:       fc.Auth.Google.CalendarTokenEncKey,
 		LogLevel:                  level,
 		VectorMemory: VectorMemoryConfig{
-			Enabled:            fc.VectorMemory.Enabled,
-			OpenAIAPIKey:       fc.VectorMemory.OpenAIAPIKey,
-			AnthropicAPIKey:    fc.VectorMemory.AnthropicAPIKey,
-			DistanceThreshold:  fc.VectorMemory.DistanceThreshold,
-			DedupThreshold:     fc.VectorMemory.DedupThreshold,
-			TopK:               fc.VectorMemory.TopK,
-			SessionIdleMinutes: fc.VectorMemory.SessionIdleMinutes,
-			DistillModel:       fc.VectorMemory.DistillModel,
-			EmbedModel:         fc.VectorMemory.EmbedModel,
-			EmbedDim:           fc.VectorMemory.EmbedDim,
+			Enabled:              fc.VectorMemory.Enabled,
+			OpenAIAPIKey:         fc.VectorMemory.OpenAIAPIKey,
+			AnthropicAPIKey:      fc.VectorMemory.AnthropicAPIKey,
+			DistanceThreshold:    fc.VectorMemory.DistanceThreshold,
+			DedupThreshold:       fc.VectorMemory.DedupThreshold,
+			TopK:                 fc.VectorMemory.TopK,
+			SessionIdleMinutes:   fc.VectorMemory.SessionIdleMinutes,
+			WorkoutSettleMinutes: fc.VectorMemory.WorkoutSettleMinutes,
+			DistillModel:         fc.VectorMemory.DistillModel,
+			EmbedModel:           fc.VectorMemory.EmbedModel,
+			EmbedDim:             fc.VectorMemory.EmbedDim,
 		},
 		HRZones: HRZonesConfig{
 			PopulationDefaultMaxHR: fc.HRZones.PopulationDefaultMaxHR,

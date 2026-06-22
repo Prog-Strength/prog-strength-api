@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
@@ -86,11 +87,13 @@ func (s *chatMemorySource) assembleUnit(ctx context.Context, sessionID, userID s
 }
 
 // BuildMemorySources constructs the distillation source registry. Order is the
-// iteration order of the job and backfill. Chat first; the workout-note source
-// is added in a later change. Lives here so the adapters (which import
-// chat/workout) stay out of the vectormemory package.
-func BuildMemorySources(chatRepo *chat.SQLiteRepository, cfg config.VectorMemoryConfig) []vectormemory.MemorySource {
+// iteration order of the job and backfill: chat first, workout-note second.
+// Lives here so the adapters (which import chat/workout schema) stay out of the
+// vectormemory package. The workout source reads app.db directly (db), since a
+// workout unit spans workouts, workout_exercises, and exercises.
+func BuildMemorySources(db *sql.DB, chatRepo *chat.SQLiteRepository, cfg config.VectorMemoryConfig) []vectormemory.MemorySource {
 	return []vectormemory.MemorySource{
 		&chatMemorySource{chat: chatRepo, idleWindow: time.Duration(cfg.SessionIdleMinutes) * time.Minute},
+		&workoutNoteSource{db: db, settleWindow: time.Duration(cfg.WorkoutSettleMinutes) * time.Minute},
 	}
 }

@@ -287,7 +287,7 @@ func New(cfg config.Config) (*Server, error) {
 		vmDistiller := vectormemory.NewAnthropicDistiller(vmClient, cfg.VectorMemory.AnthropicAPIKey, cfg.VectorMemory.DistillModel)
 		vmService := vectormemory.NewService(vmRepo, vmEmbedder, vmDistiller, cfg.VectorMemory, vmLogger)
 		vmHandler = vectormemory.NewHandler(vmService, vmLogger)
-		vmSources := BuildMemorySources(chatSQLiteRepo, cfg.VectorMemory)
+		vmSources := BuildMemorySources(database, chatSQLiteRepo, cfg.VectorMemory)
 		vmService.StartDistillation(context.Background(), vmSources)
 		log.Println("vectormemory: enabled (distillation + retrieval)")
 	} else {

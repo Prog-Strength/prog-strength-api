@@ -115,7 +115,7 @@ type session struct {
 // backfill depends on, so the orchestration is exercisable without real HTTP
 // or a real DB.
 type batchDistiller interface {
-	DistillBatch(ctx context.Context, conversations []string) ([][]string, error)
+	DistillBatch(ctx context.Context, conversations []string, promptHint string) ([][]string, error)
 }
 
 type batchEmbedder interface {
@@ -166,7 +166,10 @@ func backfill(ctx context.Context, d backfillDeps, dryRun bool) error {
 		conversations[i] = renderConversation(s.messages)
 	}
 
-	observationsPerSession, err := d.distiller.DistillBatch(ctx, conversations)
+	// Chat is the only source the backfill drains today, so the prompt hint is
+	// empty (behavior unchanged); Task 5 generalizes the backfill to range over
+	// the source registry and forward each source's hint.
+	observationsPerSession, err := d.distiller.DistillBatch(ctx, conversations, "")
 	if err != nil {
 		return err
 	}
@@ -253,7 +256,7 @@ func (d backfillDeps) persist(ctx context.Context, sessions []session, flatObs [
 			CreatedAt:       d.now().UTC(),
 		}); err != nil {
 			// One bad row should not throw away a paid distillation: log and
-			// continue, matching the live DistillSession policy.
+			// continue, matching the live DistillUnit policy.
 			d.logger.Printf("insert failed, skipping observation (session=%s): %v", sess.id, err)
 			continue
 		}

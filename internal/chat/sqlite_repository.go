@@ -3,7 +3,10 @@ package chat
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -423,6 +426,99 @@ func (r *SQLiteRepository) CountIdleUndistilled(ctx context.Context, cutoff time
 		return 0, err
 	}
 	return count, nil
+}
+
+// AllUndistilledSessions returns a page of not-yet-distilled, non-deleted
+// sessions ordered by (last_message_at, id), ignoring any idle/settle window —
+// the full historical backlog for the one-time backfill. It is keyset-paginated
+// on the opaque base64 cursor the caller threads through: an empty cursor starts
+// at the beginning, and an empty returned cursor means the set is exhausted.
+//
+// why: IdleUndistilled is for the live settle-then-sweep job (it has a cutoff);
+// the backfill instead drains every historical session, so this mirrors the
+// same NULL-distilled gate without the cutoff and with stable keyset paging.
+func (r *SQLiteRepository) AllUndistilledSessions(ctx context.Context, cursor string, limit int) ([]IdleSession, string, error) {
+	afterLastMessageAt, afterID, err := decodeSessionCursor(cursor)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Keyset pagination on (last_message_at, id): the empty-cursor case uses a
+	// zero time that sorts before every real row. The tuple predicate is spelled
+	// out (rather than SQLite's row-value comparison) so it reads identically on
+	// every SQLite build.
+	//
+	// why time.Time (not a string) for last_message_at: go-sqlite3 stores a
+	// time.Time as "YYYY-MM-DD HH:MM:SS+00:00" but reformats it to RFC3339 on
+	// scan, so a scanned-back string would not text-compare against the stored
+	// form. Binding a time.Time on both sides has the driver format the column
+	// and the cursor value identically.
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, user_id, last_message_at
+		FROM chat_sessions
+		WHERE memory_distilled_at IS NULL
+		  AND deleted_at IS NULL
+		  AND (last_message_at > ? OR (last_message_at = ? AND id > ?))
+		ORDER BY last_message_at ASC, id ASC
+		LIMIT ?
+	`, afterLastMessageAt.UTC(), afterLastMessageAt.UTC(), afterID, limit)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+
+	var (
+		out       []IdleSession
+		lastMsgAt time.Time
+		lastID    string
+	)
+	for rows.Next() {
+		var s IdleSession
+		if err := rows.Scan(&s.ID, &s.UserID, &lastMsgAt); err != nil {
+			return nil, "", err
+		}
+		lastID = s.ID
+		out = append(out, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	// Fewer rows than the page size means the set is exhausted: return "" so the
+	// caller stops paging.
+	next := ""
+	if len(out) == limit {
+		next = encodeSessionCursor(lastMsgAt, lastID)
+	}
+	return out, next, nil
+}
+
+// encodeSessionCursor base64-encodes the keyset position
+// "<last_message_at RFC3339Nano>|<id>" so the cursor is opaque to the caller.
+func encodeSessionCursor(lastMessageAt time.Time, id string) string {
+	return base64.StdEncoding.EncodeToString([]byte(lastMessageAt.UTC().Format(time.RFC3339Nano) + "|" + id))
+}
+
+// decodeSessionCursor reverses encodeSessionCursor. An empty cursor decodes to
+// a zero time and empty id, which sort before every real row, so the first page
+// starts at the beginning.
+func decodeSessionCursor(cursor string) (lastMessageAt time.Time, id string, err error) {
+	if cursor == "" {
+		return time.Time{}, "", nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("chat: decode session cursor: %w", err)
+	}
+	parts := strings.SplitN(string(raw), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, "", fmt.Errorf("chat: malformed session cursor %q", cursor)
+	}
+	at, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("chat: malformed session cursor timestamp %q: %w", parts[0], err)
+	}
+	return at, parts[1], nil
 }
 
 // SessionMessages returns every message for a session in position order.

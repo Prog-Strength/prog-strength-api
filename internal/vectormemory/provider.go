@@ -27,11 +27,13 @@ type Embedder interface {
 	Configured() bool
 }
 
-// Distiller reads a conversation and returns zero or more atomic durable
-// observations worth remembering long-term, plus the call's token usage for
-// cost metrics. Output is forced to a JSON array via a tool-call schema so it
-// is always a (possibly empty) list.
+// Distiller reads a unit's assembled content and returns zero or more atomic
+// durable observations worth remembering long-term, plus the call's token usage
+// for cost metrics. Output is forced to a JSON array via a tool-call schema so
+// it is always a (possibly empty) list. promptHint is a per-source framing
+// string appended to the system prompt; it is "" for chat (behavior
+// unchanged) and source-specific for other sources.
 type Distiller interface {
-	Distill(ctx context.Context, conversation string) ([]string, DistillUsage, error)
+	Distill(ctx context.Context, content, promptHint string) ([]string, DistillUsage, error)
 	Configured() bool
 }

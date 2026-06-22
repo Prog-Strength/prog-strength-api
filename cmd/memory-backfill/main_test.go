@@ -20,7 +20,7 @@ type fakeDistiller struct {
 	seen int
 }
 
-func (f *fakeDistiller) DistillBatch(_ context.Context, conversations []string) ([][]string, error) {
+func (f *fakeDistiller) DistillBatch(_ context.Context, conversations []string, _ string) ([][]string, error) {
 	f.seen = len(conversations)
 	return f.out, nil
 }

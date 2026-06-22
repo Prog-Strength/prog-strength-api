@@ -35,11 +35,11 @@ func TestMetrics_CleanSweep(t *testing.T) {
 		repo := NewSQLiteRepository(db)
 		seedSession(t, db, "s1", "userA")
 		svc := NewService(repo, emb, dis, baseCfg(), testLogger())
-		src := &fakeSessionSource{
-			idle:          []IdleSession{{ID: "s1", UserID: "userA"}},
-			conversations: map[string][]ConversationMessage{"s1": {{Role: "user", Content: "I love squats"}}},
+		src := &fakeMemorySource{
+			sourceType: "chat_session",
+			pending:    []DistillUnit{chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "I love squats"}})},
 		}
-		if err := svc.distillOnce(ctx, src); err != nil {
+		if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 			t.Fatalf("distillOnce: %v", err)
 		}
 	}
@@ -75,15 +75,15 @@ func TestMetrics_DistillerErrorClassifiesPartial(t *testing.T) {
 
 	dis := &fakeDistiller{errOn: true}
 	svc := NewService(repo, &fakeEmbedder{}, dis, baseCfg(), testLogger())
-	src := &fakeSessionSource{
-		idle:          []IdleSession{{ID: "s1", UserID: "userA"}},
-		conversations: map[string][]ConversationMessage{"s1": {{Role: "user", Content: "hi"}}},
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending:    []DistillUnit{chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "hi"}})},
 	}
 
 	partialBefore := testutil.ToFloat64(sweepsTotal.WithLabelValues("partial"))
 	stageBefore := testutil.ToFloat64(stageErrorsTotal.WithLabelValues("distill"))
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func TestMetrics_DistillerErrorClassifiesPartial(t *testing.T) {
 }
 
 // TestMetrics_EmbedErrorRecordsStage proves an embed failure inside
-// DistillSession increments stage_errors{stage="embed"}.
+// DistillUnit increments stage_errors{stage="embed"}.
 func TestMetrics_EmbedErrorRecordsStage(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
@@ -108,7 +108,7 @@ func TestMetrics_EmbedErrorRecordsStage(t *testing.T) {
 	svc := NewService(repo, emb, dis, baseCfg(), testLogger())
 
 	d := metricDelta(t, stageErrorsTotal.WithLabelValues("embed"), func() {
-		if _, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}}); err == nil {
+		if _, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}})); err == nil {
 			t.Fatal("expected embed error")
 		}
 	})
@@ -120,7 +120,7 @@ func TestMetrics_EmbedErrorRecordsStage(t *testing.T) {
 // TestMetrics_InsertErrorRecordsStageButSweepSucceeds proves a per-observation
 // insert failure increments stage_errors{stage="insert"} yet leaves the sweep
 // classified "success" — insert loss surfaces via the observation-counter gap,
-// not the sweep result (DistillSession returns nil per its insert policy).
+// not the sweep result (DistillUnit returns nil per its insert policy).
 func TestMetrics_InsertErrorRecordsStageButSweepSucceeds(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
@@ -134,16 +134,16 @@ func TestMetrics_InsertErrorRecordsStageButSweepSucceeds(t *testing.T) {
 	dis := &fakeDistiller{observations: []string{"first", "second"}}
 	frepo := &failInsertRepo{Repository: repo, failText: "second"}
 	svc := NewService(frepo, emb, dis, baseCfg(), testLogger())
-	src := &fakeSessionSource{
-		idle:          []IdleSession{{ID: "s1", UserID: "userA"}},
-		conversations: map[string][]ConversationMessage{"s1": {{Role: "user", Content: "x"}}},
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending:    []DistillUnit{chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}})},
 	}
 
 	insertErrDelta := testutil.ToFloat64(stageErrorsTotal.WithLabelValues("insert"))
 	successDelta := testutil.ToFloat64(sweepsTotal.WithLabelValues("success"))
 	insertedDelta := testutil.ToFloat64(observationsInsertedTotal)
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 
@@ -158,30 +158,33 @@ func TestMetrics_InsertErrorRecordsStageButSweepSucceeds(t *testing.T) {
 	}
 }
 
-// TestMetrics_SelectErrorClassifiesError proves a batch select failure
-// increments stage_errors{stage="select"} and sweeps_total{result="error"} and
-// leaves last_success unchanged.
-func TestMetrics_SelectErrorClassifiesError(t *testing.T) {
+// TestMetrics_SelectErrorClassifiesPartial proves a per-source PendingUnits
+// failure increments stage_errors{stage="select"} and classifies the sweep
+// "partial" (not "error") — with multiple sources, one source's select failure
+// must not abort the sweep, so the sweep still completes and last_success
+// advances. The sweeps_total{result="error"} label value is retained for
+// dashboard stability but is no longer emitted.
+func TestMetrics_SelectErrorClassifiesPartial(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(NewSQLiteRepository(dbtest.New(t)), &fakeEmbedder{}, &fakeDistiller{}, baseCfg(), testLogger())
-	src := &fakeSessionSource{selectErr: errors.New("select boom")}
+	src := &fakeMemorySource{sourceType: "chat_session", pendingErr: errors.New("select boom")}
 
 	beforeSuccessTS := testutil.ToFloat64(lastSuccessTimestamp)
 	selectErrDelta := testutil.ToFloat64(stageErrorsTotal.WithLabelValues("select"))
-	errSweepDelta := testutil.ToFloat64(sweepsTotal.WithLabelValues("error"))
+	partialSweepDelta := testutil.ToFloat64(sweepsTotal.WithLabelValues("partial"))
 
-	if err := svc.distillOnce(ctx, src); err == nil {
-		t.Fatal("expected select error from distillOnce")
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
+		t.Fatalf("distillOnce must not return on a per-source select error: %v", err)
 	}
 
 	if got := testutil.ToFloat64(stageErrorsTotal.WithLabelValues("select")) - selectErrDelta; got != 1 {
 		t.Errorf("stage_errors{select} delta = %v, want 1", got)
 	}
-	if got := testutil.ToFloat64(sweepsTotal.WithLabelValues("error")) - errSweepDelta; got != 1 {
-		t.Errorf("error sweep delta = %v, want 1", got)
+	if got := testutil.ToFloat64(sweepsTotal.WithLabelValues("partial")) - partialSweepDelta; got != 1 {
+		t.Errorf("partial sweep delta = %v, want 1", got)
 	}
-	if testutil.ToFloat64(lastSuccessTimestamp) != beforeSuccessTS {
-		t.Errorf("last_success_timestamp must not advance on select error")
+	if testutil.ToFloat64(lastSuccessTimestamp) < beforeSuccessTS {
+		t.Errorf("last_success_timestamp should advance on a completed (partial) sweep")
 	}
 }
 
@@ -195,17 +198,62 @@ func TestMetrics_IdleSessionsGauge(t *testing.T) {
 
 	backlog := 137
 	svc := NewService(repo, &fakeEmbedder{}, &fakeDistiller{}, baseCfg(), testLogger())
-	src := &fakeSessionSource{
-		idle:          []IdleSession{{ID: "s1", UserID: "userA"}},
-		conversations: map[string][]ConversationMessage{"s1": {{Role: "user", Content: "hi"}}},
+	src := &fakeMemorySource{
+		sourceType:    "chat_session",
+		pending:       []DistillUnit{chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "hi"}})},
 		countOverride: &backlog,
 	}
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 	if got := testutil.ToFloat64(idleSessions); got != float64(backlog) {
 		t.Errorf("idle_sessions gauge = %v, want %d", got, backlog)
+	}
+}
+
+// TestMetrics_IdleSessionsGaugeHeldOnCountFailure proves the backlog gauge is
+// left UNTOUCHED when every source's CountPending fails this tick: a transient
+// total count failure must hold the previous value rather than writing a false
+// 0 that would read as "backlog drained". The count failure stays gauge-only
+// (non-fatal), so it must not flip the sweep to "partial" either.
+func TestMetrics_IdleSessionsGaugeHeldOnCountFailure(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "s1", "userA")
+
+	// Seed the gauge with a known prior value via a clean count, then prove the
+	// next sweep (whose only source errors on CountPending) does not move it.
+	prior := 42
+	svc := NewService(repo, &fakeEmbedder{}, &fakeDistiller{}, baseCfg(), testLogger())
+	if err := svc.distillOnce(ctx, []MemorySource{&fakeMemorySource{
+		sourceType:    "chat_session",
+		countOverride: &prior,
+	}}); err != nil {
+		t.Fatalf("distillOnce (seed gauge): %v", err)
+	}
+	if got := testutil.ToFloat64(idleSessions); got != float64(prior) {
+		t.Fatalf("precondition: idle_sessions gauge = %v, want %d", got, prior)
+	}
+
+	partialBefore := testutil.ToFloat64(sweepsTotal.WithLabelValues("partial"))
+
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		countErr:   errors.New("count boom"),
+	}
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
+		t.Fatalf("distillOnce: %v", err)
+	}
+
+	// The gauge held its prior value: the failed count did not overwrite it with 0.
+	if got := testutil.ToFloat64(idleSessions); got != float64(prior) {
+		t.Errorf("idle_sessions gauge = %v, want held at %d after a total count failure", got, prior)
+	}
+	// A count failure is gauge-only and must not classify the sweep partial.
+	if got := testutil.ToFloat64(sweepsTotal.WithLabelValues("partial")) - partialBefore; got != 0 {
+		t.Errorf("partial sweep delta = %v, want 0 (count failure is non-fatal)", got)
 	}
 }
 
@@ -231,8 +279,8 @@ func TestMetrics_TokenCounters(t *testing.T) {
 	outDelta := testutil.ToFloat64(distillTokensTotal.WithLabelValues("output"))
 	embDelta := testutil.ToFloat64(embedTokensTotal)
 
-	if _, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}}); err != nil {
-		t.Fatalf("DistillSession: %v", err)
+	if _, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}})); err != nil {
+		t.Fatalf("DistillUnit: %v", err)
 	}
 
 	if got := testutil.ToFloat64(distillTokensTotal.WithLabelValues("input")) - inDelta; got != 400 {
@@ -265,8 +313,8 @@ func TestMetrics_DedupCounter(t *testing.T) {
 	svc := NewService(repo, emb, dis, cfg, testLogger())
 
 	d := metricDelta(t, observationsDedupedTotal, func() {
-		if _, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}}); err != nil {
-			t.Fatalf("DistillSession: %v", err)
+		if _, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "x"}})); err != nil {
+			t.Fatalf("DistillUnit: %v", err)
 		}
 	})
 	if d != 1 {

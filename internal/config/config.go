@@ -110,15 +110,6 @@ type Config struct {
 	// reviewable diffs.
 	UsagePriceTableJSON string
 
-	// BetaAllowedEmails is the one-time seed source for the DB-backed beta
-	// allowlist. The live gate now reads the beta_allowed_emails table (see
-	// internal/beta); on first boot, if that table is empty and this is
-	// non-empty, the values are seeded into it. Once the table is populated
-	// this var no longer affects the gate and is slated for removal.
-	// Comparison (in the table) is case-insensitive; an empty table
-	// disables the gate entirely.
-	BetaAllowedEmails []string
-
 	// AdminEmails is the operator allowlist that gates the
 	// /admin/beta-emails surface (manage the beta allowlist at runtime).
 	// Comparison is case-insensitive. Empty disables the admin surface
@@ -248,9 +239,6 @@ type fileConfig struct {
 		AllowedOrigins         any `toml:"allowed_origins"`
 		ReturnToAllowedOrigins any `toml:"return_to_allowed_origins"`
 	} `toml:"cors"`
-	Beta struct {
-		SeedAllowedEmails string `toml:"seed_allowed_emails"`
-	} `toml:"beta"`
 	Storage struct {
 		AvatarBucketName string `toml:"avatar_bucket_name"`
 		TCXBucketName    string `toml:"tcx_bucket_name"`
@@ -388,7 +376,6 @@ func Load(defaultTOML []byte) (Config, error) {
 		ReturnToAllowedOrigins:    returnToOrigins,
 		DailyUsageCapUSD:          fc.Usage.DailyCapUSD,
 		UsagePriceTableJSON:       fc.Usage.PriceTable,
-		BetaAllowedEmails:         splitCSV(fc.Beta.SeedAllowedEmails),
 		AdminEmails:               splitCSV(fc.Auth.AdminEmails),
 		AvatarBucketName:          fc.Storage.AvatarBucketName,
 		TCXBucketName:             fc.Storage.TCXBucketName,
@@ -447,7 +434,6 @@ func interpolate(fc *fileConfig) {
 	fc.Auth.Google.LoginRedirectURL = interp(fc.Auth.Google.LoginRedirectURL)
 	fc.Auth.Google.CalendarRedirectURL = interp(fc.Auth.Google.CalendarRedirectURL)
 	fc.Auth.Google.CalendarTokenEncKey = interp(fc.Auth.Google.CalendarTokenEncKey)
-	fc.Beta.SeedAllowedEmails = interp(fc.Beta.SeedAllowedEmails)
 	fc.Storage.AvatarBucketName = interp(fc.Storage.AvatarBucketName)
 	fc.Storage.TCXBucketName = interp(fc.Storage.TCXBucketName)
 	fc.Storage.AWSRegion = interp(fc.Storage.AWSRegion)
@@ -554,7 +540,7 @@ func parseFloatDefault(s string, def float64) float64 {
 // splitCSV trims and drops empty entries from a comma-separated string.
 // Returns nil for empty input so callers can do a single nil-check instead
 // of len()==0. It is the normalizer for ${VAR}-sourced string lists
-// (ADMIN_EMAILS, BETA_ALLOWED_EMAILS) and env-override list values.
+// (ADMIN_EMAILS) and env-override list values.
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil

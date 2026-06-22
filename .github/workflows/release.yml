@@ -127,7 +127,6 @@ jobs:
           AVATAR_BUCKET_NAME: ${{ secrets.AVATAR_BUCKET_NAME }}
           # PII (real email addresses) — kept env-sourced, never committed to
           # the public config.toml.
-          BETA_ALLOWED_EMAILS: ${{ secrets.BETA_ALLOWED_EMAILS }}
           ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
           # Grafana admin credentials. Both seed the initial values on
           # first boot; subsequent UI password changes persist in
@@ -153,7 +152,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,CALENDAR_TOKEN_ENC_KEY,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,BETA_ALLOWED_EMAILS,ADMIN_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,RELEASE_VERSION
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,CALENDAR_TOKEN_ENC_KEY,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,ADMIN_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,RELEASE_VERSION
           script: |
             # Abort on the first failing command. Without this, a failed
             # docker compose call is followed by trailing `ps`/`logs`
@@ -193,7 +192,6 @@ jobs:
             LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION}
             TCX_BUCKET_NAME=${TCX_BUCKET_NAME}
             AVATAR_BUCKET_NAME=${AVATAR_BUCKET_NAME}
-            BETA_ALLOWED_EMAILS=${BETA_ALLOWED_EMAILS}
             ADMIN_EMAILS=${ADMIN_EMAILS}
             GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
             GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}

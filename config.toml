@@ -66,11 +66,6 @@ return_to_allowed_origins = [
   "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
 ]
 
-[beta]
-# One-time seed for the DB-backed beta allowlist. PII → env (NOT committed).
-# Slated for removal once the SQLite-backed allowlist fully lands.
-seed_allowed_emails = "${BETA_ALLOWED_EMAILS}"
-
 [storage]
 # S3 buckets are provisioned by Terraform — it owns these names. Env-sourced
 # from Terraform outputs; NOT committed as literals (would duplicate TF).

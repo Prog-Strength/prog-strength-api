@@ -13,11 +13,6 @@ import (
 	"time"
 )
 
-// SeedAddedBy is the sentinel stored in added_by for rows carried over by
-// the one-time boot seed from BETA_ALLOWED_EMAILS, distinguishing them from
-// rows added by a human admin (whose email is stored instead).
-const SeedAddedBy = "seed:BETA_ALLOWED_EMAILS"
-
 // AllowedEmail is one row of the allowlist. AddedBy/Note are pointers so a
 // SQL NULL round-trips as nil rather than the empty string.
 type AllowedEmail struct {

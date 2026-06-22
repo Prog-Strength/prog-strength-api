@@ -43,9 +43,9 @@ func NewOpenAIEmbedder(client *http.Client, apiKey, model string) *OpenAIEmbedde
 
 func (e *OpenAIEmbedder) Configured() bool { return e.apiKey != "" }
 
-func (e *OpenAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float32, error) {
+func (e *OpenAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float32, EmbedUsage, error) {
 	if len(inputs) == 0 {
-		return nil, nil
+		return nil, EmbedUsage{}, nil
 	}
 
 	reqBody, err := json.Marshal(map[string]any{
@@ -53,38 +53,43 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float3
 		"input": inputs,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("openai embeddings: marshal request: %w", err)
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.BaseURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("openai embeddings: build request: %w", err)
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+e.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := e.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai embeddings: do request: %w", err)
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: do request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		return nil, fmt.Errorf("openai embeddings: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
 	}
 
+	// usage.total_tokens is parsed for cost metrics; an absent usage block
+	// decodes to 0 rather than failing the call.
 	var payload struct {
 		Data []struct {
 			Embedding []float64 `json:"embedding"`
 			Index     int       `json:"index"`
 		} `json:"data"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("openai embeddings: decode response: %w", err)
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: decode response: %w", err)
 	}
 	if len(payload.Data) != len(inputs) {
-		return nil, fmt.Errorf("openai embeddings: got %d vectors for %d inputs", len(payload.Data), len(inputs))
+		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: got %d vectors for %d inputs", len(payload.Data), len(inputs))
 	}
 
 	// OpenAI returns data in input order, but the index field is the
@@ -102,5 +107,5 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float3
 		}
 		out[i] = vec
 	}
-	return out, nil
+	return out, EmbedUsage{TotalTokens: payload.Usage.TotalTokens}, nil
 }

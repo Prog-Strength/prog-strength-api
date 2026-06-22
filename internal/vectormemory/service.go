@@ -82,7 +82,10 @@ func (s *Service) Retrieve(ctx context.Context, userID, query string, k int, thr
 	}
 
 	embedStart := s.now()
-	vecs, err := s.embedder.Embed(ctx, []string{query})
+	// Retrieve is the synchronous agent/probe path, not the distillation job —
+	// its embed usage is intentionally not metered here (the cost dashboard
+	// scopes to the background goroutine).
+	vecs, _, err := s.embedder.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("vectormemory: embed query: %w", err)
 	}
@@ -123,10 +126,17 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 	rendered := renderConversation(messages)
 
 	distillStart := s.now()
-	observations, err := s.distiller.Distill(ctx, rendered)
+	observations, distillUsage, err := s.distiller.Distill(ctx, rendered)
+	distillDuration.Observe(s.now().Sub(distillStart).Seconds())
 	if err != nil {
+		stageErrorsTotal.WithLabelValues("distill").Inc()
 		return 0, fmt.Errorf("vectormemory: distill session: %w", err)
 	}
+	// Token spend is recorded on success only — a failed call's usage is
+	// unreliable and the error counter already marks the wasted attempt.
+	distillTokensTotal.WithLabelValues("input").Add(float64(distillUsage.InputTokens))
+	distillTokensTotal.WithLabelValues("output").Add(float64(distillUsage.OutputTokens))
+	observationsDistilledTotal.Add(float64(len(observations)))
 	s.log.InfoContext(ctx, "vectormemory distilled session",
 		slog.String("user_id", userID),
 		slog.String("session_id", sessionID),
@@ -138,10 +148,13 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 	}
 
 	embedStart := s.now()
-	vecs, err := s.embedder.Embed(ctx, observations)
+	vecs, embedUsage, err := s.embedder.Embed(ctx, observations)
+	embedDuration.Observe(s.now().Sub(embedStart).Seconds())
 	if err != nil {
+		stageErrorsTotal.WithLabelValues("embed").Inc()
 		return 0, fmt.Errorf("vectormemory: embed observations: %w", err)
 	}
+	embedTokensTotal.Add(float64(embedUsage.TotalTokens))
 	s.log.DebugContext(ctx, "vectormemory embedded observations",
 		slog.Duration("latency", s.now().Sub(embedStart)),
 		slog.Int("vectors", len(vecs)),
@@ -167,9 +180,11 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		if dedupEnabled {
 			dist, found, err := s.repo.NearestDistance(ctx, userID, s.cfg.EmbedModel, vec)
 			if err != nil {
+				stageErrorsTotal.WithLabelValues("dedup").Inc()
 				return inserted, fmt.Errorf("vectormemory: dedup probe: %w", err)
 			}
 			if found && dist <= s.cfg.DedupThreshold {
+				observationsDedupedTotal.Inc()
 				s.log.DebugContext(ctx, "vectormemory skipping near-duplicate",
 					slog.String("user_id", userID),
 					slog.String("session_id", sessionID),
@@ -192,6 +207,7 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 			CreatedAt:       s.now().UTC(),
 		}); err != nil {
 			// Continue rather than abort: see the method's insert-failure policy.
+			stageErrorsTotal.WithLabelValues("insert").Inc()
 			s.log.WarnContext(ctx, "vectormemory insert failed, skipping observation",
 				slog.String("user_id", userID),
 				slog.String("session_id", sessionID),
@@ -199,6 +215,7 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 			)
 			continue
 		}
+		observationsInsertedTotal.Inc()
 		inserted++
 	}
 

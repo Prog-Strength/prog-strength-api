@@ -13,15 +13,17 @@ import (
 
 // fakeEmbedder maps known strings to fixed 1536-dim vectors via a deterministic
 // table, returning one vector per input in order. With errOn set it fails the
-// next Embed call, simulating a provider outage.
+// next Embed call, simulating a provider outage. usage is the EmbedUsage it
+// reports back so token-counter assertions have a known value.
 type fakeEmbedder struct {
 	vectors map[string][]float32
 	errOn   bool
+	usage   EmbedUsage
 }
 
-func (f *fakeEmbedder) Embed(_ context.Context, inputs []string) ([][]float32, error) {
+func (f *fakeEmbedder) Embed(_ context.Context, inputs []string) ([][]float32, EmbedUsage, error) {
 	if f.errOn {
-		return nil, errors.New("embed boom")
+		return nil, EmbedUsage{}, errors.New("embed boom")
 	}
 	out := make([][]float32, 0, len(inputs))
 	for _, in := range inputs {
@@ -33,23 +35,25 @@ func (f *fakeEmbedder) Embed(_ context.Context, inputs []string) ([][]float32, e
 		}
 		out = append(out, v)
 	}
-	return out, nil
+	return out, f.usage, nil
 }
 
 func (f *fakeEmbedder) Configured() bool { return true }
 
 // fakeDistiller returns a preset observation list (possibly empty) and can be
-// switched to fail, simulating the LLM call erroring out.
+// switched to fail, simulating the LLM call erroring out. usage is the
+// DistillUsage it reports back for token-counter assertions.
 type fakeDistiller struct {
 	observations []string
 	errOn        bool
+	usage        DistillUsage
 }
 
-func (f *fakeDistiller) Distill(_ context.Context, _ string) ([]string, error) {
+func (f *fakeDistiller) Distill(_ context.Context, _ string) ([]string, DistillUsage, error) {
 	if f.errOn {
-		return nil, errors.New("distill boom")
+		return nil, DistillUsage{}, errors.New("distill boom")
 	}
-	return f.observations, nil
+	return f.observations, f.usage, nil
 }
 
 func (f *fakeDistiller) Configured() bool { return true }

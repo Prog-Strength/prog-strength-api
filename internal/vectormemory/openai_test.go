@@ -33,6 +33,7 @@ func TestOpenAIEmbedOrdersByIndexAndConvertsToFloat32(t *testing.T) {
 				{"embedding": []float64{0.4, 0.5, 0.6}, "index": 1},
 				{"embedding": []float64{0.1, 0.2, 0.3}, "index": 0},
 			},
+			"usage": map[string]any{"total_tokens": 88},
 		}); err != nil {
 			t.Errorf("encode response: %v", err)
 		}
@@ -42,7 +43,7 @@ func TestOpenAIEmbedOrdersByIndexAndConvertsToFloat32(t *testing.T) {
 	e := NewOpenAIEmbedder(srv.Client(), "sk-test", "text-embedding-3-small")
 	e.BaseURL = srv.URL
 
-	vecs, err := e.Embed(context.Background(), []string{"first", "second"})
+	vecs, usage, err := e.Embed(context.Background(), []string{"first", "second"})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -50,6 +51,9 @@ func TestOpenAIEmbedOrdersByIndexAndConvertsToFloat32(t *testing.T) {
 	want := [][]float32{{0.1, 0.2, 0.3}, {0.4, 0.5, 0.6}}
 	if !reflect.DeepEqual(vecs, want) {
 		t.Errorf("vectors = %v, want %v (ordered by index)", vecs, want)
+	}
+	if usage.TotalTokens != 88 {
+		t.Errorf("usage.TotalTokens = %d, want 88", usage.TotalTokens)
 	}
 	if gotAuth != "Bearer sk-test" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer sk-test")
@@ -71,7 +75,7 @@ func TestOpenAIEmbedEmptyInputSkipsRequest(t *testing.T) {
 	e := NewOpenAIEmbedder(srv.Client(), "sk-test", "text-embedding-3-small")
 	e.BaseURL = srv.URL
 
-	vecs, err := e.Embed(context.Background(), nil)
+	vecs, _, err := e.Embed(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Embed(nil): %v", err)
 	}
@@ -90,7 +94,7 @@ func TestOpenAIEmbedNon200Errors(t *testing.T) {
 	e := NewOpenAIEmbedder(srv.Client(), "sk-test", "text-embedding-3-small")
 	e.BaseURL = srv.URL
 
-	if _, err := e.Embed(context.Background(), []string{"x"}); err == nil {
+	if _, _, err := e.Embed(context.Background(), []string{"x"}); err == nil {
 		t.Fatal("Embed: expected error on 429, got nil")
 	}
 }

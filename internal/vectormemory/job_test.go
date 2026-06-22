@@ -16,15 +16,30 @@ type fakeSessionSource struct {
 	idle          []IdleSession
 	conversations map[string][]ConversationMessage
 	convErrFor    string // session id whose Conversation() call returns an error
+	countOverride *int   // when set, CountIdleUndistilled returns this backlog
+	selectErr     error  // when set, IdleUndistilled returns this (batch select failure)
 
 	marked map[string]int // session id ⇒ number of MarkDistilled calls
 }
 
 func (f *fakeSessionSource) IdleUndistilled(_ context.Context, _ time.Time, limit int) ([]IdleSession, error) {
+	if f.selectErr != nil {
+		return nil, f.selectErr
+	}
 	if limit < len(f.idle) {
 		return f.idle[:limit], nil
 	}
 	return f.idle, nil
+}
+
+// CountIdleUndistilled reports the full backlog, ignoring the batch limit. When
+// countOverride is set it returns that instead, letting a test prove the gauge
+// reflects the count method rather than the (capped) selected batch size.
+func (f *fakeSessionSource) CountIdleUndistilled(_ context.Context, _ time.Time) (int, error) {
+	if f.countOverride != nil {
+		return *f.countOverride, nil
+	}
+	return len(f.idle), nil
 }
 
 func (f *fakeSessionSource) Conversation(_ context.Context, sessionID string) ([]ConversationMessage, error) {
@@ -51,11 +66,11 @@ type distillByConv struct {
 	errFor       string // rendered conversation that should error
 }
 
-func (d *distillByConv) Distill(_ context.Context, conversation string) ([]string, error) {
+func (d *distillByConv) Distill(_ context.Context, conversation string) ([]string, DistillUsage, error) {
 	if conversation == d.errFor {
-		return nil, errors.New("distill boom")
+		return nil, DistillUsage{}, errors.New("distill boom")
 	}
-	return d.observations, nil
+	return d.observations, DistillUsage{}, nil
 }
 
 func (d *distillByConv) Configured() bool { return true }

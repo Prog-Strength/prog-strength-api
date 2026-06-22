@@ -117,15 +117,15 @@ func parseObservations(content json.RawMessage) []string {
 	return []string{}
 }
 
-func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) ([]string, error) {
+func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) ([]string, DistillUsage, error) {
 	reqBody, err := json.Marshal(distillRequestBody(d.model, conversation))
 	if err != nil {
-		return nil, fmt.Errorf("anthropic distill: marshal request: %w", err)
+		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.BaseURL, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("anthropic distill: build request: %w", err)
+		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: build request: %w", err)
 	}
 	req.Header.Set("x-api-key", d.apiKey)
 	req.Header.Set("anthropic-version", anthropicVersion)
@@ -133,24 +133,35 @@ func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) (
 
 	resp, err := d.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic distill: do request: %w", err)
+		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: do request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		return nil, fmt.Errorf("anthropic distill: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
 	}
 
+	// Usage is parsed alongside the content so the distillation job can meter
+	// token spend; an absent usage block decodes to a zero-value DistillUsage
+	// rather than failing the call.
 	var payload struct {
 		Content json.RawMessage `json:"content"`
+		Usage   struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, fmt.Errorf("anthropic distill: decode response: %w", err)
+		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: decode response: %w", err)
 	}
 
+	usage := DistillUsage{
+		InputTokens:  payload.Usage.InputTokens,
+		OutputTokens: payload.Usage.OutputTokens,
+	}
 	// parseObservations returns an empty slice when there is no tool_use
 	// block (the model declined with text only) — that is "nothing durable
 	// to record", not an error.
-	return parseObservations(payload.Content), nil
+	return parseObservations(payload.Content), usage, nil
 }

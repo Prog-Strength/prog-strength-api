@@ -479,7 +479,7 @@ func TestGoldenManifest(t *testing.T) {
 			"https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
 		},
 		ReturnToAllowedOrigins: []string{
-			"https://app.progstrength.fitness",
+			"https://progstrength.fitness",
 			"https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
 		},
 		DailyUsageCapUSD:      0.67,

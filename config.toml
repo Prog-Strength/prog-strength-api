@@ -113,3 +113,19 @@ session_idle_minutes = 30
 distill_model = "claude-haiku-4-5-20251001"
 embed_model = "text-embedding-3-small"
 embed_dim = 1536
+
+[hr_zones]
+# Tunables for the running heart-rate-zone engine (internal/hrzones). Public
+# literals — not secrets, not env-overridden. population_default_max_hr seeds
+# the cold-start reference; calibrated_run_threshold is the run count at which
+# the recent-runs p99 is trusted; recency_window_days bounds the history
+# considered; min/max_reference_bpm clamp the estimate to a plausible band.
+population_default_max_hr = 190
+calibrated_run_threshold  = 5
+recency_window_days       = 90
+min_reference_bpm         = 100
+max_reference_bpm         = 230
+# Ascending interior zone bounds as fractions of max HR; zone_names has one
+# more entry than zone_upper_bounds (the open-ended top zone).
+zone_upper_bounds         = [0.60, 0.70, 0.80, 0.90]
+zone_names                = ["Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"]

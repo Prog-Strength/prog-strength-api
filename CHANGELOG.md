@@ -1,3 +1,10 @@
+# [0.68.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.67.0...v0.68.0) (2026-06-22)
+
+
+### Features
+
+* **activity:** five-zone heart-rate breakdown on the running activity response ([#57](https://github.com/Prog-Strength/prog-strength-api/issues/57)) ([19b768f](https://github.com/Prog-Strength/prog-strength-api/commit/19b768fb64fe4b18ef268854f412875c77979b5f))
+
 # [0.67.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.66.1...v0.67.0) (2026-06-21)
 
 

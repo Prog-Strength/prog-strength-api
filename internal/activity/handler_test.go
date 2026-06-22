@@ -17,6 +17,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 )
 
 const testUserID = "u1"
@@ -52,6 +53,20 @@ func newTestHandler(t *testing.T) (*Handler, *MemoryArchiver, *SQLiteRepository)
 	arch := NewMemoryArchiver()
 	repo := NewSQLiteRepository(dbtest.New(t), arch)
 	return NewHandler(repo), arch, repo
+}
+
+// testHRZonesEngine builds an engine mirroring the [hr_zones] config defaults
+// so handler tests exercise the same zone model the server wires up.
+func testHRZonesEngine() *hrzones.Engine {
+	return hrzones.New(hrzones.Config{
+		PopulationDefaultMaxHR: 190,
+		CalibratedRunThreshold: 5,
+		RecencyWindowDays:      90,
+		MinReferenceBpm:        100,
+		MaxReferenceBpm:        230,
+		ZoneUpperBounds:        []float64{0.60, 0.70, 0.80, 0.90},
+		ZoneNames:              []string{"Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"},
+	})
 }
 
 // multipartBody builds a multipart/form-data body with the TCX bytes
@@ -923,5 +938,93 @@ func TestRunningMaxEffortDetail_InsufficientData(t *testing.T) {
 	}
 	if env.Data.Stats.Confidence != "insufficient_data" {
 		t.Errorf("stats.confidence = %q, want insufficient_data", env.Data.Stats.Confidence)
+	}
+}
+
+// --- heart rate zones ----------------------------------------------------
+
+func TestGetActivity_HeartRateZones(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+
+	imp := doImport(t, h, readFixture(t, "typical_5k.tcx"))
+	if imp.Code != http.StatusCreated {
+		t.Fatalf("import status = %d, want 201; body=%s", imp.Code, imp.Body.String())
+	}
+	var impEnv activityEnvelope
+	if err := json.Unmarshal(imp.Body.Bytes(), &impEnv); err != nil {
+		t.Fatalf("decode import: %v", err)
+	}
+	id := impEnv.Data.ID
+
+	get := httptest.NewRequest("GET", "/activities/"+id, nil)
+	get = withParam(get.WithContext(authctx.WithUserID(get.Context(), testUserID)), "id", id)
+	w := httptest.NewRecorder()
+	h.get(w, get)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	hz := env.Data.HeartRateZones
+	if hz == nil {
+		t.Fatalf("expected heart_rate_zones block; body=%s", w.Body.String())
+	}
+	if hz.Model != "percent_max_hr" {
+		t.Errorf("model = %q, want percent_max_hr", hz.Model)
+	}
+	if len(hz.Zones) != 5 {
+		t.Fatalf("zones len = %d, want 5", len(hz.Zones))
+	}
+	var sum float64
+	for _, z := range hz.Zones {
+		sum += z.TimePct
+	}
+	if d := sum - 1.0; d > 1e-6 || d < -1e-6 {
+		t.Errorf("sum(time_pct) = %v, want ~1.0", sum)
+	}
+	// Single freshly-imported run is a cold start: the reference is the
+	// population default, so confidence is "estimated" and calibrating is true.
+	if hz.ReferenceConfidence != "estimated" {
+		t.Errorf("reference_confidence = %q, want estimated", hz.ReferenceConfidence)
+	}
+	if !hz.Calibrating {
+		t.Errorf("calibrating = %v, want true for a single cold-start run", hz.Calibrating)
+	}
+}
+
+func TestGetActivity_NoHR_OmitsBlock(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+
+	a := &Activity{
+		UserID:           testUserID,
+		ActivityType:     ActivityRunning,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: "no-hr",
+		StartTime:        time.Now().UTC(),
+		DistanceMeters:   5000,
+		DurationSeconds:  1500,
+		Trackpoints: []Trackpoint{
+			{Sequence: 0, ElapsedSeconds: 0, DistanceMeters: 0},
+			{Sequence: 1, ElapsedSeconds: 10, DistanceMeters: 30},
+		},
+	}
+	if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	get := httptest.NewRequest("GET", "/activities/"+a.ID, nil)
+	get = withParam(get.WithContext(authctx.WithUserID(get.Context(), testUserID)), "id", a.ID)
+	w := httptest.NewRecorder()
+	h.get(w, get)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "heart_rate_zones") {
+		t.Errorf("expected heart_rate_zones key absent for a no-HR run; body=%s", w.Body.String())
 	}
 }

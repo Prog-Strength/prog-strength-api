@@ -1,3 +1,10 @@
+# [0.69.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.68.0...v0.69.0) (2026-06-22)
+
+
+### Features
+
+* **vectormemory:** instrument distillation goroutine with Prometheus metrics ([#59](https://github.com/Prog-Strength/prog-strength-api/issues/59)) ([b0ee215](https://github.com/Prog-Strength/prog-strength-api/commit/b0ee215f0994b543fa31cac576eb1092dbb01dde))
+
 # [0.68.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.67.0...v0.68.0) (2026-06-22)
 
 

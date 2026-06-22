@@ -48,7 +48,7 @@ var configEnvVars = []string{
 	"GOOGLE_REDIRECT_URL", "GOOGLE_CALENDAR_REDIRECT_URL",
 	"CORS_ALLOWED_ORIGIN", "RETURN_TO_ALLOWED_ORIGINS",
 	"JWT_SIGNING_KEY", "ADMIN_EMAILS", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
-	"CALENDAR_TOKEN_ENC_KEY", "BETA_ALLOWED_EMAILS",
+	"CALENDAR_TOKEN_ENC_KEY",
 	"AVATAR_BUCKET_NAME", "TCX_BUCKET_NAME", "AWS_REGION",
 	"FATSECRET_CLIENT_ID", "FATSECRET_CLIENT_SECRET", "USDA_FDC_API_KEY",
 	"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
@@ -351,24 +351,17 @@ allowed_origins = "${CORS_ALLOWED_ORIGIN}"
 	}
 }
 
-func TestAdminAndBetaEmailsFromCSV(t *testing.T) {
+func TestAdminEmailsFromCSV(t *testing.T) {
 	toml := `
 [auth]
 jwt_signing_key = "x"
 admin_emails = "${ADMIN_EMAILS}"
-
-[beta]
-seed_allowed_emails = "${BETA_ALLOWED_EMAILS}"
 `
 	cfg := load(t, toml, map[string]string{
-		"ADMIN_EMAILS":        "ops@example.com, owner@example.com",
-		"BETA_ALLOWED_EMAILS": "beta@example.com",
+		"ADMIN_EMAILS": "ops@example.com, owner@example.com",
 	})
 	if !reflect.DeepEqual(cfg.AdminEmails, []string{"ops@example.com", "owner@example.com"}) {
 		t.Errorf("AdminEmails = %#v", cfg.AdminEmails)
-	}
-	if !reflect.DeepEqual(cfg.BetaAllowedEmails, []string{"beta@example.com"}) {
-		t.Errorf("BetaAllowedEmails = %#v", cfg.BetaAllowedEmails)
 	}
 }
 
@@ -491,7 +484,6 @@ func TestGoldenManifest(t *testing.T) {
 		},
 		DailyUsageCapUSD:      0.67,
 		UsagePriceTableJSON:   "",
-		BetaAllowedEmails:     nil,
 		AdminEmails:           nil,
 		AvatarBucketName:      "",
 		TCXBucketName:         "",

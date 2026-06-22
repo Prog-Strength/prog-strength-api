@@ -205,8 +205,7 @@ func New(cfg config.Config) (*Server, error) {
 	timelineRepo = timeline.NewSQLiteRepository(database)
 	calendarConnRepo = calendarconn.NewSQLiteRepository(database)
 	followRepo = follow.NewSQLiteRepository(database)
-	betaSQLiteRepo := beta.NewSQLiteRepository(database)
-	betaRepo = betaSQLiteRepo
+	betaRepo = beta.NewSQLiteRepository(database)
 
 	// Sync exercise catalog: catalog.go is the source of truth; this
 	// upserts new entries and updates non-key fields on existing ones.
@@ -239,16 +238,6 @@ func New(cfg config.Config) (*Server, error) {
 	// runs once after migration 019 ships and is a no-op thereafter.
 	if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
 		return nil, err
-	}
-
-	// One-time seed of the beta allowlist from BETA_ALLOWED_EMAILS.
-	// Guarded by an empty-table check inside SeedFromEnv, so it carries
-	// the live env list into the DB on the first boot after this feature
-	// ships and is a no-op thereafter (never overwriting admin edits).
-	if n, err := betaSQLiteRepo.SeedFromEnv(context.Background(), cfg.BetaAllowedEmails); err != nil {
-		return nil, err
-	} else if n > 0 {
-		log.Printf("seeded %d beta allowed email(s) from BETA_ALLOWED_EMAILS", n)
 	}
 
 	// Telemetry uses its own SQLite file so high-volume agent

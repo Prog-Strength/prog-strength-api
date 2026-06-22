@@ -91,45 +91,6 @@ func (r *SQLiteRepository) List(ctx context.Context) ([]AllowedEmail, error) {
 	return out, rows.Err()
 }
 
-// SeedFromEnv carries the BETA_ALLOWED_EMAILS env list into the table on the
-// first boot after this feature ships. It is a no-op when emails is empty,
-// and is guarded by a table-empty check so it runs at most once and never
-// overwrites admin edits or re-seeds. Each email is inserted via
-// INSERT OR IGNORE with added_by = SeedAddedBy. Returns the number of emails
-// processed so the caller can log a one-line summary.
-func (r *SQLiteRepository) SeedFromEnv(ctx context.Context, emails []string) (int, error) {
-	if len(emails) == 0 {
-		return 0, nil
-	}
-
-	hasAny, err := r.hasAny(ctx)
-	if err != nil {
-		return 0, err
-	}
-	if hasAny {
-		// Table already populated (a prior boot seeded it, or an admin has
-		// edited it). Never overwrite or re-seed.
-		return 0, nil
-	}
-
-	now := r.now().UTC()
-	count := 0
-	for _, email := range emails {
-		normalized := normalizeEmail(email)
-		if normalized == "" {
-			continue
-		}
-		if _, err := r.db.ExecContext(ctx, `
-			INSERT OR IGNORE INTO beta_allowed_emails (email, added_at, added_by, note)
-			VALUES (?, ?, ?, NULL)
-		`, normalized, now, SeedAddedBy); err != nil {
-			return count, err
-		}
-		count++
-	}
-	return count, nil
-}
-
 // hasAny reports whether the table holds at least one row. Cheap (LIMIT 1
 // via EXISTS), never a full scan — used both to short-circuit IsAllowed's
 // allow-all branch and to gate the one-time seed.

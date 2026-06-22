@@ -211,7 +211,6 @@ secrets listed in [`DEPLOYMENT.md`](./DEPLOYMENT.md#repository-secrets).
 | `DEV_AUTH`              | `false`            | Gates `POST /auth/dev/token`. Must be `false` in prod. |
 | `CORS_ALLOWED_ORIGIN`   | —                  | Comma-separated frontend origins allowed by CORS. Each entry may use a single `*` wildcard (e.g. `https://prog-strength-web-*-<scope>.vercel.app` for Vercel branch previews). |
 | `RETURN_TO_ALLOWED_ORIGINS` | —              | OAuth `return_to` allow-list.                    |
-| `BETA_ALLOWED_EMAILS`   | —                  | Seed-only: one-time boot seed for the DB-backed beta allow-list (slated for removal). See below. |
 | `ADMIN_EMAILS`          | —                  | Comma-separated operator allow-list gating `/admin/beta-emails`. Empty = admin surface disabled (fail-closed). |
 | `APP_VERSION`           | `dev`              | Released version, baked in by the Dockerfile.    |
 
@@ -224,11 +223,10 @@ gets a token (pre-beta / local dev). Adding an email grants access on that
 user's next login; removing one blocks future logins (an already-issued
 token lives until it expires — there is no session revocation).
 
-`BETA_ALLOWED_EMAILS` is now **seed-only**: on the first boot where the
-table is empty, its comma-separated values are inserted into the table
-(`added_by = "seed:BETA_ALLOWED_EMAILS"`) so the live list carries over
-with no manual step. After that boot it no longer affects the gate and is
-slated for removal in a follow-up.
+The list is managed entirely at runtime through the admin endpoints below;
+there is no env-var seed. (Earlier releases carried the list over from a
+`BETA_ALLOWED_EMAILS` secret on first boot — that seed has been removed now
+that the table is the system of record.)
 
 Operators manage the list at runtime via three admin endpoints, all behind
 `RequireUser` + an admin gate (the caller's email must be in `ADMIN_EMAILS`;

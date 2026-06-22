@@ -243,8 +243,8 @@ reason; raise it in a separate discussion before implementing.
   `#error=beta_required` rather than a token; an empty table opens the gate.
   Operators manage the list at runtime through `/admin/beta-emails`
   (`GET`/`POST`/`DELETE`), gated by `ADMIN_EMAILS` (empty = fail-closed,
-  all `403`). `BETA_ALLOWED_EMAILS` is now seed-only — it one-time-seeds the
-  table on first boot and is slated for removal.
+  all `403`). The table is the sole system of record — there is no
+  `BETA_ALLOWED_EMAILS` env-var seed.
 - **Config** lives in `internal/config/`. README.md has the full env-var
   table with defaults; do not duplicate it here.
 

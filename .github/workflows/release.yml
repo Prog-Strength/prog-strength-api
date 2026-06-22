@@ -106,118 +106,73 @@ jobs:
     needs: [release, build_and_push]
     if: needs.release.outputs.new_release_published == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write # mint the OIDC token for configure-aws-credentials
+      contents: read
     steps:
-      - name: Deploy tagged version to EC2
-        uses: appleboy/ssh-action@v1.0.3
-        env:
-          # Only true secrets, Terraform-owned identities, PII, and deploy
-          # orchestration are forwarded now. Non-secret app config (DEV_AUTH,
-          # the OAuth redirect URLs, CORS/return-to origins, log level, usage
-          # cap, ...) lives in config.toml in this repo — see
-          # prog-strength-docs/sows/centralized-api-config.md.
-          JWT_SIGNING_KEY: ${{ secrets.JWT_SIGNING_KEY }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          CALENDAR_TOKEN_ENC_KEY: ${{ secrets.CALENDAR_TOKEN_ENC_KEY }}
-          LITESTREAM_REPLICA_BUCKET: ${{ secrets.LITESTREAM_REPLICA_BUCKET }}
-          LITESTREAM_REPLICA_REGION: ${{ secrets.LITESTREAM_REPLICA_REGION }}
-          # Terraform-owned bucket identities (config.toml references these as
-          # ${VAR} labels; the values stay env-sourced).
-          TCX_BUCKET_NAME: ${{ secrets.TCX_BUCKET_NAME }}
-          AVATAR_BUCKET_NAME: ${{ secrets.AVATAR_BUCKET_NAME }}
-          # PII (real email addresses) — kept env-sourced, never committed to
-          # the public config.toml.
-          ADMIN_EMAILS: ${{ secrets.ADMIN_EMAILS }}
-          # Grafana admin credentials. Both seed the initial values on
-          # first boot; subsequent UI password changes persist in
-          # grafana_data. Unset secrets fall through to the compose
-          # file's "admin"/"admin" defaults — fine for dev, do not
-          # leave that way in prod.
-          GRAFANA_ADMIN_USER: ${{ secrets.GRAFANA_ADMIN_USER }}
-          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-          # Nutrition lookup providers (GET /nutrition/lookup). All
-          # optional — missing secrets deploy as empty strings and the
-          # endpoint degrades to 503 lookup_unavailable. See
-          # prog-strength-docs/sows/custom-meal-macro-accuracy.md.
-          FATSECRET_CLIENT_ID: ${{ secrets.FATSECRET_CLIENT_ID }}
-          FATSECRET_CLIENT_SECRET: ${{ secrets.FATSECRET_CLIENT_SECRET }}
-          USDA_FDC_API_KEY: ${{ secrets.USDA_FDC_API_KEY }}
-          # Agent Vector Memory provider keys (config.toml [vectormemory]
-          # references these as ${VAR} labels). Optional until that feature
-          # ships; missing secrets deploy as empty strings.
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,CALENDAR_TOKEN_ENC_KEY,LITESTREAM_REPLICA_BUCKET,LITESTREAM_REPLICA_REGION,TCX_BUCKET_NAME,AVATAR_BUCKET_NAME,ADMIN_EMAILS,GRAFANA_ADMIN_USER,GRAFANA_ADMIN_PASSWORD,FATSECRET_CLIENT_ID,FATSECRET_CLIENT_SECRET,USDA_FDC_API_KEY,OPENAI_API_KEY,ANTHROPIC_API_KEY,RELEASE_VERSION
-          script: |
-            # Abort on the first failing command. Without this, a failed
-            # docker compose call is followed by trailing `ps`/`logs`
-            # calls that succeed, and the script's exit code is the last
-            # command's — appleboy/ssh-action would then report green on
-            # a real failure.
-            set -e
+          role-to-assume: ${{ secrets.AWS_GHA_ROLE_ARN }}
+          aws-region: us-east-2
 
-            # All compose / Caddy / monitoring config lives in the infra
-            # repo. The api repo isn't checked out on the host anymore;
-            # the released image comes from ECR (see below).
-            cd /home/ubuntu/prog-strength-infra
-            git fetch --prune
-            git checkout main
-            git pull --ff-only
+      - name: Deploy tagged version via SSM Run Command
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
+        run: |
+          set -euo pipefail
 
-            cd compose/api
+          # Invoke the versioned on-host deploy script via SSM Run Command —
+          # no SSH, no inbound port 22. The host is targeted by its Name tag
+          # (survives an instance replacement, so no EC2_HOST). The script
+          # reads app secrets from Secrets Manager via the instance role, so
+          # only the non-secret version tag travels with the command. Run as
+          # the ubuntu user so the infra checkout + docker creds keep their
+          # ownership.
+          command_id="$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --comment "Deploy api v${RELEASE_VERSION}" \
+            --targets "Key=tag:Name,Values=prog-strength-prod-backend" \
+            --parameters commands="sudo -u ubuntu -H bash /home/ubuntu/prog-strength-infra/deploy/api.sh v${RELEASE_VERSION}" \
+            --query 'Command.CommandId' --output text)"
+          echo "SSM command dispatched: ${command_id}"
 
-            # Authenticate docker to ECR using the instance role. awscli
-            # is installed by bootstrap.sh and reads creds from the EC2
-            # metadata service, so no static keys flow through the runner.
-            ECR_REGISTRY="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-2.amazonaws.com"
-            aws ecr get-login-password --region us-east-2 \
-              | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+          instance_id=""
+          for _ in $(seq 1 30); do
+            instance_id="$(aws ssm list-command-invocations \
+              --command-id "${command_id}" \
+              --query 'CommandInvocations[0].InstanceId' --output text)"
+            [ -n "${instance_id}" ] && [ "${instance_id}" != "None" ] && break
+            sleep 2
+          done
+          if [ -z "${instance_id}" ] || [ "${instance_id}" = "None" ]; then
+            echo "No SSM invocation registered for command ${command_id}" >&2
+            exit 1
+          fi
+          echo "Running on instance: ${instance_id}"
 
-            # Write .env from secrets forwarded over SSH. docker compose
-            # reads .env from the project directory (this one, the dir of
-            # the first -f compose file). ECR_REGISTRY + APP_VERSION
-            # resolve the image: line in docker-compose.yml.
-            umask 077
-            cat > .env <<EOF
-            JWT_SIGNING_KEY=${JWT_SIGNING_KEY}
-            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-            CALENDAR_TOKEN_ENC_KEY=${CALENDAR_TOKEN_ENC_KEY}
-            LITESTREAM_REPLICA_BUCKET=${LITESTREAM_REPLICA_BUCKET}
-            LITESTREAM_REPLICA_REGION=${LITESTREAM_REPLICA_REGION}
-            TCX_BUCKET_NAME=${TCX_BUCKET_NAME}
-            AVATAR_BUCKET_NAME=${AVATAR_BUCKET_NAME}
-            ADMIN_EMAILS=${ADMIN_EMAILS}
-            GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
-            GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
-            FATSECRET_CLIENT_ID=${FATSECRET_CLIENT_ID}
-            FATSECRET_CLIENT_SECRET=${FATSECRET_CLIENT_SECRET}
-            USDA_FDC_API_KEY=${USDA_FDC_API_KEY}
-            OPENAI_API_KEY=${OPENAI_API_KEY}
-            ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-            AWS_REGION=us-east-2
-            APP_VERSION=v${RELEASE_VERSION}
-            ECR_REGISTRY=${ECR_REGISTRY}
-            EOF
+          # Poll to completion so the workflow reflects the real deploy exit
+          # status (the guarantee set -e gave over SSH).
+          while true; do
+            status="$(aws ssm get-command-invocation \
+              --command-id "${command_id}" --instance-id "${instance_id}" \
+              --query 'Status' --output text)"
+            case "${status}" in
+              Success) break ;;
+              Pending | InProgress | Delayed) sleep 5 ;;
+              *)
+                echo "Deploy failed with status: ${status}" >&2
+                aws ssm get-command-invocation \
+                  --command-id "${command_id}" --instance-id "${instance_id}" \
+                  --query 'StandardErrorContent' --output text >&2 || true
+                aws ssm get-command-invocation \
+                  --command-id "${command_id}" --instance-id "${instance_id}" \
+                  --query 'StandardOutputContent' --output text || true
+                exit 1
+                ;;
+            esac
+          done
 
-            # Merge the monitoring stack. -f flags read in order; services
-            # from both files land in one project on the shared
-            # `prog-strength` network so Prometheus can scrape api +
-            # agent by service hostname. The compose file pins
-            # `name: prog-strength-api` so the project name is stable.
-            COMPOSE_FILES=(-f docker-compose.yml -f /home/ubuntu/prog-strength-infra/monitoring/docker-compose.monitoring.yml)
-
-            # Pull the released image up-front so a missing/broken push
-            # surfaces before we tear down the running stack.
-            docker compose "${COMPOSE_FILES[@]}" pull api
-            docker compose "${COMPOSE_FILES[@]}" down
-            docker compose "${COMPOSE_FILES[@]}" up -d
-
-            echo "Deployed v${RELEASE_VERSION}"
-            docker compose "${COMPOSE_FILES[@]}" ps
-            docker compose "${COMPOSE_FILES[@]}" logs --tail=50
+          echo "Deploy succeeded."
+          aws ssm get-command-invocation \
+            --command-id "${command_id}" --instance-id "${instance_id}" \
+            --query 'StandardOutputContent' --output text

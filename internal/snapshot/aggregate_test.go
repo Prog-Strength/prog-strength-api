@@ -70,6 +70,38 @@ func TestAggregateStrength_VolumeMuscleGroupsTopSetsPRs(t *testing.T) {
 	}
 }
 
+// Equal-volume muscle groups must come out in a deterministic order:
+// volume desc, then muscle_group name ascending. The slice is built from a
+// map iteration, so without the name tiebreaker the order is nondeterministic.
+func TestAggregateStrength_ByMuscleGroupTieOrderingDeterministic(t *testing.T) {
+	loc := mustLoc(t)
+	at := time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)
+	// Two single-muscle exercises with identical weight*reps → equal volume.
+	// "shoulders" and "biceps" are chosen so the alphabetical winner (biceps)
+	// is not the insertion-order winner.
+	shoulderEx := exercise.Exercise{ID: "shoulder-press", Name: "shoulder press",
+		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleShoulders}}
+	bicepEx := exercise.Exercise{ID: "barbell-curl", Name: "barbell curl",
+		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleBiceps}}
+	w := workout.Workout{ID: "w1", Name: "Push & Pull", PerformedAt: at,
+		Exercises: []workout.WorkoutExercise{
+			{ExerciseID: "shoulder-press", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
+			{ExerciseID: "barbell-curl", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
+		}}
+	exs := []exercise.Exercise{shoulderEx, bicepEx}
+	got := aggregateStrength([]workout.Workout{w}, nil, exs, "lb", loc)
+	if len(got.ByMuscleGroup) != 2 {
+		t.Fatalf("by_muscle_group = %+v", got.ByMuscleGroup)
+	}
+	if got.ByMuscleGroup[0].Volume != got.ByMuscleGroup[1].Volume {
+		t.Fatalf("expected equal volume, got %+v", got.ByMuscleGroup)
+	}
+	// Equal volume → alphabetical by muscle_group name: biceps before shoulders.
+	if got.ByMuscleGroup[0].MuscleGroup != "biceps" || got.ByMuscleGroup[1].MuscleGroup != "shoulders" {
+		t.Fatalf("by_muscle_group not in alphabetical tie order: %+v", got.ByMuscleGroup)
+	}
+}
+
 // TopSets are ranked by Epley est-1RM and capped at 3 per session.
 func TestAggregateStrength_TopSetsRankedAndCapped(t *testing.T) {
 	loc := mustLoc(t)

@@ -96,6 +96,9 @@ func aggregateStrength(
 		}
 		session.TopSets = append(session.TopSets, bestByExercise...)
 		for _, ev := range prsByWorkout[w.ID] {
+			// Kind is intentionally the literal "weight": PersonalRecordEvent
+			// only models heaviest-weight PRs today, so there is no other kind
+			// to derive. This is not a TODO/placeholder.
 			session.PRs = append(session.PRs, SessionPR{Exercise: ev.ExerciseID, Kind: "weight"})
 			name := nameByExercise[ev.ExerciseID]
 			if name == "" {
@@ -113,7 +116,10 @@ func aggregateStrength(
 		})
 	}
 	sort.SliceStable(sec.ByMuscleGroup, func(i, j int) bool {
-		return sec.ByMuscleGroup[i].Volume > sec.ByMuscleGroup[j].Volume
+		if sec.ByMuscleGroup[i].Volume != sec.ByMuscleGroup[j].Volume {
+			return sec.ByMuscleGroup[i].Volume > sec.ByMuscleGroup[j].Volume
+		}
+		return sec.ByMuscleGroup[i].MuscleGroup < sec.ByMuscleGroup[j].MuscleGroup
 	})
 	return sec
 }

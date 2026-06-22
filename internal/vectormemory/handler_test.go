@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -165,9 +166,21 @@ func TestHandlerDump(t *testing.T) {
 		return resp.Data.Memories
 	}
 
-	// No filter → all three rows.
-	if all := get(""); len(all) != 3 {
+	// No filter → all three rows; each carries chat provenance.
+	all := get("")
+	if len(all) != 3 {
 		t.Fatalf("unfiltered dump len = %d, want 3", len(all))
+	}
+	for _, row := range all {
+		if row.SourceType != "chat_session" {
+			t.Fatalf("dump row source_type = %q, want chat_session", row.SourceType)
+		}
+		if row.SourceSessionID == nil {
+			t.Fatalf("dump row missing source_session_id")
+		}
+		if row.SourceWorkoutID != nil {
+			t.Fatalf("chat dump row unexpectedly has source_workout_id %q", *row.SourceWorkoutID)
+		}
 	}
 	// user_id filter → only userB's row.
 	bRows := get("?user_id=userB")
@@ -180,6 +193,56 @@ func TestHandlerDump(t *testing.T) {
 	// limit=1 caps the page.
 	if limited := get("?limit=1"); len(limited) != 1 {
 		t.Fatalf("limit=1 dump len = %d, want 1", len(limited))
+	}
+}
+
+func TestHandlerDumpWorkoutProvenance(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedWorkout(t, db, "w1", "userA")
+
+	wid := "w1"
+	if _, err := repo.Insert(ctx, NewMemory{
+		UserID: "userA", DistilledText: "left shoulder cranky", SourceType: "workout_note",
+		SourceWorkoutID: &wid, EmbeddingModel: activeModel, EmbeddingDim: embedDim,
+		Embedding: oneHot(0), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert workout-note memory: %v", err)
+	}
+
+	svc := NewService(repo, &fakeEmbedder{}, &fakeDistiller{}, baseCfg(), testLogger())
+	srv := mountRouter(NewHandler(svc, testLogger()))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/memories", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data struct {
+			Memories []memoryDTO `json:"memories"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Data.Memories) != 1 {
+		t.Fatalf("dump len = %d, want 1", len(resp.Data.Memories))
+	}
+	row := resp.Data.Memories[0]
+	if row.SourceType != "workout_note" {
+		t.Fatalf("source_type = %q, want workout_note", row.SourceType)
+	}
+	if row.SourceWorkoutID == nil || *row.SourceWorkoutID != "w1" {
+		t.Fatalf("source_workout_id = %v, want w1", row.SourceWorkoutID)
+	}
+	if row.SourceSessionID != nil {
+		t.Fatalf("workout-note row unexpectedly has source_session_id %q", *row.SourceSessionID)
+	}
+	// And the JSON literally carries the discriminator key.
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"source_type":"workout_note"`)) {
+		t.Fatalf("expected source_type in JSON, got body=%s", rec.Body.String())
 	}
 }
 

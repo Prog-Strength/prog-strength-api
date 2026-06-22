@@ -244,6 +244,14 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 		if len(dumped) != 2 {
 			t.Fatalf("expected 2 memories in store, got %d", len(dumped))
 		}
+		for _, m := range dumped {
+			if m.SourceType != "chat_session" {
+				t.Fatalf("distilled memory source_type = %q, want chat_session", m.SourceType)
+			}
+			if m.SourceSessionID == nil || *m.SourceSessionID != "s1" {
+				t.Fatalf("distilled memory source_session_id = %v, want s1", m.SourceSessionID)
+			}
+		}
 	})
 
 	t.Run("empty observations insert nothing", func(t *testing.T) {

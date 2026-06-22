@@ -65,14 +65,28 @@ func seedMessage(t *testing.T, db *sql.DB, sessionID string) *int64 {
 }
 
 func newMem(userID, sessionID string, vec []float32) NewMemory {
+	sid := sessionID
 	return NewMemory{
 		UserID:          userID,
 		DistilledText:   "memory for " + sessionID,
-		SourceSessionID: sessionID,
+		SourceType:      "chat_session",
+		SourceSessionID: &sid,
 		EmbeddingModel:  activeModel,
 		EmbeddingDim:    embedDim,
 		Embedding:       vec,
 		CreatedAt:       time.Now().UTC(),
+	}
+}
+
+// seedWorkout inserts the workouts row a workout-note memory's FK requires.
+func seedWorkout(t *testing.T, db *sql.DB, id, userID string) {
+	t.Helper()
+	now := time.Now().UTC()
+	if _, err := db.Exec(`
+		INSERT INTO workouts (id, user_id, name, performed_at, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, id, userID, "leg day", now, "felt strong", now, now); err != nil {
+		t.Fatalf("seed workout %s: %v", id, err)
 	}
 }
 
@@ -83,10 +97,12 @@ func TestInsertThenDump(t *testing.T) {
 	seedSession(t, db, "s1", "userA")
 	msgID := seedMessage(t, db, "s1")
 
+	sid := "s1"
 	in := NewMemory{
 		UserID:          "userA",
 		DistilledText:   "prefers 5x5 squats",
-		SourceSessionID: "s1",
+		SourceType:      "chat_session",
+		SourceSessionID: &sid,
 		SourceMessageID: msgID,
 		EmbeddingModel:  activeModel,
 		EmbeddingDim:    embedDim,
@@ -110,7 +126,8 @@ func TestInsertThenDump(t *testing.T) {
 	}
 	m := got[0]
 	if m.ID != id || m.UserID != "userA" || m.DistilledText != "prefers 5x5 squats" ||
-		m.SourceSessionID != "s1" || m.EmbeddingModel != activeModel || m.EmbeddingDim != embedDim {
+		m.SourceType != "chat_session" || m.SourceSessionID == nil || *m.SourceSessionID != "s1" ||
+		m.SourceWorkoutID != nil || m.EmbeddingModel != activeModel || m.EmbeddingDim != embedDim {
 		t.Fatalf("dumped row mismatch: %+v", m)
 	}
 	if m.SourceMessageID == nil || *m.SourceMessageID != *msgID {
@@ -126,6 +143,56 @@ func TestInsertThenDump(t *testing.T) {
 	}
 	if vecCount != 1 {
 		t.Fatalf("expected 1 vec row, got %d", vecCount)
+	}
+}
+
+func TestInsert_WritesChatProvenance(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "sess-1", "u1")
+
+	sess := "sess-1"
+	id, err := repo.Insert(ctx, NewMemory{
+		UserID: "u1", DistilledText: "lifts heavy", SourceType: "chat_session",
+		SourceSessionID: &sess, EmbeddingModel: activeModel,
+		EmbeddingDim: embedDim, Embedding: oneHot(0), CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var st string
+	var sid, wid sql.NullString
+	if err := db.QueryRow(`SELECT source_type, source_session_id, source_workout_id FROM agent_memories WHERE id=?`, id).Scan(&st, &sid, &wid); err != nil {
+		t.Fatal(err)
+	}
+	if st != "chat_session" || !sid.Valid || sid.String != "sess-1" || wid.Valid {
+		t.Fatalf("bad provenance: type=%q sid=%v wid=%v", st, sid, wid)
+	}
+}
+
+func TestInsert_WritesWorkoutProvenance(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedWorkout(t, db, "w1", "u1")
+
+	wid := "w1"
+	id, err := repo.Insert(ctx, NewMemory{
+		UserID: "u1", DistilledText: "left shoulder cranky", SourceType: "workout_note",
+		SourceWorkoutID: &wid, EmbeddingModel: activeModel,
+		EmbeddingDim: embedDim, Embedding: oneHot(0), CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	var st string
+	var sid, gotWid sql.NullString
+	if err := db.QueryRow(`SELECT source_type, source_session_id, source_workout_id FROM agent_memories WHERE id=?`, id).Scan(&st, &sid, &gotWid); err != nil {
+		t.Fatal(err)
+	}
+	if st != "workout_note" || sid.Valid || !gotWid.Valid || gotWid.String != "w1" {
+		t.Fatalf("bad workout provenance: type=%q sid=%v wid=%v", st, sid, gotWid)
 	}
 }
 

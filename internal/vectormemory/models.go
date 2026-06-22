@@ -9,8 +9,10 @@ type Memory struct {
 	ID              int64
 	UserID          string
 	DistilledText   string
-	SourceSessionID string
-	SourceMessageID *int64
+	SourceType      string  // "chat_session" | "workout_note"
+	SourceSessionID *string // set iff SourceType == "chat_session"
+	SourceMessageID *int64  // best-effort, chat only
+	SourceWorkoutID *string // set iff SourceType == "workout_note"
 	EmbeddingModel  string
 	EmbeddingDim    int
 	SupersededAt    *time.Time
@@ -28,12 +30,15 @@ type Match struct {
 }
 
 // NewMemory is the insert input: the text row fields plus the vector. The
-// repo writes the text row and the vector row in one transaction.
+// repo writes the text row and the vector row in one transaction. SourceType
+// selects which typed FK is populated (the other is written NULL).
 type NewMemory struct {
 	UserID          string
 	DistilledText   string
-	SourceSessionID string
+	SourceType      string
+	SourceSessionID *string
 	SourceMessageID *int64
+	SourceWorkoutID *string
 	EmbeddingModel  string
 	EmbeddingDim    int
 	Embedding       []float32

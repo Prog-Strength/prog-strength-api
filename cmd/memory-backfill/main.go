@@ -240,10 +240,13 @@ func (d backfillDeps) persist(ctx context.Context, sessions []session, flatObs [
 			}
 		}
 
+		// Local copy so &sessionID is safe to take per iteration.
+		sessionID := sess.id
 		if _, err := d.repo.Insert(ctx, vectormemory.NewMemory{
 			UserID:          sess.userID,
 			DistilledText:   obs,
-			SourceSessionID: sess.id,
+			SourceType:      "chat_session",
+			SourceSessionID: &sessionID,
 			EmbeddingModel:  d.cfg.EmbedModel,
 			EmbeddingDim:    d.cfg.EmbedDim,
 			Embedding:       vec,

@@ -197,10 +197,13 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		// SourceMessageID is left nil: message-level attribution is best-effort
 		// and not wired in v1 — the distiller fuses multiple turns into one
 		// observation, so there is no single message to attribute it to.
+		// A local copy makes &srcSessionID safe to take per iteration.
+		srcSessionID := sessionID
 		if _, err := s.repo.Insert(ctx, NewMemory{
 			UserID:          userID,
 			DistilledText:   obs,
-			SourceSessionID: sessionID,
+			SourceType:      "chat_session",
+			SourceSessionID: &srcSessionID,
 			EmbeddingModel:  s.cfg.EmbedModel,
 			EmbeddingDim:    s.cfg.EmbedDim,
 			Embedding:       vec,

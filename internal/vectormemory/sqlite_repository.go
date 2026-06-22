@@ -40,14 +40,16 @@ func (r *SQLiteRepository) Insert(ctx context.Context, m NewMemory) (id int64, e
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_memories (
-			user_id, distilled_text, source_session_id, source_message_id,
-			embedding_model, embedding_dim, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			user_id, distilled_text, source_type, source_session_id,
+			source_message_id, source_workout_id, embedding_model, embedding_dim, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.UserID,
 		m.DistilledText,
-		m.SourceSessionID,
+		m.SourceType,
+		nullableString(m.SourceSessionID),
 		nullableInt64(m.SourceMessageID),
+		nullableString(m.SourceWorkoutID),
 		m.EmbeddingModel,
 		m.EmbeddingDim,
 		m.CreatedAt.UTC(),
@@ -112,10 +114,16 @@ func (r *SQLiteRepository) Search(ctx context.Context, userID, model string, que
 
 	var matches []Match
 	for rows.Next() {
-		var m Match
-		if err := rows.Scan(&m.Text, &m.Distance, &m.SourceSessionID, &m.CreatedAt); err != nil {
+		var (
+			m          Match
+			sourceSess sql.NullString
+		)
+		// source_session_id is nullable now (a workout-note memory has NULL),
+		// so scan through a NullString; a NULL maps to "" — unused by the agent.
+		if err := rows.Scan(&m.Text, &m.Distance, &sourceSess, &m.CreatedAt); err != nil {
 			return nil, fmt.Errorf("vectormemory: scan match: %w", err)
 		}
+		m.SourceSessionID = sourceSess.String
 		matches = append(matches, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -153,8 +161,9 @@ func (r *SQLiteRepository) NearestDistance(ctx context.Context, userID, model st
 
 func (r *SQLiteRepository) Dump(ctx context.Context, userID string, limit, offset int) ([]Memory, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, distilled_text, source_session_id, source_message_id,
-		       embedding_model, embedding_dim, superseded_at, created_at
+		SELECT id, user_id, distilled_text, source_type, source_session_id,
+		       source_message_id, source_workout_id, embedding_model, embedding_dim,
+		       superseded_at, created_at
 		FROM agent_memories
 		WHERE (? = '' OR user_id = ?)
 		ORDER BY created_at DESC, id DESC
@@ -169,15 +178,19 @@ func (r *SQLiteRepository) Dump(ctx context.Context, userID string, limit, offse
 	for rows.Next() {
 		var (
 			m            Memory
+			sourceSess   sql.NullString
 			sourceMsgID  sql.NullInt64
+			sourceWkt    sql.NullString
 			supersededAt sql.NullTime
 		)
 		if err := rows.Scan(
 			&m.ID,
 			&m.UserID,
 			&m.DistilledText,
-			&m.SourceSessionID,
+			&m.SourceType,
+			&sourceSess,
 			&sourceMsgID,
+			&sourceWkt,
 			&m.EmbeddingModel,
 			&m.EmbeddingDim,
 			&supersededAt,
@@ -185,8 +198,14 @@ func (r *SQLiteRepository) Dump(ctx context.Context, userID string, limit, offse
 		); err != nil {
 			return nil, fmt.Errorf("vectormemory: scan memory: %w", err)
 		}
+		if sourceSess.Valid {
+			m.SourceSessionID = &sourceSess.String
+		}
 		if sourceMsgID.Valid {
 			m.SourceMessageID = &sourceMsgID.Int64
+		}
+		if sourceWkt.Valid {
+			m.SourceWorkoutID = &sourceWkt.String
 		}
 		if supersededAt.Valid {
 			m.SupersededAt = &supersededAt.Time
@@ -206,4 +225,14 @@ func nullableInt64(p *int64) sql.NullInt64 {
 		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: *p, Valid: true}
+}
+
+// nullableString maps a *string to sql.NullString so a nil typed-FK column is
+// written as SQL NULL rather than the empty string (which would violate the
+// agent_memories CHECK / FK).
+func nullableString(p *string) sql.NullString {
+	if p == nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: *p, Valid: true}
 }

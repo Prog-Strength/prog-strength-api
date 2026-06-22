@@ -42,7 +42,7 @@ type Session struct {
 // IdleSession is the minimal session identity the vectormemory
 // distillation job needs to pull a transcript and stamp progress: the
 // session id and its owning user. The job runs cross-user (no caller
-// user in hand), so it carries the user_id forward to DistillSession
+// user in hand), so it carries the user_id forward to the distiller
 // rather than re-deriving it.
 type IdleSession struct {
 	ID     string

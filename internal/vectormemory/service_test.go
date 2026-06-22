@@ -49,7 +49,7 @@ type fakeDistiller struct {
 	usage        DistillUsage
 }
 
-func (f *fakeDistiller) Distill(_ context.Context, _ string) ([]string, DistillUsage, error) {
+func (f *fakeDistiller) Distill(_ context.Context, _, _ string) ([]string, DistillUsage, error) {
 	if f.errOn {
 		return nil, DistillUsage{}, errors.New("distill boom")
 	}
@@ -72,6 +72,33 @@ func (r *failInsertRepo) Insert(ctx context.Context, m NewMemory) (int64, error)
 		return 0, errors.New("insert boom")
 	}
 	return r.Repository.Insert(ctx, m)
+}
+
+// chatUnit builds the DistillUnit a chat source would yield: the rendered
+// transcript as content, an empty prompt hint, and chat provenance.
+func chatUnit(userID, sessionID string, messages []ConversationMessage) DistillUnit {
+	sid := sessionID
+	return DistillUnit{
+		UnitID:     sessionID,
+		UserID:     userID,
+		Content:    RenderConversation(messages),
+		PromptHint: "",
+		Source:     Provenance{SourceType: "chat_session", SessionID: &sid},
+	}
+}
+
+// workoutUnit builds the DistillUnit a workout-note source would yield: the
+// composed note blob as content, a non-empty prompt hint, and workout
+// provenance.
+func workoutUnit(userID, workoutID, content, promptHint string) DistillUnit {
+	wid := workoutID
+	return DistillUnit{
+		UnitID:     workoutID,
+		UserID:     userID,
+		Content:    content,
+		PromptHint: promptHint,
+		Source:     Provenance{SourceType: "workout_note", WorkoutID: &wid},
+	}
 }
 
 func testLogger() *slog.Logger {
@@ -211,7 +238,7 @@ func TestServiceRetrieveEmbedderError(t *testing.T) {
 	}
 }
 
-func TestServiceDistillSessionInserts(t *testing.T) {
+func TestServiceDistillUnitInserts(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
@@ -219,7 +246,7 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 
 	cfg := baseCfg() // DedupThreshold 0 ⇒ dedup off, insert everything
 
-	t.Run("two observations insert two memories", func(t *testing.T) {
+	t.Run("two observations insert two memories with chat provenance", func(t *testing.T) {
 		emb := &fakeEmbedder{vectors: map[string][]float32{
 			"likes squats":  oneHot(0),
 			"trains monday": oneHot(1),
@@ -227,10 +254,10 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 		dis := &fakeDistiller{observations: []string{"likes squats", "trains monday"}}
 		svc := NewService(repo, emb, dis, cfg, testLogger())
 
-		n, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{
+		n, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{
 			{Role: "user", Content: "I love squats"},
 			{Role: "assistant", Content: "Noted."},
-		})
+		}))
 		if err != nil {
 			t.Fatalf("distill: %v", err)
 		}
@@ -244,6 +271,54 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 		if len(dumped) != 2 {
 			t.Fatalf("expected 2 memories in store, got %d", len(dumped))
 		}
+		for _, m := range dumped {
+			if m.SourceType != "chat_session" {
+				t.Fatalf("distilled memory source_type = %q, want chat_session", m.SourceType)
+			}
+			if m.SourceSessionID == nil || *m.SourceSessionID != "s1" {
+				t.Fatalf("distilled memory source_session_id = %v, want s1", m.SourceSessionID)
+			}
+			if m.SourceWorkoutID != nil {
+				t.Fatalf("chat memory source_workout_id = %v, want nil", m.SourceWorkoutID)
+			}
+		}
+	})
+
+	t.Run("workout-note provenance writes the workout FK", func(t *testing.T) {
+		db := dbtest.New(t)
+		repo := NewSQLiteRepository(db)
+		seedWorkout(t, db, "w1", "userW")
+
+		emb := &fakeEmbedder{vectors: map[string][]float32{
+			"left shoulder cranky": oneHot(0),
+		}}
+		dis := &fakeDistiller{observations: []string{"left shoulder cranky"}}
+		svc := NewService(repo, emb, dis, cfg, testLogger())
+
+		n, err := svc.DistillUnit(ctx, workoutUnit("userW", "w1", "Workout notes: L shoulder cranky", "terse training-log notes"))
+		if err != nil {
+			t.Fatalf("distill: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("expected 1 insert, got %d", n)
+		}
+		dumped, err := svc.Dump(ctx, "userW", 10, 0)
+		if err != nil {
+			t.Fatalf("dump: %v", err)
+		}
+		if len(dumped) != 1 {
+			t.Fatalf("expected 1 memory in store, got %d", len(dumped))
+		}
+		m := dumped[0]
+		if m.SourceType != "workout_note" {
+			t.Fatalf("source_type = %q, want workout_note", m.SourceType)
+		}
+		if m.SourceWorkoutID == nil || *m.SourceWorkoutID != "w1" {
+			t.Fatalf("source_workout_id = %v, want w1", m.SourceWorkoutID)
+		}
+		if m.SourceSessionID != nil {
+			t.Fatalf("workout memory source_session_id = %v, want nil", m.SourceSessionID)
+		}
 	})
 
 	t.Run("empty observations insert nothing", func(t *testing.T) {
@@ -255,9 +330,9 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 		dis := &fakeDistiller{observations: nil}
 		svc := NewService(repo, emb, dis, cfg, testLogger())
 
-		n, err := svc.DistillSession(ctx, "userB", "s2", []ConversationMessage{
+		n, err := svc.DistillUnit(ctx, chatUnit("userB", "s2", []ConversationMessage{
 			{Role: "user", Content: "hi"},
-		})
+		}))
 		if err != nil {
 			t.Fatalf("distill: %v", err)
 		}
@@ -274,7 +349,21 @@ func TestServiceDistillSessionInserts(t *testing.T) {
 	})
 }
 
-func TestServiceDistillSessionDedup(t *testing.T) {
+func TestRenderConversation(t *testing.T) {
+	got := RenderConversation([]ConversationMessage{
+		{Role: "user", Content: "I love squats"},
+		{Role: "assistant", Content: "Noted."},
+	})
+	want := "user: I love squats\nassistant: Noted.\n"
+	if got != want {
+		t.Fatalf("RenderConversation = %q, want %q", got, want)
+	}
+	if RenderConversation(nil) != "" {
+		t.Fatalf("RenderConversation(nil) = %q, want empty", RenderConversation(nil))
+	}
+}
+
+func TestServiceDistillUnitDedup(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
@@ -298,9 +387,9 @@ func TestServiceDistillSessionDedup(t *testing.T) {
 	dis := &fakeDistiller{observations: []string{"dup", "fresh"}}
 	svc := NewService(repo, emb, dis, cfg, testLogger())
 
-	n, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{
+	n, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{
 		{Role: "user", Content: "stuff"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("distill: %v", err)
 	}
@@ -318,7 +407,7 @@ func TestServiceDistillSessionDedup(t *testing.T) {
 	}
 }
 
-func TestServiceDistillSessionInsertFailureContinues(t *testing.T) {
+func TestServiceDistillUnitInsertFailureContinues(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
@@ -328,7 +417,7 @@ func TestServiceDistillSessionInsertFailureContinues(t *testing.T) {
 
 	// Three observations; the middle one's insert is forced to fail. Per the
 	// documented policy the failure is logged and skipped, the other two still
-	// insert, and DistillSession returns (2, nil).
+	// insert, and DistillUnit returns (2, nil).
 	emb := &fakeEmbedder{vectors: map[string][]float32{
 		"first":  oneHot(0),
 		"second": oneHot(1),
@@ -338,9 +427,9 @@ func TestServiceDistillSessionInsertFailureContinues(t *testing.T) {
 	frepo := &failInsertRepo{Repository: repo, failText: "second"}
 	svc := NewService(frepo, emb, dis, cfg, testLogger())
 
-	n, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{
+	n, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{
 		{Role: "user", Content: "stuff"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("expected nil error despite one insert failing, got %v", err)
 	}
@@ -363,7 +452,7 @@ func TestServiceDistillSessionInsertFailureContinues(t *testing.T) {
 	}
 }
 
-func TestServiceDistillSessionDistillerError(t *testing.T) {
+func TestServiceDistillUnitDistillerError(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
@@ -372,9 +461,9 @@ func TestServiceDistillSessionDistillerError(t *testing.T) {
 	dis := &fakeDistiller{errOn: true}
 	svc := NewService(repo, &fakeEmbedder{}, dis, baseCfg(), testLogger())
 
-	n, err := svc.DistillSession(ctx, "userA", "s1", []ConversationMessage{
+	n, err := svc.DistillUnit(ctx, chatUnit("userA", "s1", []ConversationMessage{
 		{Role: "user", Content: "hi"},
-	})
+	}))
 	if err == nil {
 		t.Fatal("expected error from distiller failure")
 	}

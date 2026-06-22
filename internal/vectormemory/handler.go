@@ -112,7 +112,9 @@ const (
 type memoryDTO struct {
 	DistilledText   string     `json:"distilled_text"`
 	UserID          string     `json:"user_id"`
-	SourceSessionID string     `json:"source_session_id"`
+	SourceType      string     `json:"source_type"`
+	SourceSessionID *string    `json:"source_session_id,omitempty"`
+	SourceWorkoutID *string    `json:"source_workout_id,omitempty"`
 	EmbeddingModel  string     `json:"embedding_model"`
 	EmbeddingDim    int        `json:"embedding_dim"`
 	CreatedAt       time.Time  `json:"created_at"`
@@ -135,7 +137,9 @@ func (h *Handler) dump(w http.ResponseWriter, r *http.Request) {
 		dtos = append(dtos, memoryDTO{
 			DistilledText:   m.DistilledText,
 			UserID:          m.UserID,
+			SourceType:      m.SourceType,
 			SourceSessionID: m.SourceSessionID,
+			SourceWorkoutID: m.SourceWorkoutID,
 			EmbeddingModel:  m.EmbeddingModel,
 			EmbeddingDim:    m.EmbeddingDim,
 			CreatedAt:       m.CreatedAt,

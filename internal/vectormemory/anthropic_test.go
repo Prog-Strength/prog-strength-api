@@ -39,7 +39,7 @@ func TestAnthropicDistillParsesToolUse(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, usage, err := d.Distill(context.Background(), "user and coach talk")
+	got, usage, err := d.Distill(context.Background(), "user and coach talk", "")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestAnthropicDistillEmptyObservations(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, _, err := d.Distill(context.Background(), "nothing durable here")
+	got, _, err := d.Distill(context.Background(), "nothing durable here", "")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestAnthropicDistillTextOnlyNoToolUse(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	got, _, err := d.Distill(context.Background(), "chit chat")
+	got, _, err := d.Distill(context.Background(), "chit chat", "")
 	if err != nil {
 		t.Fatalf("Distill: %v", err)
 	}
@@ -116,9 +116,55 @@ func TestAnthropicDistillNon200Errors(t *testing.T) {
 	d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
 	d.BaseURL = srv.URL
 
-	if _, _, err := d.Distill(context.Background(), "x"); err == nil {
+	if _, _, err := d.Distill(context.Background(), "x", ""); err == nil {
 		t.Fatal("Distill: expected error on 500, got nil")
 	}
+}
+
+// TestDistillRequestBodyPromptHint is the proof that chat behavior is
+// unchanged: an empty (or whitespace-only) promptHint produces a request body
+// whose system prompt is EXACTLY distillSystemPrompt, while a non-empty hint is
+// appended after a blank-line separator. The rest of the body is identical
+// either way.
+func TestDistillRequestBodyPromptHint(t *testing.T) {
+	t.Run("empty hint leaves the system prompt unchanged", func(t *testing.T) {
+		body := distillRequestBody("m", "conv", "")
+		if got := body["system"]; got != distillSystemPrompt {
+			t.Fatalf("system = %q, want exactly distillSystemPrompt", got)
+		}
+	})
+
+	t.Run("whitespace-only hint leaves the system prompt unchanged", func(t *testing.T) {
+		body := distillRequestBody("m", "conv", "   \n\t ")
+		if got := body["system"]; got != distillSystemPrompt {
+			t.Fatalf("system = %q, want exactly distillSystemPrompt (whitespace hint ignored)", got)
+		}
+	})
+
+	t.Run("non-empty hint is appended after a blank line", func(t *testing.T) {
+		hint := "Notes are terse training-log shorthand."
+		body := distillRequestBody("m", "conv", hint)
+		want := distillSystemPrompt + "\n\n" + hint
+		if got := body["system"]; got != want {
+			t.Fatalf("system = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty-hint body keeps the system prompt unchanged through a JSON round-trip", func(t *testing.T) {
+		got, err := json.Marshal(distillRequestBody("claude-x", "a transcript", ""))
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var decoded struct {
+			System string `json:"system"`
+		}
+		if err := json.Unmarshal(got, &decoded); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if decoded.System != distillSystemPrompt {
+			t.Fatalf("round-tripped system = %q, want distillSystemPrompt", decoded.System)
+		}
+	})
 }
 
 func TestAnthropicConfigured(t *testing.T) {

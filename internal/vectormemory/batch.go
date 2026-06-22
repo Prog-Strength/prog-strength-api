@@ -353,13 +353,15 @@ func (d *BatchDistiller) Configured() bool { return d.apiKey != "" }
 // DistillBatch distills every conversation via the Anthropic Message Batches
 // API, returning the observations per conversation in input order. A single
 // conversation whose result is not "succeeded" yields an empty slice for that
-// index rather than failing the whole batch.
-func (d *BatchDistiller) DistillBatch(ctx context.Context, conversations []string) ([][]string, error) {
+// index rather than failing the whole batch. promptHint is the per-source
+// framing appended to every request in this batch — all conversations in one
+// call share a source, so a single hint per call is correct.
+func (d *BatchDistiller) DistillBatch(ctx context.Context, conversations []string, promptHint string) ([][]string, error) {
 	if len(conversations) == 0 {
 		return nil, nil
 	}
 
-	batchID, err := d.createBatch(ctx, conversations)
+	batchID, err := d.createBatch(ctx, conversations, promptHint)
 	if err != nil {
 		return nil, err
 	}
@@ -379,12 +381,12 @@ func (d *BatchDistiller) DistillBatch(ctx context.Context, conversations []strin
 
 // createBatch submits all conversations as one Message Batches request and
 // returns its id.
-func (d *BatchDistiller) createBatch(ctx context.Context, conversations []string) (string, error) {
+func (d *BatchDistiller) createBatch(ctx context.Context, conversations []string, promptHint string) (string, error) {
 	requests := make([]map[string]any, len(conversations))
 	for i, conv := range conversations {
 		requests[i] = map[string]any{
 			"custom_id": "dis-" + strconv.Itoa(i),
-			"params":    distillRequestBody(d.model, conv),
+			"params":    distillRequestBody(d.model, conv, promptHint),
 		}
 	}
 	reqBody, err := json.Marshal(map[string]any{"requests": requests})

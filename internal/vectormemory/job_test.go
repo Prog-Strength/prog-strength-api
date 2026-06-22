@@ -9,125 +9,154 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 )
 
-// fakeSessionSource is an in-memory SessionSource. It returns a fixed set of
-// idle sessions, serves per-session conversations from a map, records every
-// MarkDistilled call, and can inject a Conversation error for one session.
-type fakeSessionSource struct {
-	idle          []IdleSession
-	conversations map[string][]ConversationMessage
-	convErrFor    string // session id whose Conversation() call returns an error
-	countOverride *int   // when set, CountIdleUndistilled returns this backlog
-	selectErr     error  // when set, IdleUndistilled returns this (batch select failure)
+// fakeMemorySource is an in-memory MemorySource. It returns a fixed set of
+// pending units, records every MarkDistilled call, and can inject a
+// PendingUnits error (simulating a per-source select failure) and a
+// CountPending override (so a test can prove the backlog gauge sums the count
+// method rather than the capped PendingUnits result).
+type fakeMemorySource struct {
+	sourceType    string
+	pending       []DistillUnit
+	pendingErr    error // when set, PendingUnits returns this (per-source select failure)
+	countOverride *int  // when set, CountPending returns this backlog
+	countErr      error // when set, CountPending returns this (backlog count failure)
 
-	marked map[string]int // session id ⇒ number of MarkDistilled calls
+	marked map[string]int // unit id ⇒ number of MarkDistilled calls
 }
 
-func (f *fakeSessionSource) IdleUndistilled(_ context.Context, _ time.Time, limit int) ([]IdleSession, error) {
-	if f.selectErr != nil {
-		return nil, f.selectErr
+func (f *fakeMemorySource) SourceType() string { return f.sourceType }
+
+func (f *fakeMemorySource) PendingUnits(_ context.Context, _ time.Time, limit int) ([]DistillUnit, error) {
+	if f.pendingErr != nil {
+		return nil, f.pendingErr
 	}
-	if limit < len(f.idle) {
-		return f.idle[:limit], nil
+	if limit < len(f.pending) {
+		return f.pending[:limit], nil
 	}
-	return f.idle, nil
+	return f.pending, nil
 }
 
-// CountIdleUndistilled reports the full backlog, ignoring the batch limit. When
-// countOverride is set it returns that instead, letting a test prove the gauge
-// reflects the count method rather than the (capped) selected batch size.
-func (f *fakeSessionSource) CountIdleUndistilled(_ context.Context, _ time.Time) (int, error) {
+func (f *fakeMemorySource) CountPending(_ context.Context, _ time.Time) (int, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
 	if f.countOverride != nil {
 		return *f.countOverride, nil
 	}
-	return len(f.idle), nil
+	return len(f.pending), nil
 }
 
-func (f *fakeSessionSource) Conversation(_ context.Context, sessionID string) ([]ConversationMessage, error) {
-	if sessionID == f.convErrFor {
-		return nil, errors.New("load conversation boom")
-	}
-	return f.conversations[sessionID], nil
+func (f *fakeMemorySource) AllUndistilled(_ context.Context, _ string, _ int) ([]DistillUnit, string, error) {
+	return nil, "", nil
 }
 
-func (f *fakeSessionSource) MarkDistilled(_ context.Context, sessionID string, _ time.Time) error {
+func (f *fakeMemorySource) MarkDistilled(_ context.Context, unitID string, _ time.Time) error {
 	if f.marked == nil {
 		f.marked = map[string]int{}
 	}
-	f.marked[sessionID]++
+	f.marked[unitID]++
 	return nil
 }
 
-// distillByConv is a fakeDistiller variant keyed on the rendered conversation
-// text: it returns a preset observation list for most conversations but errors
-// for one specific rendered transcript, letting a test prove a per-session
-// distiller failure is skipped without aborting the batch.
-type distillByConv struct {
+// distillByContent is a Distiller keyed on the unit's content: it returns a
+// preset observation list for most content but errors for one specific string,
+// letting a test prove a per-unit distiller failure is skipped without aborting
+// the rest.
+type distillByContent struct {
 	observations []string
-	errFor       string // rendered conversation that should error
+	errFor       string // content that should error
 }
 
-func (d *distillByConv) Distill(_ context.Context, conversation string) ([]string, DistillUsage, error) {
-	if conversation == d.errFor {
+func (d *distillByContent) Distill(_ context.Context, content, _ string) ([]string, DistillUsage, error) {
+	if content == d.errFor {
 		return nil, DistillUsage{}, errors.New("distill boom")
 	}
 	return d.observations, DistillUsage{}, nil
 }
 
-func (d *distillByConv) Configured() bool { return true }
+func (d *distillByContent) Configured() bool { return true }
 
-func TestDistillOnce_HappyPath_MarksAndPersists(t *testing.T) {
+func TestDistillOnce_RangesOverSources_MarksEach(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
 	seedSession(t, db, "s1", "userA")
+	seedWorkout(t, db, "w1", "userB")
 
-	emb := &fakeEmbedder{vectors: map[string][]float32{"likes squats": oneHot(0)}}
-	dis := &fakeDistiller{observations: []string{"likes squats"}}
-	svc := NewService(repo, emb, dis, baseCfg(), testLogger())
+	emb := &fakeEmbedder{vectors: map[string][]float32{
+		"likes squats":  oneHot(0),
+		"shoulder hurt": oneHot(1),
+	}}
 
-	src := &fakeSessionSource{
-		idle: []IdleSession{{ID: "s1", UserID: "userA"}},
-		conversations: map[string][]ConversationMessage{
-			"s1": {{Role: "user", Content: "I love squats"}},
+	chatSrc := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending: []DistillUnit{
+			chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "I love squats"}}),
+		},
+	}
+	workoutSrc := &fakeMemorySource{
+		sourceType: "workout_note",
+		pending: []DistillUnit{
+			workoutUnit("userB", "w1", "Workout notes: shoulder hurt", "terse training-log notes"),
 		},
 	}
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	// One distiller for both sources: it yields a single observation matching
+	// each unit's expected embedding key, keyed on the unit content.
+	svc := NewService(repo, emb, &perContentDistiller{
+		byContent: map[string][]string{
+			chatSrc.pending[0].Content:    {"likes squats"},
+			workoutSrc.pending[0].Content: {"shoulder hurt"},
+		},
+	}, baseCfg(), testLogger())
+
+	if err := svc.distillOnce(ctx, []MemorySource{chatSrc, workoutSrc}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 
-	dumped, err := svc.Dump(ctx, "userA", 10, 0)
+	if chatSrc.marked["s1"] != 1 {
+		t.Fatalf("chat unit s1 marked %d times, want 1", chatSrc.marked["s1"])
+	}
+	if workoutSrc.marked["w1"] != 1 {
+		t.Fatalf("workout unit w1 marked %d times, want 1", workoutSrc.marked["w1"])
+	}
+
+	dumpedA, err := svc.Dump(ctx, "userA", 10, 0)
 	if err != nil {
-		t.Fatalf("dump: %v", err)
+		t.Fatalf("dump userA: %v", err)
 	}
-	if len(dumped) != 1 {
-		t.Fatalf("expected 1 persisted memory, got %d", len(dumped))
+	if len(dumpedA) != 1 || dumpedA[0].SourceType != "chat_session" {
+		t.Fatalf("expected 1 chat memory for userA, got %+v", dumpedA)
 	}
-	if src.marked["s1"] != 1 {
-		t.Fatalf("expected s1 marked distilled once, got %d", src.marked["s1"])
+	dumpedB, err := svc.Dump(ctx, "userB", 10, 0)
+	if err != nil {
+		t.Fatalf("dump userB: %v", err)
+	}
+	if len(dumpedB) != 1 || dumpedB[0].SourceType != "workout_note" {
+		t.Fatalf("expected 1 workout memory for userB, got %+v", dumpedB)
 	}
 }
 
-func TestDistillOnce_ZeroObservations_StillMarks(t *testing.T) {
+func TestDistillOnce_ZeroObservationUnit_StillMarks(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
 	seedSession(t, db, "s1", "userA")
 
-	// Distiller yields nothing — DistillSession returns (0, nil), which is
-	// success, so the session must still be marked (re-distilling an empty
-	// conversation would just re-spend for the same empty result).
+	// Distiller yields nothing — DistillUnit returns (0, nil), which is success,
+	// so the unit must still be marked (re-distilling empty content would just
+	// re-spend for the same empty result).
 	dis := &fakeDistiller{observations: nil}
 	svc := NewService(repo, &fakeEmbedder{}, dis, baseCfg(), testLogger())
 
-	src := &fakeSessionSource{
-		idle: []IdleSession{{ID: "s1", UserID: "userA"}},
-		conversations: map[string][]ConversationMessage{
-			"s1": {{Role: "user", Content: "hi"}},
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending: []DistillUnit{
+			chatUnit("userA", "s1", []ConversationMessage{{Role: "user", Content: "hi"}}),
 		},
 	}
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 
@@ -139,45 +168,82 @@ func TestDistillOnce_ZeroObservations_StillMarks(t *testing.T) {
 		t.Fatalf("expected no memories for empty distillation, got %d", len(dumped))
 	}
 	if src.marked["s1"] != 1 {
-		t.Fatalf("zero-observation session should still be marked once, got %d", src.marked["s1"])
+		t.Fatalf("zero-observation unit should still be marked once, got %d", src.marked["s1"])
 	}
 }
 
-func TestDistillOnce_DistillerError_SkipsAndContinues(t *testing.T) {
+func TestDistillOnce_SourcePendingError_DoesNotBlockOtherSource(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedWorkout(t, db, "w1", "userB")
+
+	emb := &fakeEmbedder{vectors: map[string][]float32{"durable fact": oneHot(0)}}
+	svc := NewService(repo, emb, &perContentDistiller{
+		byContent: map[string][]string{
+			"Workout notes: shoulder hurt": {"durable fact"},
+		},
+	}, baseCfg(), testLogger())
+
+	// The first source's PendingUnits errors; the second still distills + marks.
+	badSrc := &fakeMemorySource{sourceType: "chat_session", pendingErr: errors.New("select boom")}
+	goodSrc := &fakeMemorySource{
+		sourceType: "workout_note",
+		pending: []DistillUnit{
+			workoutUnit("userB", "w1", "Workout notes: shoulder hurt", "hint"),
+		},
+	}
+
+	if err := svc.distillOnce(ctx, []MemorySource{badSrc, goodSrc}); err != nil {
+		t.Fatalf("distillOnce should not return on a per-source select error: %v", err)
+	}
+
+	if goodSrc.marked["w1"] != 1 {
+		t.Fatalf("good source's unit should be marked once despite the other source's select error, got %d", goodSrc.marked["w1"])
+	}
+	dumped, err := svc.Dump(ctx, "userB", 10, 0)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	if len(dumped) != 1 {
+		t.Fatalf("expected the good source's memory persisted, got %d", len(dumped))
+	}
+}
+
+func TestDistillOnce_PerUnitDistillerError_SkipsAndContinues(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.New(t)
 	repo := NewSQLiteRepository(db)
 	seedSession(t, db, "sA", "userA")
 	seedSession(t, db, "sB", "userB")
 
-	// Session A's transcript errors in the distiller; session B's succeeds.
 	convA := []ConversationMessage{{Role: "user", Content: "boom please"}}
 	convB := []ConversationMessage{{Role: "user", Content: "fine"}}
-	dis := &distillByConv{
+	dis := &distillByContent{
 		observations: []string{"durable fact"},
-		errFor:       renderConversation(convA),
+		errFor:       RenderConversation(convA),
 	}
 	emb := &fakeEmbedder{vectors: map[string][]float32{"durable fact": oneHot(0)}}
 	svc := NewService(repo, emb, dis, baseCfg(), testLogger())
 
-	src := &fakeSessionSource{
-		idle: []IdleSession{{ID: "sA", UserID: "userA"}, {ID: "sB", UserID: "userB"}},
-		conversations: map[string][]ConversationMessage{
-			"sA": convA,
-			"sB": convB,
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending: []DistillUnit{
+			chatUnit("userA", "sA", convA),
+			chatUnit("userB", "sB", convB),
 		},
 	}
 
-	if err := svc.distillOnce(ctx, src); err != nil {
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
 		t.Fatalf("distillOnce: %v", err)
 	}
 
 	// A failed (left unmarked for retry); B succeeded (marked + persisted).
 	if src.marked["sA"] != 0 {
-		t.Fatalf("session A should NOT be marked after distiller error, got %d", src.marked["sA"])
+		t.Fatalf("unit sA should NOT be marked after distiller error, got %d", src.marked["sA"])
 	}
 	if src.marked["sB"] != 1 {
-		t.Fatalf("session B should be marked once, got %d", src.marked["sB"])
+		t.Fatalf("unit sB should be marked once, got %d", src.marked["sB"])
 	}
 	dumped, err := svc.Dump(ctx, "userB", 10, 0)
 	if err != nil {
@@ -188,33 +254,14 @@ func TestDistillOnce_DistillerError_SkipsAndContinues(t *testing.T) {
 	}
 }
 
-func TestDistillOnce_ConversationError_SkipsAndContinues(t *testing.T) {
-	ctx := context.Background()
-	db := dbtest.New(t)
-	repo := NewSQLiteRepository(db)
-	seedSession(t, db, "sA", "userA")
-	seedSession(t, db, "sB", "userB")
-
-	emb := &fakeEmbedder{vectors: map[string][]float32{"fact": oneHot(0)}}
-	dis := &fakeDistiller{observations: []string{"fact"}}
-	svc := NewService(repo, emb, dis, baseCfg(), testLogger())
-
-	src := &fakeSessionSource{
-		idle:       []IdleSession{{ID: "sA", UserID: "userA"}, {ID: "sB", UserID: "userB"}},
-		convErrFor: "sA",
-		conversations: map[string][]ConversationMessage{
-			"sB": {{Role: "user", Content: "hello"}},
-		},
-	}
-
-	if err := svc.distillOnce(ctx, src); err != nil {
-		t.Fatalf("distillOnce: %v", err)
-	}
-
-	if src.marked["sA"] != 0 {
-		t.Fatalf("session A should NOT be marked after conversation-load error, got %d", src.marked["sA"])
-	}
-	if src.marked["sB"] != 1 {
-		t.Fatalf("session B should be marked once after A's load error, got %d", src.marked["sB"])
-	}
+// perContentDistiller returns a content-keyed observation list, so a test with
+// multiple units in one tick can give each a distinct, embeddable observation.
+type perContentDistiller struct {
+	byContent map[string][]string
 }
+
+func (d *perContentDistiller) Distill(_ context.Context, content, _ string) ([]string, DistillUsage, error) {
+	return d.byContent[content], DistillUsage{}, nil
+}
+
+func (d *perContentDistiller) Configured() bool { return true }

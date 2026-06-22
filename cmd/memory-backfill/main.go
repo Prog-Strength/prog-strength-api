@@ -1,30 +1,35 @@
 // Command memory-backfill is a ONE-TIME, MANUAL-RUN tool that seeds the agent
-// vector-memory index from historical chat conversations. It is NOT invoked
-// automatically anywhere — no cron, no server hook, no background job. Run it
-// by hand exactly once (or re-run safely: it is idempotent — already-distilled
-// sessions are skipped via the memory_distilled_at IS NULL filter).
+// vector-memory index from the full existing corpus of EVERY registered memory
+// source — historical chat conversations AND the existing workout-note log — in
+// a single run. It is NOT invoked automatically anywhere (no cron, no server
+// hook, no background job). Run it by hand exactly once (or re-run safely: it is
+// idempotent — already-distilled units are skipped because each source's
+// AllUndistilled filters on its own memory_distilled_at IS NULL marker).
+//
+// Source-aware: the backfill ranges over the SAME source registry the live
+// distillation job uses (server.BuildMemorySources) and, per source, drains
+// AllUndistilled in keyset-paginated pages, distilling each page with that
+// source's PromptHint and writing each observation with the unit's typed
+// provenance (chat → source_session_id, workout → source_workout_id).
 //
 // why batch APIs: this is a single, large, latency-insensitive job, so it uses
 // the half-price async Batch APIs (vectormemory.BatchDistiller +
-// vectormemory.BatchEmbedder) — all historical conversations in one Anthropic
-// Message Batch, all resulting observations in one OpenAI embeddings Batch.
-// Both calls BLOCK until their batch completes (minutes-to-hours), which is the
-// intended behavior for a run-once seeding tool.
+// vectormemory.BatchEmbedder) — each page's conversations go to one Anthropic
+// Message Batch, the page's resulting observations to one OpenAI embeddings
+// Batch. Both calls BLOCK until their batch completes (minutes-to-hours), which
+// is the intended behavior for a run-once seeding tool.
 //
-// Cost visibility: a startup line states how many sessions/requests will be
-// submitted before any paid call is made. Counts are logged liberally
-// throughout (sessions found, observations produced, memories inserted,
-// sessions marked).
+// Cost visibility: counts are logged liberally throughout, per source and in
+// total (units found, observations produced, memories inserted, units marked).
 //
 // --dry-run distills + embeds and prints the counts WITHOUT writing any memory
-// rows or marking any session distilled. It still spends on the batch APIs (it
+// rows or marking any unit distilled. It still spends on the batch APIs (it
 // has to, to produce the counts), so it is a "preview the result, change
 // nothing" switch rather than a "spend nothing" one.
 package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"log"
@@ -40,6 +45,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/server"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
 )
 
@@ -47,6 +53,14 @@ import (
 // poll, one download) — NOT the whole batch, which spans many polls. Batch
 // jobs run for a long wall-clock time, but every single request is quick.
 const backfillHTTPTimeout = 60 * time.Second
+
+// backfillPageSize bounds how many undistilled units one AllUndistilled call
+// returns, so each source is drained in keyset-paginated pages rather than one
+// unbounded slice. The existing workout-note corpus may be large; paging keeps
+// the command's working set bounded and makes the run resumable — every page's
+// units are marked distilled before the next page is fetched, so an interrupted
+// run picks up where it left off on re-run.
+const backfillPageSize = 200
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -92,30 +106,29 @@ func run(ctx context.Context, dryRun bool) error {
 	repo := vectormemory.NewSQLiteRepository(database)
 	chatRepo := chat.NewSQLiteRepository(database)
 
+	// Range over the SAME registry the live distillation job uses, so one run
+	// seeds every source's existing corpus (chat history + workout notes). The
+	// command may import internal/server: server does not import cmd, so there is
+	// no import cycle.
+	sources := server.BuildMemorySources(database, chatRepo, cfg.VectorMemory)
+
 	return backfill(ctx, backfillDeps{
 		cfg:       cfg.VectorMemory,
-		db:        database,
 		distiller: distiller,
 		embedder:  embedder,
 		repo:      repo,
-		chat:      chatRepo,
+		sources:   sources,
 		logger:    log.New(os.Stdout, "memory-backfill: ", log.LstdFlags),
 		now:       time.Now,
 	}, dryRun)
 }
 
-// session is one undistilled session plus its loaded conversation.
-type session struct {
-	id       string
-	userID   string
-	messages []vectormemory.ConversationMessage
-}
-
-// batchDistiller / batchEmbedder / memoryRepo / chatStore are the narrow seams
-// backfill depends on, so the orchestration is exercisable without real HTTP
-// or a real DB.
+// batchDistiller / batchEmbedder / memoryRepo are the narrow seams backfill
+// depends on, so the orchestration is exercisable without real HTTP. Sources are
+// injected as vectormemory.MemorySource so the page drain is exercisable with
+// fakes (no real registry or live providers).
 type batchDistiller interface {
-	DistillBatch(ctx context.Context, conversations []string) ([][]string, error)
+	DistillBatch(ctx context.Context, conversations []string, promptHint string) ([][]string, error)
 }
 
 type batchEmbedder interface {
@@ -127,96 +140,118 @@ type memoryRepo interface {
 	NearestDistance(ctx context.Context, userID, model string, query []float32) (float64, bool, error)
 }
 
-type chatStore interface {
-	SessionMessages(ctx context.Context, sessionID string) ([]chat.Message, error)
-	MarkDistilled(ctx context.Context, sessionID string, at time.Time) error
-}
-
 type backfillDeps struct {
 	cfg       config.VectorMemoryConfig
-	db        *sql.DB
 	distiller batchDistiller
 	embedder  batchEmbedder
 	repo      memoryRepo
-	chat      chatStore
+	sources   []vectormemory.MemorySource
 	logger    *log.Logger
 	now       func() time.Time
 }
 
-// backfill is the testable orchestration: enumerate undistilled sessions,
-// distill them all in one batch, embed all observations in one batch, dedup +
-// insert each, then mark every processed session distilled.
+// backfill is the testable orchestration: range over every source and, per
+// source, drain AllUndistilled in keyset-paginated pages. Each page is distilled
+// in one batch (with the source's PromptHint), its observations embedded in one
+// batch, then deduped + inserted with each unit's typed provenance, and every
+// processed unit marked distilled before the next page is fetched.
 func backfill(ctx context.Context, d backfillDeps, dryRun bool) error {
-	sessions, err := loadUndistilledSessions(ctx, d)
-	if err != nil {
-		return err
-	}
-	if len(sessions) == 0 {
-		d.logger.Printf("no undistilled sessions found; nothing to do")
-		return nil
-	}
+	var totalUnits, totalObs, totalInserted, totalMarked int
 
-	// Cost-visibility line BEFORE any paid call: one distill request per
-	// session goes to the batch API up front.
-	d.logger.Printf("STARTING backfill: %d undistilled sessions found; submitting %d distillation requests to the Anthropic batch API (dry_run=%t)",
-		len(sessions), len(sessions), dryRun)
+	for _, src := range d.sources {
+		srcType := src.SourceType()
+		var srcUnits, srcObs, srcInserted, srcMarked int
 
-	conversations := make([]string, len(sessions))
-	for i, s := range sessions {
-		conversations[i] = renderConversation(s.messages)
-	}
+		cursor := ""
+		for {
+			units, next, err := src.AllUndistilled(ctx, cursor, backfillPageSize)
+			if err != nil {
+				return err
+			}
+			if len(units) == 0 {
+				break
+			}
+			srcUnits += len(units)
 
-	observationsPerSession, err := d.distiller.DistillBatch(ctx, conversations)
-	if err != nil {
-		return err
-	}
-	if len(observationsPerSession) != len(sessions) {
-		return errors.New("distill batch returned a mismatched number of results")
-	}
+			// Cost-visibility line BEFORE the paid call: one distill request per
+			// unit in this page. Every unit in a single source shares one prompt
+			// hint, so units[0].PromptHint is representative for the whole page.
+			d.logger.Printf("source=%s: %d undistilled units in page; submitting %d distillation requests to the Anthropic batch API (dry_run=%t)",
+				srcType, len(units), len(units), dryRun)
 
-	// Flatten observations into one embedding batch, tracking which session
-	// each one belongs to so we can attribute the insert.
-	var flatObs []string
-	var obsSession []int
-	for i, obs := range observationsPerSession {
-		for _, o := range obs {
-			flatObs = append(flatObs, o)
-			obsSession = append(obsSession, i)
+			contents := make([]string, len(units))
+			for i, u := range units {
+				contents[i] = u.Content
+			}
+
+			observationsPerUnit, err := d.distiller.DistillBatch(ctx, contents, units[0].PromptHint)
+			if err != nil {
+				return err
+			}
+			if len(observationsPerUnit) != len(units) {
+				return errors.New("distill batch returned a mismatched number of results")
+			}
+
+			// Flatten observations into one embedding batch, tracking which unit
+			// each one belongs to so the insert carries the right provenance.
+			var flatObs []string
+			var obsUnit []int
+			for i, obs := range observationsPerUnit {
+				for _, o := range obs {
+					flatObs = append(flatObs, o)
+					obsUnit = append(obsUnit, i)
+				}
+			}
+			srcObs += len(flatObs)
+			d.logger.Printf("source=%s: distillation produced %d observations across %d units; submitting %d embedding requests to the OpenAI batch API",
+				srcType, len(flatObs), len(units), len(flatObs))
+
+			var vecs [][]float32
+			if len(flatObs) > 0 {
+				vecs, err = d.embedder.EmbedBatch(ctx, flatObs)
+				if err != nil {
+					return err
+				}
+				if len(vecs) != len(flatObs) {
+					return errors.New("embed batch returned a mismatched number of vectors")
+				}
+			}
+
+			inserted, err := d.persist(ctx, units, flatObs, obsUnit, vecs, dryRun)
+			if err != nil {
+				return err
+			}
+			srcInserted += inserted
+
+			marked, err := d.markAll(ctx, src, units, dryRun)
+			if err != nil {
+				return err
+			}
+			srcMarked += marked
+
+			if next == "" {
+				break
+			}
+			cursor = next
 		}
-	}
-	d.logger.Printf("distillation produced %d observations across %d sessions; submitting %d embedding requests to the OpenAI batch API",
-		len(flatObs), len(sessions), len(flatObs))
 
-	var vecs [][]float32
-	if len(flatObs) > 0 {
-		vecs, err = d.embedder.EmbedBatch(ctx, flatObs)
-		if err != nil {
-			return err
-		}
-		if len(vecs) != len(flatObs) {
-			return errors.New("embed batch returned a mismatched number of vectors")
-		}
+		d.logger.Printf("source=%s DONE: units=%d observations=%d memories_inserted=%d units_marked=%d dry_run=%t",
+			srcType, srcUnits, srcObs, srcInserted, srcMarked, dryRun)
+		totalUnits += srcUnits
+		totalObs += srcObs
+		totalInserted += srcInserted
+		totalMarked += srcMarked
 	}
 
-	inserted, err := d.persist(ctx, sessions, flatObs, obsSession, vecs, dryRun)
-	if err != nil {
-		return err
-	}
-
-	marked, err := d.markAll(ctx, sessions, dryRun)
-	if err != nil {
-		return err
-	}
-
-	d.logger.Printf("DONE: sessions=%d observations=%d memories_inserted=%d sessions_marked=%d dry_run=%t",
-		len(sessions), len(flatObs), inserted, marked, dryRun)
+	d.logger.Printf("ALL SOURCES DONE: units=%d observations=%d memories_inserted=%d units_marked=%d dry_run=%t",
+		totalUnits, totalObs, totalInserted, totalMarked, dryRun)
 	return nil
 }
 
 // persist dedups (when configured) and inserts each observation, returning the
 // count actually inserted. In dry-run it inserts nothing but still reports how
 // many it would have inserted (post-dedup is skipped — dedup needs the index).
-func (d backfillDeps) persist(ctx context.Context, sessions []session, flatObs []string, obsSession []int, vecs [][]float32, dryRun bool) (int, error) {
+func (d backfillDeps) persist(ctx context.Context, units []vectormemory.DistillUnit, flatObs []string, obsUnit []int, vecs [][]float32, dryRun bool) (int, error) {
 	if dryRun {
 		// No index writes and no dedup probes in dry-run: report the raw
 		// observation count as the would-insert figure.
@@ -227,31 +262,34 @@ func (d backfillDeps) persist(ctx context.Context, sessions []session, flatObs [
 	inserted := 0
 	for i, obs := range flatObs {
 		vec := vecs[i]
-		sess := sessions[obsSession[i]]
+		unit := units[obsUnit[i]]
 
 		if dedupEnabled {
-			dist, found, err := d.repo.NearestDistance(ctx, sess.userID, d.cfg.EmbedModel, vec)
+			dist, found, err := d.repo.NearestDistance(ctx, unit.UserID, d.cfg.EmbedModel, vec)
 			if err != nil {
 				return inserted, err
 			}
 			if found && dist <= d.cfg.DedupThreshold {
-				d.logger.Printf("skipping near-duplicate (session=%s distance=%.4f)", sess.id, dist)
+				d.logger.Printf("skipping near-duplicate (unit=%s distance=%.4f)", unit.UnitID, dist)
 				continue
 			}
 		}
 
 		if _, err := d.repo.Insert(ctx, vectormemory.NewMemory{
-			UserID:          sess.userID,
+			UserID:          unit.UserID,
 			DistilledText:   obs,
-			SourceSessionID: sess.id,
+			SourceType:      unit.Source.SourceType,
+			SourceSessionID: unit.Source.SessionID,
+			SourceMessageID: unit.Source.MessageID,
+			SourceWorkoutID: unit.Source.WorkoutID,
 			EmbeddingModel:  d.cfg.EmbedModel,
 			EmbeddingDim:    d.cfg.EmbedDim,
 			Embedding:       vec,
 			CreatedAt:       d.now().UTC(),
 		}); err != nil {
 			// One bad row should not throw away a paid distillation: log and
-			// continue, matching the live DistillSession policy.
-			d.logger.Printf("insert failed, skipping observation (session=%s): %v", sess.id, err)
+			// continue, matching the live DistillUnit policy.
+			d.logger.Printf("insert failed, skipping observation (unit=%s): %v", unit.UnitID, err)
 			continue
 		}
 		inserted++
@@ -259,94 +297,22 @@ func (d backfillDeps) persist(ctx context.Context, sessions []session, flatObs [
 	return inserted, nil
 }
 
-// markAll stamps every processed session distilled so a re-run skips them.
-// Sessions are marked even when they produced zero observations (the
-// conversation simply held nothing durable — re-distilling would re-spend for
-// the same empty result). Skipped entirely in dry-run.
-func (d backfillDeps) markAll(ctx context.Context, sessions []session, dryRun bool) (int, error) {
+// markAll stamps every processed unit distilled so a re-run skips it. Units are
+// marked even when they produced zero observations (the content simply held
+// nothing durable — re-distilling would re-spend for the same empty result).
+// Skipped entirely in dry-run.
+func (d backfillDeps) markAll(ctx context.Context, src vectormemory.MemorySource, units []vectormemory.DistillUnit, dryRun bool) (int, error) {
 	if dryRun {
 		return 0, nil
 	}
 	now := d.now()
 	marked := 0
-	for _, s := range sessions {
-		if err := d.chat.MarkDistilled(ctx, s.id, now); err != nil {
-			d.logger.Printf("mark distilled failed (session=%s): %v", s.id, err)
+	for _, u := range units {
+		if err := src.MarkDistilled(ctx, u.UnitID, now); err != nil {
+			d.logger.Printf("mark distilled failed (unit=%s): %v", u.UnitID, err)
 			continue
 		}
 		marked++
 	}
 	return marked, nil
-}
-
-// loadUndistilledSessions enumerates every non-deleted chat session with
-// memory_distilled_at IS NULL (the full history, not just idle ones) and loads
-// each transcript. A direct SQL query is acceptable here — this is a one-shot
-// command, not a reusable repository method.
-func loadUndistilledSessions(ctx context.Context, d backfillDeps) ([]session, error) {
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT id, user_id
-		FROM chat_sessions
-		WHERE memory_distilled_at IS NULL
-		  AND deleted_at IS NULL
-		ORDER BY last_message_at ASC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	type ref struct{ id, userID string }
-	var refs []ref
-	for rows.Next() {
-		var r ref
-		if err := rows.Scan(&r.id, &r.userID); err != nil {
-			return nil, err
-		}
-		refs = append(refs, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	out := make([]session, 0, len(refs))
-	for _, r := range refs {
-		msgs, err := d.chat.SessionMessages(ctx, r.id)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, session{
-			id:       r.id,
-			userID:   r.userID,
-			messages: toConversation(msgs),
-		})
-	}
-	return out, nil
-}
-
-// toConversation adapts chat.Message to the distiller's ConversationMessage
-// shape (vectormemory does not import chat, so the command bridges them).
-func toConversation(msgs []chat.Message) []vectormemory.ConversationMessage {
-	out := make([]vectormemory.ConversationMessage, len(msgs))
-	for i, m := range msgs {
-		out[i] = vectormemory.ConversationMessage{
-			Role:    string(m.Role),
-			Content: m.Content,
-		}
-	}
-	return out
-}
-
-// renderConversation flattens turns into the "role: content" transcript the
-// distiller reads — mirrors the service's private renderConversation so the
-// batch and live paths see identical input formatting.
-func renderConversation(messages []vectormemory.ConversationMessage) string {
-	var b []byte
-	for _, m := range messages {
-		b = append(b, m.Role...)
-		b = append(b, ':', ' ')
-		b = append(b, m.Content...)
-		b = append(b, '\n')
-	}
-	return string(b)
 }

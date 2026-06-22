@@ -110,6 +110,9 @@ distance_threshold = 0.70
 dedup_threshold = 0.40
 top_k = 5
 session_idle_minutes = 30
+# A workout with no edit for this long is eligible for note distillation.
+# Separate from session_idle_minutes because a log settles faster than a chat.
+workout_settle_minutes = 10
 distill_model = "claude-haiku-4-5-20251001"
 embed_model = "text-embedding-3-small"
 embed_dim = 1536

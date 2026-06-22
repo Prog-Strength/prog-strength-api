@@ -112,34 +112,35 @@ func (s *Service) Retrieve(ctx context.Context, userID, query string, k int, thr
 	return matches, nil
 }
 
-// DistillSession distills one session's conversation into durable observations
-// and persists them, returning the number actually inserted. It is the path
-// the background job and the backfill share.
+// DistillUnit distills one self-contained unit's content into durable
+// observations and persists them, returning the number actually inserted. It is
+// the source-agnostic path the background job and the backfill share: the
+// service never knows what a "session" or a "workout" is — the unit carries its
+// content, its prompt hint, and its provenance.
 //
 // Per-observation insert-failure policy: a single failed insert does NOT abort
-// the whole session — it is logged at warn and the loop continues to the next
+// the whole unit — it is logged at warn and the loop continues to the next
 // observation. The method returns the count actually inserted with a nil error
 // even if some inserts failed. why: one bad row (e.g. a transient constraint
 // hiccup) should not throw away the rest of a hard-won, paid distillation; the
 // job re-runs idempotently anyway and dedup catches re-inserts next time.
-func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, messages []ConversationMessage) (int, error) {
-	rendered := renderConversation(messages)
-
+func (s *Service) DistillUnit(ctx context.Context, unit DistillUnit) (int, error) {
 	distillStart := s.now()
-	observations, distillUsage, err := s.distiller.Distill(ctx, rendered)
+	observations, distillUsage, err := s.distiller.Distill(ctx, unit.Content, unit.PromptHint)
 	distillDuration.Observe(s.now().Sub(distillStart).Seconds())
 	if err != nil {
 		stageErrorsTotal.WithLabelValues("distill").Inc()
-		return 0, fmt.Errorf("vectormemory: distill session: %w", err)
+		return 0, fmt.Errorf("vectormemory: distill unit: %w", err)
 	}
 	// Token spend is recorded on success only — a failed call's usage is
 	// unreliable and the error counter already marks the wasted attempt.
 	distillTokensTotal.WithLabelValues("input").Add(float64(distillUsage.InputTokens))
 	distillTokensTotal.WithLabelValues("output").Add(float64(distillUsage.OutputTokens))
 	observationsDistilledTotal.Add(float64(len(observations)))
-	s.log.InfoContext(ctx, "vectormemory distilled session",
-		slog.String("user_id", userID),
-		slog.String("session_id", sessionID),
+	s.log.InfoContext(ctx, "vectormemory distilled unit",
+		slog.String("user_id", unit.UserID),
+		slog.String("source_type", unit.Source.SourceType),
+		slog.String("unit_id", unit.UnitID),
 		slog.Duration("latency", s.now().Sub(distillStart)),
 		slog.Int("observations", len(observations)),
 	)
@@ -169,7 +170,8 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		// DedupThreshold (0) means dedup is intentionally off, so we insert
 		// everything and skip the NearestDistance probe entirely.
 		s.log.DebugContext(ctx, "vectormemory dedup disabled (DedupThreshold == 0)",
-			slog.String("session_id", sessionID),
+			slog.String("unit_id", unit.UnitID),
+			slog.String("source_type", unit.Source.SourceType),
 		)
 	}
 
@@ -178,7 +180,7 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		vec := vecs[i]
 
 		if dedupEnabled {
-			dist, found, err := s.repo.NearestDistance(ctx, userID, s.cfg.EmbedModel, vec)
+			dist, found, err := s.repo.NearestDistance(ctx, unit.UserID, s.cfg.EmbedModel, vec)
 			if err != nil {
 				stageErrorsTotal.WithLabelValues("dedup").Inc()
 				return inserted, fmt.Errorf("vectormemory: dedup probe: %w", err)
@@ -186,21 +188,26 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 			if found && dist <= s.cfg.DedupThreshold {
 				observationsDedupedTotal.Inc()
 				s.log.DebugContext(ctx, "vectormemory skipping near-duplicate",
-					slog.String("user_id", userID),
-					slog.String("session_id", sessionID),
+					slog.String("user_id", unit.UserID),
+					slog.String("unit_id", unit.UnitID),
+					slog.String("source_type", unit.Source.SourceType),
 					slog.Float64("distance", dist),
 				)
 				continue
 			}
 		}
 
-		// SourceMessageID is left nil: message-level attribution is best-effort
-		// and not wired in v1 — the distiller fuses multiple turns into one
-		// observation, so there is no single message to attribute it to.
+		// Provenance is carried by the unit: the repository writes the typed FK
+		// matching unit.Source.SourceType and NULLs the others. SourceMessageID
+		// is best-effort (chat fuses multiple turns into one observation, so
+		// there is usually no single message to attribute it to).
 		if _, err := s.repo.Insert(ctx, NewMemory{
-			UserID:          userID,
+			UserID:          unit.UserID,
 			DistilledText:   obs,
-			SourceSessionID: sessionID,
+			SourceType:      unit.Source.SourceType,
+			SourceSessionID: unit.Source.SessionID,
+			SourceMessageID: unit.Source.MessageID,
+			SourceWorkoutID: unit.Source.WorkoutID,
 			EmbeddingModel:  s.cfg.EmbedModel,
 			EmbeddingDim:    s.cfg.EmbedDim,
 			Embedding:       vec,
@@ -209,8 +216,9 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 			// Continue rather than abort: see the method's insert-failure policy.
 			stageErrorsTotal.WithLabelValues("insert").Inc()
 			s.log.WarnContext(ctx, "vectormemory insert failed, skipping observation",
-				slog.String("user_id", userID),
-				slog.String("session_id", sessionID),
+				slog.String("user_id", unit.UserID),
+				slog.String("unit_id", unit.UnitID),
+				slog.String("source_type", unit.Source.SourceType),
 				slog.Any("error", err),
 			)
 			continue
@@ -219,9 +227,10 @@ func (s *Service) DistillSession(ctx context.Context, userID, sessionID string, 
 		inserted++
 	}
 
-	s.log.InfoContext(ctx, "vectormemory distill session persisted",
-		slog.String("user_id", userID),
-		slog.String("session_id", sessionID),
+	s.log.InfoContext(ctx, "vectormemory distill unit persisted",
+		slog.String("user_id", unit.UserID),
+		slog.String("unit_id", unit.UnitID),
+		slog.String("source_type", unit.Source.SourceType),
 		slog.Int("inserted", inserted),
 	)
 	return inserted, nil
@@ -241,9 +250,11 @@ func (s *Service) DefaultThreshold() float64 {
 	return s.cfg.DistanceThreshold
 }
 
-// renderConversation flattens turns into the plain transcript the distiller
-// reads, one "role: content" line per turn.
-func renderConversation(messages []ConversationMessage) string {
+// RenderConversation flattens turns into the plain transcript the distiller
+// reads, one "role: content" line per turn. Exported so the consumer-side chat
+// adapter and the backfill assemble DistillUnit.Content identically to the live
+// path without re-importing the chat package's message type.
+func RenderConversation(messages []ConversationMessage) string {
 	var b strings.Builder
 	for _, m := range messages {
 		b.WriteString(m.Role)

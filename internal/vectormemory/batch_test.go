@@ -164,7 +164,7 @@ func TestDistillBatchLifecycle(t *testing.T) {
 	d.BaseURL = srv.URL
 	d.PollInterval = time.Millisecond
 
-	got, err := d.DistillBatch(context.Background(), []string{"conv one", "conv two"})
+	got, err := d.DistillBatch(context.Background(), []string{"conv one", "conv two"}, "")
 	if err != nil {
 		t.Fatalf("DistillBatch: %v", err)
 	}
@@ -193,9 +193,85 @@ func TestDistillBatchLifecycle(t *testing.T) {
 	}
 }
 
+// TestDistillBatchForwardsPromptHint proves the per-source promptHint reaches
+// every request's system prompt in the batch — and that an empty hint leaves
+// each system prompt exactly distillSystemPrompt (chat behavior unchanged).
+func TestDistillBatchForwardsPromptHint(t *testing.T) {
+	capture := func(hint string) []string {
+		var systems []string
+		var srvURL string
+
+		mux := http.NewServeMux()
+		mux.HandleFunc("/messages/batches", func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			var parsed struct {
+				Requests []struct {
+					Params struct {
+						System string `json:"system"`
+					} `json:"params"`
+				} `json:"requests"`
+			}
+			if err := json.Unmarshal(body, &parsed); err != nil {
+				t.Errorf("unmarshal create body: %v", err)
+			}
+			for _, req := range parsed.Requests {
+				systems = append(systems, req.Params.System)
+			}
+			writeJSON(t, w, `{"id":"msgbatch_1","processing_status":"in_progress"}`)
+		})
+		mux.HandleFunc("/messages/batches/msgbatch_1", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(t, w, `{"processing_status":"ended","results_url":"`+srvURL+`/results"}`)
+		})
+		mux.HandleFunc("/results", func(w http.ResponseWriter, _ *http.Request) {
+			writeJSONL(t, w,
+				`{"custom_id":"dis-0","result":{"type":"succeeded","message":{"content":[{"type":"tool_use","name":"record_observations","input":{"observations":[]}}]}}}`,
+				`{"custom_id":"dis-1","result":{"type":"succeeded","message":{"content":[{"type":"tool_use","name":"record_observations","input":{"observations":[]}}]}}}`,
+			)
+		})
+
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		srvURL = srv.URL
+
+		d := NewBatchDistiller(srv.Client(), "key", "claude-test")
+		d.BaseURL = srv.URL
+		d.PollInterval = time.Millisecond
+		if _, err := d.DistillBatch(context.Background(), []string{"c0", "c1"}, hint); err != nil {
+			t.Fatalf("DistillBatch: %v", err)
+		}
+		return systems
+	}
+
+	t.Run("empty hint keeps each system prompt unchanged", func(t *testing.T) {
+		systems := capture("")
+		if len(systems) != 2 {
+			t.Fatalf("expected 2 captured systems, got %d", len(systems))
+		}
+		for i, s := range systems {
+			if s != distillSystemPrompt {
+				t.Fatalf("request %d system = %q, want distillSystemPrompt", i, s)
+			}
+		}
+	})
+
+	t.Run("non-empty hint appended to every request", func(t *testing.T) {
+		hint := "Notes are terse training-log shorthand."
+		want := distillSystemPrompt + "\n\n" + hint
+		systems := capture(hint)
+		if len(systems) != 2 {
+			t.Fatalf("expected 2 captured systems, got %d", len(systems))
+		}
+		for i, s := range systems {
+			if s != want {
+				t.Fatalf("request %d system = %q, want %q", i, s, want)
+			}
+		}
+	})
+}
+
 func TestDistillBatchEmptyInput(t *testing.T) {
 	d := NewBatchDistiller(http.DefaultClient, "k", "m")
-	got, err := d.DistillBatch(context.Background(), nil)
+	got, err := d.DistillBatch(context.Background(), nil, "")
 	if err != nil {
 		t.Fatalf("DistillBatch: %v", err)
 	}

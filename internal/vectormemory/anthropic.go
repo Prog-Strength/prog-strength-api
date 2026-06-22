@@ -58,12 +58,19 @@ func (d *AnthropicDistiller) Configured() bool { return d.apiKey != "" }
 // distillRequestBody builds the Anthropic message-create params that force the
 // model through the record_observations tool. Shared by the synchronous
 // AnthropicDistiller and the batch BatchDistiller so the tool schema and
-// system prompt live in exactly one place.
-func distillRequestBody(model, conversation string) map[string]any {
+// system prompt live in exactly one place. promptHint is a per-source framing
+// string appended to the system prompt (separated by a blank line) only when
+// non-empty — an empty hint produces exactly the original request body, so chat
+// behavior is byte-for-byte unchanged.
+func distillRequestBody(model, conversation, promptHint string) map[string]any {
+	system := distillSystemPrompt
+	if strings.TrimSpace(promptHint) != "" {
+		system = distillSystemPrompt + "\n\n" + promptHint
+	}
 	return map[string]any{
 		"model":      model,
 		"max_tokens": distillMaxTokens,
-		"system":     distillSystemPrompt,
+		"system":     system,
 		"messages": []map[string]any{
 			{"role": "user", "content": conversation},
 		},
@@ -117,8 +124,8 @@ func parseObservations(content json.RawMessage) []string {
 	return []string{}
 }
 
-func (d *AnthropicDistiller) Distill(ctx context.Context, conversation string) ([]string, DistillUsage, error) {
-	reqBody, err := json.Marshal(distillRequestBody(d.model, conversation))
+func (d *AnthropicDistiller) Distill(ctx context.Context, content, promptHint string) ([]string, DistillUsage, error) {
+	reqBody, err := json.Marshal(distillRequestBody(d.model, content, promptHint))
 	if err != nil {
 		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: marshal request: %w", err)
 	}

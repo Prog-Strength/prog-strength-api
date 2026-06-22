@@ -191,3 +191,133 @@ func TestSQLite_MarkDistilled(t *testing.T) {
 		t.Fatal("memory_distilled_at should be set after MarkDistilled")
 	}
 }
+
+func TestSQLite_AllUndistilledSessions(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	recent := now.Add(-1 * time.Minute) // NOT idle — must still be returned (no settle window)
+	old := now.Add(-2 * time.Hour)
+	distilled := now.Add(-90 * time.Minute)
+	deleted := now.Add(-30 * time.Minute)
+
+	// Three undistilled + live sessions ordered by last_message_at:
+	//   uuid(1) oldest, uuid(2) middle, uuid(3) recent (ignores the settle window).
+	seedDistillSession(t, repo, uuid(1), "u1", old.Add(-time.Hour), nil, nil)
+	seedDistillSession(t, repo, uuid(2), "u2", old, nil, nil)
+	seedDistillSession(t, repo, uuid(3), "u1", recent, nil, nil)
+	// Excluded: already distilled, and soft-deleted.
+	seedDistillSession(t, repo, uuid(4), "u1", old, &distilled, nil)
+	seedDistillSession(t, repo, uuid(5), "u3", old, nil, &deleted)
+
+	t.Run("drains every undistilled live session across pages", func(t *testing.T) {
+		var ids []string
+		cursor := ""
+		for {
+			page, next, err := repo.AllUndistilledSessions(ctx, cursor, 2)
+			if err != nil {
+				t.Fatalf("AllUndistilledSessions: %v", err)
+			}
+			for _, s := range page {
+				ids = append(ids, s.ID)
+			}
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		// Ordered by (last_message_at, id), recent included despite no settle window.
+		want := []string{uuid(1), uuid(2), uuid(3)}
+		if len(ids) != len(want) {
+			t.Fatalf("expected %d sessions, got %d: %+v", len(want), len(ids), ids)
+		}
+		for i := range want {
+			if ids[i] != want[i] {
+				t.Fatalf("page order wrong at %d: got %s want %s (all=%v)", i, ids[i], want[i], ids)
+			}
+		}
+	})
+
+	t.Run("a full final page still returns an empty next cursor when exhausted", func(t *testing.T) {
+		// Page size equal to the total: the first page is full, but the second
+		// page is empty so the caller learns the set is exhausted.
+		page, next, err := repo.AllUndistilledSessions(ctx, "", 3)
+		if err != nil {
+			t.Fatalf("AllUndistilledSessions: %v", err)
+		}
+		if len(page) != 3 {
+			t.Fatalf("expected a full page of 3, got %d", len(page))
+		}
+		// len==limit, so a non-empty cursor is returned; the next page is empty.
+		if next == "" {
+			t.Fatal("expected a non-empty cursor after a full page")
+		}
+		page2, next2, err := repo.AllUndistilledSessions(ctx, next, 3)
+		if err != nil {
+			t.Fatalf("AllUndistilledSessions page 2: %v", err)
+		}
+		if len(page2) != 0 || next2 != "" {
+			t.Fatalf("expected exhausted (empty page, empty cursor), got %d rows / cursor %q", len(page2), next2)
+		}
+	})
+
+	t.Run("a malformed cursor errors", func(t *testing.T) {
+		if _, _, err := repo.AllUndistilledSessions(ctx, "!!!not-base64!!!", 2); err == nil {
+			t.Fatal("expected an error for a malformed cursor")
+		}
+	})
+}
+
+// TestSQLite_AllUndistilledSessions_TieBreak exercises the keyset pagination
+// tie-break arm — (last_message_at = ? AND id > ?) — which only fires when a
+// page boundary lands between two sessions that share the same last_message_at.
+// With limit=1, the first page's cursor encodes that shared timestamp, so the
+// second page must rely on the id tie-break to return the sibling rather than
+// re-returning or skipping it.
+func TestSQLite_AllUndistilledSessions_TieBreak(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	shared := now.Add(-2 * time.Hour)
+
+	// Two undistilled live sessions with the SAME last_message_at; uuid(1) < uuid(2)
+	// so (last_message_at, id) ordering puts uuid(1) first.
+	seedDistillSession(t, repo, uuid(1), "u1", shared, nil, nil)
+	seedDistillSession(t, repo, uuid(2), "u2", shared, nil, nil)
+
+	// Page with limit=1 so the boundary falls between the two tied rows.
+	page1, next1, err := repo.AllUndistilledSessions(ctx, "", 1)
+	if err != nil {
+		t.Fatalf("AllUndistilledSessions page 1: %v", err)
+	}
+	if len(page1) != 1 || page1[0].ID != uuid(1) {
+		t.Fatalf("page 1: expected [%s], got %+v", uuid(1), page1)
+	}
+	if next1 == "" {
+		t.Fatal("page 1: expected a non-empty cursor after a full page")
+	}
+
+	// Page 2 must use the id tie-break to advance past the shared timestamp.
+	page2, next2, err := repo.AllUndistilledSessions(ctx, next1, 1)
+	if err != nil {
+		t.Fatalf("AllUndistilledSessions page 2: %v", err)
+	}
+	if len(page2) != 1 || page2[0].ID != uuid(2) {
+		t.Fatalf("page 2: expected [%s] via tie-break, got %+v", uuid(2), page2)
+	}
+	if next2 == "" {
+		t.Fatal("page 2: expected a non-empty cursor after a full page")
+	}
+
+	// Page 3 is empty with an empty cursor: the set is exhausted and neither
+	// tied session was skipped or duplicated.
+	page3, next3, err := repo.AllUndistilledSessions(ctx, next2, 1)
+	if err != nil {
+		t.Fatalf("AllUndistilledSessions page 3: %v", err)
+	}
+	if len(page3) != 0 || next3 != "" {
+		t.Fatalf("page 3: expected exhausted (empty page, empty cursor), got %d rows / cursor %q", len(page3), next3)
+	}
+}

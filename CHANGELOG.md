@@ -1,3 +1,10 @@
+# [0.70.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.2...v0.70.0) (2026-06-22)
+
+
+### Features
+
+* **snapshot:** add GET /training-snapshot holistic training view ([#62](https://github.com/Prog-Strength/prog-strength-api/issues/62)) ([d9859b7](https://github.com/Prog-Strength/prog-strength-api/commit/d9859b7f42fc8c38bb069d6d052996487340f82a))
+
 ## [0.69.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.69.1...v0.69.2) (2026-06-22)
 
 

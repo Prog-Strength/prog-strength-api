@@ -137,6 +137,12 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		entries, _, err := h.stepsRepo.List(ctx, userID, &since53wStr, &todayStr, 0, nil)
 		return entries, err
 	})
+	// The streak only credits passive steps on days that met the user's goal.
+	// A failed goal read degrades to "steps don't count" (zero) rather than
+	// failing the request, consistent with the other defensive section reads.
+	stepGoal := defer1(ctx, r, "steps goal", func() (steps.Goal, error) {
+		return h.stepsRepo.GetGoal(ctx, userID)
+	})
 
 	summary := Summary{
 		Running:    h.buildRunningSection(ctx, r, userID, runs, now, loc),
@@ -144,7 +150,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		Steps:      h.buildStepsSection(ctx, r, userID, stepEntries, now, loc),
 		Nutrition:  h.buildNutritionSection(ctx, r, userID, todayStr, loc),
 		Bodyweight: h.buildBodyweightSection(ctx, r, userID, since8w),
-		Streak:     buildStreak(streakDates(runs, workouts, stepEntries, loc), now, loc),
+		Streak:     buildStreak(streakDates(runs, workouts, stepEntries, stepGoal.Goal, loc), now, loc),
 	}
 
 	httpresp.OK(w, "dashboard summary", summary)
@@ -240,27 +246,60 @@ func thisWeekWorkoutIDs(workouts []workout.Workout, now time.Time, loc *time.Loc
 	return ids
 }
 
-// streakDates collects the set of local calendar dates the user was active on,
-// across running activities (StartTime), workouts (PerformedAt), and step
-// entries with a positive count (their Date is already a local day). Any domain
-// that failed to load contributes nothing — the streak degrades gracefully.
-func streakDates(runs []activity.Activity, workouts []workout.Workout, stepEntries []steps.Entry, loc *time.Location) map[string]bool {
+// streakDates collects the set of local calendar dates the user genuinely
+// completed an activity on. A day counts when ANY of these hold:
+//
+//   - a completed cardio activity session (running/walking/cycling/other) —
+//     activity rows only exist once fully ingested, so they are inherently
+//     complete; strength_training rows are skipped because they are HR
+//     enrichment attached to a workout, counted via the workout path below.
+//   - a completed workout — finished (EndedAt set) AND with at least one logged
+//     set. An empty or abandoned session (a row created when the user merely
+//     started one) does not count.
+//   - a day whose passive step total met the user's step goal. stepGoal is the
+//     user's daily target; when it is 0 (never set) passive steps never count —
+//     there is no magic-number fallback.
+//
+// Any domain that failed to load contributes nothing — the streak degrades
+// gracefully.
+func streakDates(runs []activity.Activity, workouts []workout.Workout, stepEntries []steps.Entry, stepGoal int, loc *time.Location) map[string]bool {
 	active := make(map[string]bool)
 	for i := range runs {
-		if runs[i].ActivityType != activity.ActivityRunning {
+		if runs[i].ActivityType == activity.ActivityStrengthTraining {
 			continue
 		}
 		active[runs[i].StartTime.In(loc).Format("2006-01-02")] = true
 	}
 	for i := range workouts {
+		if !workoutCompleted(workouts[i]) {
+			continue
+		}
 		active[workouts[i].PerformedAt.In(loc).Format("2006-01-02")] = true
 	}
-	for i := range stepEntries {
-		if stepEntries[i].Steps > 0 {
-			active[stepEntries[i].Date] = true
+	if stepGoal > 0 {
+		for i := range stepEntries {
+			if stepEntries[i].Steps >= stepGoal {
+				active[stepEntries[i].Date] = true
+			}
 		}
 	}
 	return active
+}
+
+// workoutCompleted reports whether a workout represents real, finished training:
+// the user ended the session (EndedAt set) AND logged at least one set. This
+// excludes the empty/abandoned rows that persist when a session is started but
+// never filled in.
+func workoutCompleted(w workout.Workout) bool {
+	if w.EndedAt == nil {
+		return false
+	}
+	for i := range w.Exercises {
+		if len(w.Exercises[i].Sets) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // defer1 runs fn and, on error, logs it (tagged with op and the request id) and

@@ -422,10 +422,14 @@ func TestSummary_Streak(t *testing.T) {
 	now := testNow.In(loc)
 	monday := localWeekStart(now, loc)
 
-	// Active on Monday and Wednesday of the current local week, plus a workout
-	// in the prior week so the streak spans 2 weeks.
+	// Current week: a run on Monday, plus steps that met the user's goal on
+	// Wednesday. Prior week: a completed workout so the streak spans 2 weeks.
+	// Passive steps only count once a goal is set and met.
 	seedRun(t, rp, userID, monday.Add(10*time.Hour), 5000)
-	seedSteps(t, rp, userID, monday.AddDate(0, 0, 2).Format("2006-01-02"), 6000)
+	if _, err := rp.steps.UpsertGoal(context.Background(), steps.Goal{UserID: userID, Goal: 8000}, now); err != nil {
+		t.Fatalf("steps goal: %v", err)
+	}
+	seedSteps(t, rp, userID, monday.AddDate(0, 0, 2).Format("2006-01-02"), 9000) // >= goal → counts
 	seedWorkout(t, rp, userID, monday.AddDate(0, 0, -5), "barbell-high-bar-back-squat", 225, 5)
 
 	s := decode(t, get(t, r, userID, "?timezone=UTC"))
@@ -437,14 +441,60 @@ func TestSummary_Streak(t *testing.T) {
 		t.Errorf("active days this week = %d, want 2", s.Streak.ActiveDaysThisWeek)
 	}
 	if !s.Streak.Week[0] {
-		t.Error("Monday not active, want active")
+		t.Error("Monday not active, want active (run)")
 	}
 	if !s.Streak.Week[2] {
-		t.Error("Wednesday not active, want active")
+		t.Error("Wednesday not active, want active (steps met goal)")
 	}
 	if s.Streak.Week[1] {
 		t.Error("Tuesday active, want inactive")
 	}
+}
+
+// TestSummary_StreakOnlyCountsCompletedActivity exercises the streak's
+// completion rules end-to-end through the handler: passive steps only count
+// when the user's goal is met, and a started-but-abandoned workout (no end
+// time, no sets) does not count. Each case seeds on Monday of the fixed test
+// week so the Week[0] assertion is unambiguous.
+func TestSummary_StreakOnlyCountsCompletedActivity(t *testing.T) {
+	loc := time.UTC
+	now := testNow.In(loc)
+	monday := localWeekStart(now, loc)
+	mondayStr := monday.Format("2006-01-02")
+
+	t.Run("steps without a goal do not count", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		seedSteps(t, rp, userID, mondayStr, 50000) // high, but no goal set
+		s := decode(t, get(t, r, userID, "?timezone=UTC"))
+		if s.Streak.Week[0] {
+			t.Error("steps with no goal lit Monday; want inactive")
+		}
+	})
+
+	t.Run("steps meeting the goal count", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		if _, err := rp.steps.UpsertGoal(context.Background(), steps.Goal{UserID: userID, Goal: 10000}, now); err != nil {
+			t.Fatalf("steps goal: %v", err)
+		}
+		seedSteps(t, rp, userID, mondayStr, 12000)
+		s := decode(t, get(t, r, userID, "?timezone=UTC"))
+		if !s.Streak.Week[0] {
+			t.Error("steps meeting goal didn't light Monday; want active")
+		}
+	})
+
+	t.Run("abandoned workout does not count", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		// Started but never finished: no end time, no sets.
+		w := &workout.Workout{UserID: userID, PerformedAt: monday.Add(10 * time.Hour)}
+		if err := rp.workout.Create(context.Background(), w); err != nil {
+			t.Fatalf("seed abandoned workout: %v", err)
+		}
+		s := decode(t, get(t, r, userID, "?timezone=UTC"))
+		if s.Streak.Week[0] {
+			t.Error("abandoned workout lit Monday; want inactive")
+		}
+	})
 }
 
 func TestSummary_Timezone(t *testing.T) {

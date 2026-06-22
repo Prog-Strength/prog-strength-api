@@ -30,6 +30,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/snapshot"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
@@ -468,6 +469,14 @@ func New(cfg config.Config) (*Server, error) {
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
 		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo).Mount(r)
+		// Training snapshot — the agent-facing holistic read across every
+		// domain (GET /training-snapshot). Separate surface from the web
+		// dashboard; composes the same domain repos defensively. Arg order
+		// follows snapshot.NewService: workout, exercise, activity, steps,
+		// bodyweight, nutrition, user.
+		snapshot.NewHandler(snapshot.NewService(
+			workoutRepo, exerciseRepo, activityRepo, stepsRepo, bodyweightRepo, nutritionRepo, userRepo,
+		)).Mount(r)
 		// Wire the shared planned-workout service into the activity + workout
 		// plan-matcher seams so a logged run/lift best-effort completes a
 		// matching planned workout. One service instance backs both adapters;

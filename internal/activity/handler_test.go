@@ -1275,7 +1275,11 @@ func TestGetActivity_HeartRateZones(t *testing.T) {
 	}
 	hz := env.Data.HeartRateZones
 	if hz == nil {
+		// The bare return after Fatalf makes the nil branch provably terminal
+		// for staticcheck SA5011 (the CI-pinned linter doesn't propagate
+		// Fatalf's noreturn fact here).
 		t.Fatalf("expected heart_rate_zones block; body=%s", w.Body.String())
+		return
 	}
 	if hz.Model != "percent_max_hr" {
 		t.Errorf("model = %q, want percent_max_hr", hz.Model)

@@ -1,3 +1,10 @@
+# [0.73.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.72.0...v0.73.0) (2026-07-03)
+
+
+### Features
+
+* **activity:** indoor tagging + distance calibration for treadmill runs ([#66](https://github.com/Prog-Strength/prog-strength-api/issues/66)) ([c3b726d](https://github.com/Prog-Strength/prog-strength-api/commit/c3b726d53dbb907f54d1757f601b554a0071e3a1))
+
 # [0.72.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.71.0...v0.72.0) (2026-06-22)
 
 

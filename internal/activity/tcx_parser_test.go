@@ -56,3 +56,73 @@ func TestParseTCX_Malformed(t *testing.T) {
 		t.Fatal("parseTCX(malformed) returned nil error, want a parse error")
 	}
 }
+
+// TestParseTCX_HasPosition covers the position-presence detection that drives
+// indoor/outdoor defaulting at ingest: a running track whose trackpoints carry
+// <Position> parses with HasPosition true, one without parses false. We only
+// assert the boolean — no lat/lon is stored.
+func TestParseTCX_HasPosition(t *testing.T) {
+	withPos := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Running">
+      <Id>with-position-001</Id>
+      <Lap StartTime="2026-01-02T08:00:00Z">
+        <TotalTimeSeconds>2</TotalTimeSeconds>
+        <DistanceMeters>20.00</DistanceMeters>
+        <Track>
+          <Trackpoint>
+            <Time>2026-01-02T08:00:00Z</Time>
+            <DistanceMeters>0.00</DistanceMeters>
+            <Position><LatitudeDegrees>40.0</LatitudeDegrees><LongitudeDegrees>-105.0</LongitudeDegrees></Position>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-01-02T08:00:02Z</Time>
+            <DistanceMeters>20.00</DistanceMeters>
+            <Position><LatitudeDegrees>40.0001</LatitudeDegrees><LongitudeDegrees>-105.0001</LongitudeDegrees></Position>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>`)
+
+	noPos := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2">
+  <Activities>
+    <Activity Sport="Running">
+      <Id>no-position-001</Id>
+      <Lap StartTime="2026-01-02T08:00:00Z">
+        <TotalTimeSeconds>2</TotalTimeSeconds>
+        <DistanceMeters>20.00</DistanceMeters>
+        <Track>
+          <Trackpoint>
+            <Time>2026-01-02T08:00:00Z</Time>
+            <DistanceMeters>0.00</DistanceMeters>
+          </Trackpoint>
+          <Trackpoint>
+            <Time>2026-01-02T08:00:02Z</Time>
+            <DistanceMeters>20.00</DistanceMeters>
+          </Trackpoint>
+        </Track>
+      </Lap>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>`)
+
+	pWith, err := parseTCX(withPos)
+	if err != nil {
+		t.Fatalf("parseTCX(withPos) error: %v", err)
+	}
+	if !pWith.HasPosition {
+		t.Error("HasPosition = false for a track carrying <Position>, want true")
+	}
+
+	pNo, err := parseTCX(noPos)
+	if err != nil {
+		t.Fatalf("parseTCX(noPos) error: %v", err)
+	}
+	if pNo.HasPosition {
+		t.Error("HasPosition = true for a track with no <Position>, want false")
+	}
+}

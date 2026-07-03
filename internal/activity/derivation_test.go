@@ -236,12 +236,13 @@ func TestBuildStripSummary_CleanMinMaxAndDropoutCount(t *testing.T) {
 }
 
 // intervalsTrack builds warmup + n×(work,recovery) + cooldown with clean
-// samples throughout. Work pace 240 s/km, recovery/warmup/cooldown 420 —
-// wait: 420 > 410 would flag dropout; use 400 s/km so everything stays clean.
+// samples throughout. Work pace is 240 s/km; recovery/warmup/cooldown pace is
+// 400 s/km — deliberately under the 410 dropout threshold so every sample
+// stays clean.
 func intervalsTrack(nReps int) []Trackpoint {
 	tps := []Trackpoint{tp(0, 0, 0, nil, nil, nil)}
 	dist, elapsed, seq := 0.0, 0, 1
-	add := (func(meters float64, paceSecPerKm float64) {
+	add := func(meters float64, paceSecPerKm float64) {
 		// 100 m steps so each bout is several segments long (survives denoise).
 		steps := int(meters / 100)
 		for i := 0; i < steps; i++ {
@@ -251,7 +252,7 @@ func intervalsTrack(nReps int) []Trackpoint {
 			tps = append(tps, tp(seq, elapsed, dist, &p, nil, nil))
 			seq++
 		}
-	})
+	}
 	add(800, 400) // warm-up
 	for i := 0; i < nReps; i++ {
 		add(400, 240) // work
@@ -304,5 +305,64 @@ func TestDetectIntervals_ConservativeNil(t *testing.T) {
 	}
 	if got := detectIntervals(nil, 1000); got != nil {
 		t.Errorf("nil segments detected intervals: %+v", got)
+	}
+}
+
+// TestDeriveRunning_NonMonotonicDistanceTelescopes: negative distance deltas
+// are kept as-is, so split distances still sum exactly to last - first.
+func TestDeriveRunning_NonMonotonicDistanceTelescopes(t *testing.T) {
+	// Cumulative distance dips backwards mid-stream (GPS correction).
+	tps := []Trackpoint{
+		tp(0, 0, 0, nil, nil, nil),
+		tp(1, 100, 400, fp(250), nil, nil),
+		tp(2, 200, 350, nil, nil, nil), // dips back 50 m
+		tp(3, 300, 900, fp(250), nil, nil),
+	}
+	d := deriveRunning(tps, UnitKm)
+	var sumDist float64
+	for _, s := range d.Splits {
+		sumDist += s.DistanceMeters
+	}
+	if want := 900.0 - 0.0; math.Abs(sumDist-want) > 0.001 {
+		t.Errorf("split dist sum = %.3f, want %.3f (last - first)", sumDist, want)
+	}
+}
+
+// TestDeriveRunning_BackwardsElapsedClamped: a backwards ElapsedSeconds pair
+// contributes zero (not negative) time, so split durations stay >= 0.
+func TestDeriveRunning_BackwardsElapsedClamped(t *testing.T) {
+	tps := []Trackpoint{
+		tp(0, 0, 0, nil, nil, nil),
+		tp(1, 100, 300, fp(333), nil, nil),
+		tp(2, 50, 600, fp(333), nil, nil), // clock jumps backwards
+	}
+	d := deriveRunning(tps, UnitKm)
+	if len(d.Splits) != 1 {
+		t.Fatalf("splits = %d, want 1", len(d.Splits))
+	}
+	if got := d.Splits[0].DurationSeconds; got != 100 {
+		t.Errorf("split time = %d, want 100 (backwards segment clamped to 0)", got)
+	}
+}
+
+// TestDeriveRunning_StationaryTailPaceNil: a trailing bucket that covers no
+// distance carries its time but has no pace to report.
+func TestDeriveRunning_StationaryTailPaceNil(t *testing.T) {
+	tps := []Trackpoint{
+		tp(0, 0, 0, nil, nil, nil),
+		tp(1, 300, 1000, fp(300), nil, nil),
+		tp(2, 400, 1000, nil, nil, nil), // stops dead at exactly 1 km
+		tp(3, 500, 1000, nil, nil, nil),
+	}
+	d := deriveRunning(tps, UnitKm)
+	if len(d.Splits) != 2 {
+		t.Fatalf("splits = %d, want 2", len(d.Splits))
+	}
+	tail := d.Splits[1]
+	if tail.DistanceMeters != 0 || tail.DurationSeconds != 200 {
+		t.Errorf("tail split = %+v, want 0 m in 200 s", tail)
+	}
+	if tail.PaceSecPerUnit != nil {
+		t.Errorf("stationary tail pace = %v, want nil", *tail.PaceSecPerUnit)
 	}
 }

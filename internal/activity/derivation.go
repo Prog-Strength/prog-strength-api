@@ -278,8 +278,11 @@ func bestRollingPace(tps []Trackpoint, windowMeters float64) *float64 {
 		}
 		span := tps[right].DistanceMeters - tps[left].DistanceMeters
 		if span >= windowMeters {
+			// elapsed > 0 guards non-monotonic timestamp streams: a zero or
+			// negative window "pace" would win the minimum and report a
+			// nonsense best.
 			elapsed := float64(tps[right].ElapsedSeconds - tps[left].ElapsedSeconds)
-			if pace := elapsed / (span / windowMeters); pace < best {
+			if pace := elapsed / (span / windowMeters); elapsed > 0 && pace < best {
 				best = pace
 			}
 		}
@@ -322,6 +325,12 @@ func detectIntervals(segs []segment, bucketMeters float64) []IntervalSegment {
 		totalTime += s.dTime
 	}
 	if totalDist <= 0 {
+		return nil
+	}
+	// Zero total time means no meaningful average pace to classify against
+	// (the TS original bailed on avgPace <= 0); bail explicitly rather than
+	// relying on how the rel comparisons below treat a zero denominator.
+	if totalTime <= 0 {
 		return nil
 	}
 	avgSecPerMeter := float64(totalTime) / totalDist
@@ -379,7 +388,7 @@ func coalesceBouts(clean []segment, classes []bool) []bout {
 }
 
 // denoiseBouts folds any sub-60 m bout into its predecessor (keeping the
-// predecessor's class), then re-merges neighbours left same-classed.
+// predecessor's class), then re-merges neighbors left same-classed.
 func denoiseBouts(bouts []bout) []bout {
 	var merged []bout
 	for _, b := range bouts {

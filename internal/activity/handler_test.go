@@ -1388,6 +1388,16 @@ func TestGetDetail_DerivedBlocks(t *testing.T) {
 	if env.Data.BestPaceSecPerUnit == nil {
 		t.Error("expected best_pace_sec_per_unit on a 5k")
 	}
+	var sawCleanPace bool
+	for _, tp := range env.Data.Trackpoints {
+		if tp.CleanPace {
+			sawCleanPace = true
+			break
+		}
+	}
+	if !sawCleanPace {
+		t.Error("expected at least one trackpoint with clean_pace true")
+	}
 	// Default unit is miles.
 	wMi := doGet(t, h, id, "")
 	var envMi activityEnvelope

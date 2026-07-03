@@ -359,7 +359,8 @@ func TestRename(t *testing.T) {
 
 // TestCalibrate_UniformScale asserts the header distance and every trackpoint
 // distance scale by the same factor, avg pace recomputes from the new
-// distance, best pace scales by 1/f, and raw_distance is left untouched.
+// distance, best pace is recomputed from the rescaled trackpoints (not
+// scaled by 1/f), and raw_distance is left untouched.
 func TestCalibrate_UniformScale(t *testing.T) {
 	t.Parallel()
 	repo, _ := newRepo(t)

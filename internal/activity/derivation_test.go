@@ -174,3 +174,63 @@ func TestDeriveRunning_Degenerate(t *testing.T) {
 		}
 	}
 }
+
+// TestBestRollingPace_MatchesWindowAndOrdering: the fastest rolling
+// display-unit window is at most the fastest full split's pace (any aligned
+// full bucket is itself a candidate window), and at least the fastest single
+// clean sample.
+func TestBestRollingPace_MatchesWindowAndOrdering(t *testing.T) {
+	// km 1 at 360 s, km 2 at 300 s: fastest rolling km = the second km.
+	tps := []Trackpoint{
+		tp(0, 0, 0, nil, nil, nil),
+		tp(1, 180, 500, fp(360), nil, nil),
+		tp(2, 360, 1000, fp(360), nil, nil),
+		tp(3, 510, 1500, fp(300), nil, nil),
+		tp(4, 660, 2000, fp(300), nil, nil),
+	}
+	best := bestRollingPace(tps, 1000)
+	if best == nil || math.Abs(*best-300) > 0.5 {
+		t.Fatalf("best rolling km = %v, want 300", best)
+	}
+	// Too short for the window => nil.
+	if got := bestRollingPace(tps[:2], 1000); got != nil {
+		t.Errorf("sub-window track best = %v, want nil", got)
+	}
+	if got := bestRollingPace(nil, 1000); got != nil {
+		t.Errorf("nil track best = %v, want nil", got)
+	}
+}
+
+// TestBuildStripSummary_CleanMinMaxAndDropoutCount: fastest/slowest are over
+// clean samples only, expressed per display unit; dropout_count counts
+// pace-carrying samples flagged non-clean; nil-pace points count for neither.
+func TestBuildStripSummary_CleanMinMaxAndDropoutCount(t *testing.T) {
+	tps := []Trackpoint{
+		tp(0, 0, 0, nil, nil, nil),           // no sample: not a dropout
+		tp(1, 300, 1000, fp(300), nil, nil),  // clean
+		tp(2, 900, 1500, fp(1200), nil, nil), // dropout (>410)
+		tp(3, 1260, 2500, fp(360), nil, nil), // clean
+	}
+	s := buildStripSummary(tps, 1000)
+	if s.FastestSecPerUnit == nil || math.Abs(*s.FastestSecPerUnit-300) > 0.01 {
+		t.Errorf("fastest = %v, want 300", s.FastestSecPerUnit)
+	}
+	if s.SlowestSecPerUnit == nil || math.Abs(*s.SlowestSecPerUnit-360) > 0.01 {
+		t.Errorf("slowest = %v, want 360", s.SlowestSecPerUnit)
+	}
+	if s.DropoutCount != 1 {
+		t.Errorf("dropout_count = %d, want 1", s.DropoutCount)
+	}
+
+	// Mile unit converts the same sec/km values to sec/mi.
+	mi := buildStripSummary(tps, metersPerMile)
+	if mi.FastestSecPerUnit == nil || math.Abs(*mi.FastestSecPerUnit-300*1.609344) > 0.01 {
+		t.Errorf("mi fastest = %v, want %.2f", mi.FastestSecPerUnit, 300*1.609344)
+	}
+
+	// No clean samples => nil min/max.
+	none := buildStripSummary([]Trackpoint{tp(0, 0, 0, nil, nil, nil)}, 1000)
+	if none.FastestSecPerUnit != nil || none.SlowestSecPerUnit != nil || none.DropoutCount != 0 {
+		t.Errorf("empty strip summary = %+v", none)
+	}
+}

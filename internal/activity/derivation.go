@@ -230,6 +230,61 @@ func buildDerivedSplits(segs []segment, bucketMeters float64) []Split {
 	return splits
 }
 
-func buildStripSummary(tps []Trackpoint, bucketMeters float64) StripSummary  { return StripSummary{} }
-func bestRollingPace(tps []Trackpoint, windowMeters float64) *float64        { return nil }
+// buildStripSummary computes the pace-chart header numbers over CLEAN samples
+// (the header describes the drawn line, which breaks at dropouts) plus the
+// dropout count. Values are per display unit: a stored sec/km sample scaled
+// by bucketMeters/1000.
+func buildStripSummary(tps []Trackpoint, bucketMeters float64) StripSummary {
+	var s StripSummary
+	toUnit := bucketMeters / 1000
+	for _, t := range tps {
+		if t.PaceSecPerKm == nil {
+			continue
+		}
+		if !isCleanTrackpointPace(t.PaceSecPerKm) {
+			s.DropoutCount++
+			continue
+		}
+		v := *t.PaceSecPerKm * toUnit
+		if s.FastestSecPerUnit == nil || v < *s.FastestSecPerUnit {
+			f := v
+			s.FastestSecPerUnit = &f
+		}
+		if s.SlowestSecPerUnit == nil || v > *s.SlowestSecPerUnit {
+			sl := v
+			s.SlowestSecPerUnit = &sl
+		}
+	}
+	return s
+}
+
+// bestRollingPace finds the fastest rolling windowMeters window over the
+// stored trackpoints — the stored-stream generalization of the summarizer's
+// ingest-time bestPace, returning seconds per windowMeters. Distance-anchored
+// so a single noisy sample is diluted across the window. Nil when the track
+// spans less than one window.
+func bestRollingPace(tps []Trackpoint, windowMeters float64) *float64 {
+	if len(tps) == 0 || tps[len(tps)-1].DistanceMeters-tps[0].DistanceMeters < windowMeters {
+		return nil
+	}
+	best := math.Inf(1)
+	left := 0
+	for right := 0; right < len(tps); right++ {
+		for left+1 < right && tps[right].DistanceMeters-tps[left+1].DistanceMeters >= windowMeters {
+			left++
+		}
+		span := tps[right].DistanceMeters - tps[left].DistanceMeters
+		if span >= windowMeters {
+			elapsed := float64(tps[right].ElapsedSeconds - tps[left].ElapsedSeconds)
+			if pace := elapsed / (span / windowMeters); pace < best {
+				best = pace
+			}
+		}
+	}
+	if math.IsInf(best, 1) {
+		return nil
+	}
+	return &best
+}
+
 func detectIntervals(segs []segment, bucketMeters float64) []IntervalSegment { return nil }

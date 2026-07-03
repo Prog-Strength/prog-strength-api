@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -476,6 +478,119 @@ func TestRenameHandler(t *testing.T) {
 	h.rename(w404, req404)
 	if w404.Code != http.StatusNotFound {
 		t.Errorf("rename missing status = %d, want 404", w404.Code)
+	}
+}
+
+// doCalibrate drives the calibrate handler with a JSON body for activityID.
+func doCalibrate(t *testing.T, h *Handler, activityID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/activities/"+activityID+"/calibrate", strings.NewReader(body))
+	req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", activityID)
+	w := httptest.NewRecorder()
+	h.calibrate(w, req)
+	return w
+}
+
+// importedID uploads a fixture and returns the created activity's id.
+func importedID(t *testing.T, h *Handler, fixture string) string {
+	t.Helper()
+	w := doImport(t, h, readFixture(t, fixture))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("import %s status = %d; body=%s", fixture, w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode import %s: %v", fixture, err)
+	}
+	return env.Data.ID
+}
+
+// TestCalibrateHandler_IndoorHappyPath calibrates a treadmill run ~5% shorter
+// and asserts the summary, trackpoints, and raw-distance provenance all stay
+// internally consistent.
+func TestCalibrateHandler_IndoorHappyPath(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "treadmill_5k.tcx")
+
+	// Read the current state to compute a target and to know the original raw.
+	getW := httptest.NewRequest("GET", "/activities/"+id, nil)
+	getW = withParam(getW.WithContext(authctx.WithUserID(getW.Context(), testUserID)), "id", id)
+	gr := httptest.NewRecorder()
+	h.get(gr, getW)
+	var before activityEnvelope
+	if err := json.Unmarshal(gr.Body.Bytes(), &before); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	origDistance := before.Data.DistanceMeters
+	origRaw := before.Data.RawDistanceMeters
+	target := origDistance * 0.95
+
+	w := doCalibrate(t, h, id, fmt.Sprintf(`{"distance_meters":%f}`, target))
+	if w.Code != http.StatusOK {
+		t.Fatalf("calibrate status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if math.Abs(env.Data.DistanceMeters-target) > 0.01 {
+		t.Errorf("distance = %.4f, want %.4f", env.Data.DistanceMeters, target)
+	}
+	// raw_distance is provenance and must be untouched by calibration.
+	if math.Abs(env.Data.RawDistanceMeters-origRaw) > 0.01 {
+		t.Errorf("raw_distance = %.4f, want unchanged %.4f", env.Data.RawDistanceMeters, origRaw)
+	}
+	// avg pace recomputed from the corrected distance.
+	wantPace := float64(env.Data.DurationSeconds) / (target / 1000)
+	if env.Data.AvgPaceSecPerKm == nil || math.Abs(*env.Data.AvgPaceSecPerKm-wantPace) > 0.5 {
+		t.Errorf("avg_pace = %v, want ~%.2f", env.Data.AvgPaceSecPerKm, wantPace)
+	}
+	// last trackpoint's cumulative distance ~= the calibrated total.
+	if n := len(env.Data.Trackpoints); n == 0 {
+		t.Fatal("no trackpoints on calibrate response")
+	} else if last := env.Data.Trackpoints[n-1].DistanceMeters; math.Abs(last-target) > 1.0 {
+		t.Errorf("last trackpoint distance = %.4f, want ~%.4f", last, target)
+	}
+}
+
+// TestCalibrateHandler_Guards covers the handler's rejection paths.
+func TestCalibrateHandler_Guards(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+
+	// Outdoor run cannot be calibrated directly.
+	outdoorID := importedID(t, h, "typical_5k.tcx")
+	w := doCalibrate(t, h, outdoorID, `{"distance_meters":4800}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("outdoor calibrate status = %d, want 400", w.Code)
+	}
+	var ce codeEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &ce)
+	if ce.Code != "outdoor_run_not_calibratable" {
+		t.Errorf("outdoor code = %q, want outdoor_run_not_calibratable", ce.Code)
+	}
+
+	indoorID := importedID(t, h, "treadmill_5k.tcx")
+
+	// distance_meters <= 0.
+	wz := doCalibrate(t, h, indoorID, `{"distance_meters":0}`)
+	var cz codeEnvelope
+	_ = json.Unmarshal(wz.Body.Bytes(), &cz)
+	if wz.Code != http.StatusBadRequest || cz.Code != "invalid_calibration_distance" {
+		t.Errorf("zero-distance status/code = %d/%q, want 400/invalid_calibration_distance", wz.Code, cz.Code)
+	}
+
+	// factor out of [0.5, 2.0] — current is 5000, so 20000 => f=4.
+	wr := doCalibrate(t, h, indoorID, `{"distance_meters":20000}`)
+	var cr codeEnvelope
+	_ = json.Unmarshal(wr.Body.Bytes(), &cr)
+	if wr.Code != http.StatusBadRequest || cr.Code != "calibration_out_of_range" {
+		t.Errorf("out-of-range status/code = %d/%q, want 400/calibration_out_of_range", wr.Code, cr.Code)
+	}
+
+	// Unknown id => 404.
+	w404 := doCalibrate(t, h, "nope", `{"distance_meters":4800}`)
+	if w404.Code != http.StatusNotFound {
+		t.Errorf("unknown id status = %d, want 404", w404.Code)
 	}
 }
 

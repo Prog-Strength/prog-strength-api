@@ -357,6 +357,66 @@ func TestRename(t *testing.T) {
 	}
 }
 
+// TestCalibrate_UniformScale asserts the header distance and every trackpoint
+// distance scale by the same factor, avg pace recomputes from the new
+// distance, best pace scales by 1/f, and raw_distance is left untouched.
+func TestCalibrate_UniformScale(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivity("u1", IngestManualTCX, "cal1", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	a.Environment = EnvironmentIndoor
+	a.RawDistanceMeters = 5000
+	bestPace := 280.0
+	a.BestPaceSecPerKm = &bestPace
+	pace := 300.0
+	a.Trackpoints = []Trackpoint{
+		{Sequence: 0, ElapsedSeconds: 0, DistanceMeters: 0},
+		{Sequence: 1, ElapsedSeconds: 750, DistanceMeters: 2500, PaceSecPerKm: &pace},
+		{Sequence: 2, ElapsedSeconds: 1500, DistanceMeters: 5000, PaceSecPerKm: &pace},
+	}
+	if err := repo.Create(ctx, a, []byte("x")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newDist := 4500.0
+	f := newDist / 5000.0
+	got, err := repo.Calibrate(ctx, "u1", a.ID, newDist)
+	if err != nil {
+		t.Fatalf("Calibrate: %v", err)
+	}
+	if math.Abs(got.DistanceMeters-newDist) > 0.001 {
+		t.Errorf("distance = %.4f, want %.4f", got.DistanceMeters, newDist)
+	}
+	if math.Abs(got.RawDistanceMeters-5000) > 0.001 {
+		t.Errorf("raw_distance = %.4f, want 5000 (untouched)", got.RawDistanceMeters)
+	}
+	wantAvg := 1500.0 / (newDist / 1000)
+	if got.AvgPaceSecPerKm == nil || math.Abs(*got.AvgPaceSecPerKm-wantAvg) > 0.001 {
+		t.Errorf("avg pace = %v, want %.4f", got.AvgPaceSecPerKm, wantAvg)
+	}
+	if got.BestPaceSecPerKm == nil || math.Abs(*got.BestPaceSecPerKm-(280.0/f)) > 0.001 {
+		t.Errorf("best pace = %v, want %.4f", got.BestPaceSecPerKm, 280.0/f)
+	}
+	// Trackpoints scaled uniformly; the last cumulative distance == new total.
+	last := got.Trackpoints[len(got.Trackpoints)-1]
+	if math.Abs(last.DistanceMeters-newDist) > 0.001 {
+		t.Errorf("last trackpoint distance = %.4f, want %.4f", last.DistanceMeters, newDist)
+	}
+	mid := got.Trackpoints[1]
+	if math.Abs(mid.DistanceMeters-2500*f) > 0.001 {
+		t.Errorf("mid trackpoint distance = %.4f, want %.4f", mid.DistanceMeters, 2500*f)
+	}
+	if mid.PaceSecPerKm == nil || math.Abs(*mid.PaceSecPerKm-(300.0/f)) > 0.001 {
+		t.Errorf("mid trackpoint pace = %v, want %.4f", mid.PaceSecPerKm, 300.0/f)
+	}
+
+	if _, err := repo.Calibrate(ctx, "u2", a.ID, newDist); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user Calibrate: want ErrNotFound, got %v", err)
+	}
+}
+
 func TestSoftDelete_ThenGetNotFound(t *testing.T) {
 	t.Parallel()
 	repo, _ := newRepo(t)

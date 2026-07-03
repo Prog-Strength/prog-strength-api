@@ -59,6 +59,18 @@ type Repository interface {
 	// row matches.
 	Rename(ctx context.Context, userID, id, name string) (*Activity, error)
 
+	// Calibrate rescales an activity to newDistanceMeters in one transaction:
+	// it reads the current distance in-tx, computes the uniform factor
+	// f = newDistanceMeters / current, updates the summary distance and paces
+	// (avg pace recomputed from the corrected distance; best pace scaled by
+	// 1/f), and multiplies every stored trackpoint's cumulative distance by f
+	// (dividing its non-null pace by f). raw_distance_meters is never touched.
+	// Returns the updated activity WITH its rescaled trackpoints. Returns
+	// ErrNotFound when the activity is missing, soft-deleted, or not owned.
+	// The caller (handler) is responsible for the indoor-only and
+	// scale-bounds guards before invoking this.
+	Calibrate(ctx context.Context, userID, id string, newDistanceMeters float64) (*Activity, error)
+
 	// SoftDelete stamps deleted_at on a live activity. The S3 object and
 	// trackpoints are left untouched. Returns ErrNotFound when no live
 	// row matches.

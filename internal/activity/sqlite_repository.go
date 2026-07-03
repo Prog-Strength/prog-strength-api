@@ -435,6 +435,67 @@ func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name 
 	return scanActivity(row)
 }
 
+func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID string, newDistanceMeters float64) (*Activity, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var (
+		curDistance float64
+		duration    int
+	)
+	row := tx.QueryRowContext(ctx, `
+		SELECT distance_meters, duration_seconds
+		FROM activities
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID)
+	if err := row.Scan(&curDistance, &duration); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if curDistance <= 0 {
+		// Nothing to scale from; the handler also guards this, but a zero here
+		// would divide by zero below.
+		return nil, fmt.Errorf("activity: cannot calibrate zero-distance activity %s", activityID)
+	}
+	f := newDistanceMeters / curDistance
+
+	// avg pace is recomputed from the corrected distance; best pace scales
+	// inversely with the distance factor (a longer real distance => faster
+	// pace). NULL best pace stays NULL under SQL arithmetic.
+	avgPace := float64(duration) / (newDistanceMeters / 1000)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities
+		SET distance_meters = ?,
+		    avg_pace_sec_per_km = ?,
+		    best_pace_sec_per_km = best_pace_sec_per_km / ?
+		WHERE id = ? AND user_id = ?
+	`, newDistanceMeters, avgPace, f, activityID, userID); err != nil {
+		return nil, err
+	}
+
+	// Rescale every trackpoint's cumulative distance and (non-null) pace. A
+	// NULL pace_sec_per_km divided by f is NULL, so stationary-filtered points
+	// keep their null.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activity_trackpoints
+		SET distance_meters = distance_meters * ?,
+		    pace_sec_per_km = pace_sec_per_km / ?
+		WHERE activity_id = ?
+	`, f, f, activityID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, userID, activityID)
+}
+
 func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, activityID string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `

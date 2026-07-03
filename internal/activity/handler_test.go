@@ -1275,7 +1275,11 @@ func TestGetActivity_HeartRateZones(t *testing.T) {
 	}
 	hz := env.Data.HeartRateZones
 	if hz == nil {
+		// The bare return after Fatalf makes the nil branch provably terminal
+		// for staticcheck SA5011 (the CI-pinned linter doesn't propagate
+		// Fatalf's noreturn fact here).
 		t.Fatalf("expected heart_rate_zones block; body=%s", w.Body.String())
+		return
 	}
 	if hz.Model != "percent_max_hr" {
 		t.Errorf("model = %q, want percent_max_hr", hz.Model)
@@ -1330,5 +1334,130 @@ func TestGetActivity_NoHR_OmitsBlock(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "heart_rate_zones") {
 		t.Errorf("expected heart_rate_zones key absent for a no-HR run; body=%s", w.Body.String())
+	}
+}
+
+// --- detail derived blocks (unit param, splits, strip, best pace) ---------
+
+// doGet drives the detail handler with an optional query string.
+func doGet(t *testing.T, h *Handler, activityID, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/activities/"+activityID+query, nil)
+	req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", activityID)
+	w := httptest.NewRecorder()
+	h.get(w, req)
+	return w
+}
+
+// TestGetDetail_DerivedBlocks: the detail response carries splits,
+// strip_summary, best_pace_sec_per_unit, unit, and per-point clean_pace; the
+// splits reconcile with the summary tiles (the SOW's user-visible promise).
+func TestGetDetail_DerivedBlocks(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "typical_5k.tcx")
+
+	w := doGet(t, h, id, "?unit=km")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Unit != "km" {
+		t.Errorf("unit = %q, want km", env.Data.Unit)
+	}
+	if len(env.Data.Splits) == 0 {
+		t.Fatal("expected splits on running detail")
+	}
+	var sumDist float64
+	var sumTime int
+	for _, s := range env.Data.Splits {
+		sumDist += s.DistanceMeters
+		sumTime += s.DurationSeconds
+	}
+	if math.Abs(sumDist-env.Data.DistanceMeters) > 1 {
+		t.Errorf("split dist sum %.1f != distance tile %.1f", sumDist, env.Data.DistanceMeters)
+	}
+	if d := sumTime - env.Data.DurationSeconds; d < -1 || d > 1 {
+		t.Errorf("split time sum %d != duration tile %d", sumTime, env.Data.DurationSeconds)
+	}
+	if env.Data.StripSummary == nil {
+		t.Fatal("expected strip_summary")
+	}
+	if env.Data.BestPaceSecPerUnit == nil {
+		t.Error("expected best_pace_sec_per_unit on a 5k")
+	}
+	var sawCleanPace bool
+	for _, tp := range env.Data.Trackpoints {
+		if tp.CleanPace {
+			sawCleanPace = true
+			break
+		}
+	}
+	if !sawCleanPace {
+		t.Error("expected at least one trackpoint with clean_pace true")
+	}
+	// Default unit is miles.
+	wMi := doGet(t, h, id, "")
+	var envMi activityEnvelope
+	if err := json.Unmarshal(wMi.Body.Bytes(), &envMi); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if envMi.Data.Unit != "mi" {
+		t.Errorf("default unit = %q, want mi", envMi.Data.Unit)
+	}
+	// Invalid unit is a 400.
+	if w := doGet(t, h, id, "?unit=furlongs"); w.Code != http.StatusBadRequest {
+		t.Errorf("invalid unit status = %d, want 400", w.Code)
+	}
+}
+
+// TestGetDetail_CalibratedStaysAligned: after a calibration the derived
+// blocks are recomputed from the rescaled stream and still reconcile — the
+// regression the SOW exists to prevent.
+func TestGetDetail_CalibratedStaysAligned(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "treadmill_5k.tcx")
+
+	var before activityEnvelope
+	if err := json.Unmarshal(doGet(t, h, id, "?unit=km").Body.Bytes(), &before); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	target := before.Data.DistanceMeters * 0.93
+	if w := doCalibrate(t, h, id, fmt.Sprintf(`{"distance_meters":%f}`, target)); w.Code != http.StatusOK {
+		t.Fatalf("calibrate status = %d; body=%s", w.Code, w.Body.String())
+	}
+
+	var after activityEnvelope
+	if err := json.Unmarshal(doGet(t, h, id, "?unit=km").Body.Bytes(), &after); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var sumDist float64
+	for _, s := range after.Data.Splits {
+		sumDist += s.DistanceMeters
+	}
+	if math.Abs(sumDist-target) > 1 {
+		t.Errorf("calibrated split dist sum %.1f != calibrated distance %.1f", sumDist, target)
+	}
+	if after.Data.AvgPaceSecPerKm == nil {
+		t.Fatal("nil avg pace after calibrate")
+	}
+	wantAvg := float64(after.Data.DurationSeconds) / (target / 1000)
+	if math.Abs(*after.Data.AvgPaceSecPerKm-wantAvg) > 0.5 {
+		t.Errorf("avg pace %.2f != duration/distance %.2f", *after.Data.AvgPaceSecPerKm, wantAvg)
+	}
+}
+
+// TestGetDetail_NonRunningHasNoDerivedBlocks: a ride gets no splits/strip.
+func TestGetDetail_NonRunningHasNoDerivedBlocks(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "biking.tcx") // the repo's non-running fixture
+	var env activityEnvelope
+	if err := json.Unmarshal(doGet(t, h, id, "").Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Splits) != 0 || env.Data.StripSummary != nil || env.Data.BestPaceSecPerUnit != nil {
+		t.Error("non-running detail should carry no derived blocks")
 	}
 }

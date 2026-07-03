@@ -464,17 +464,16 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 	}
 	f := newDistanceMeters / curDistance
 
-	// avg pace is recomputed from the corrected distance; best pace scales
-	// inversely with the distance factor (a longer real distance => faster
-	// pace). NULL best pace stays NULL under SQL arithmetic.
+	// avg pace is recomputed from the corrected distance. Best pace is
+	// recomputed below from the rescaled trackpoints rather than scaled by
+	// ÷f here.
 	avgPace := float64(duration) / (newDistanceMeters / 1000)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE activities
 		SET distance_meters = ?,
-		    avg_pace_sec_per_km = ?,
-		    best_pace_sec_per_km = best_pace_sec_per_km / ?
+		    avg_pace_sec_per_km = ?
 		WHERE id = ? AND user_id = ?
-	`, newDistanceMeters, avgPace, f, activityID, userID); err != nil {
+	`, newDistanceMeters, avgPace, activityID, userID); err != nil {
 		return nil, err
 	}
 
@@ -487,6 +486,38 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 		    pace_sec_per_km = pace_sec_per_km / ?
 		WHERE activity_id = ?
 	`, f, f, activityID); err != nil {
+		return nil, err
+	}
+
+	// Recompute best pace from the rescaled trackpoints rather than scaling
+	// the old value by ÷f: uniform scaling moves which window is fastest, so
+	// ÷f is only an approximation. The rolling window runs over the stored
+	// (downsampled) points — the same stream every read-time surface uses,
+	// which is what lets the detail invariant gate compare them.
+	rows, queryErr := tx.QueryContext(ctx, `
+		SELECT elapsed_seconds, distance_meters
+		FROM activity_trackpoints
+		WHERE activity_id = ?
+		ORDER BY sequence
+	`, activityID)
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	defer rows.Close()
+	var tps []Trackpoint
+	for rows.Next() {
+		var tp Trackpoint
+		if scanErr := rows.Scan(&tp.ElapsedSeconds, &tp.DistanceMeters); scanErr != nil {
+			return nil, scanErr
+		}
+		tps = append(tps, tp)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities SET best_pace_sec_per_km = ? WHERE id = ? AND user_id = ?
+	`, bestRollingPace(tps, 1000), activityID, userID); err != nil {
 		return nil, err
 	}
 

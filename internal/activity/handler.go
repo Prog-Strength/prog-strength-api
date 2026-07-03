@@ -178,6 +178,10 @@ type trackpointDTO struct {
 	HeartRateBpm    *int     `json:"heart_rate_bpm"`
 	PaceSecPerKm    *float64 `json:"pace_sec_per_km"`
 	ElevationMeters *float64 `json:"elevation_meters"`
+	// CleanPace marks a plottable pace sample (present, positive, and not
+	// slower than the dropout threshold). The chart draws a gap where false;
+	// the server owns the threshold so client and strip summary can't drift.
+	CleanPace bool `json:"clean_pace"`
 }
 
 // activityDTO is the wire shape of an activity. Nullable numerics are
@@ -209,6 +213,14 @@ type activityDTO struct {
 	// usable HR data; omitempty drops the key otherwise (no HR / not running /
 	// engine unwired).
 	HeartRateZones *heartRateZonesDTO `json:"heart_rate_zones,omitempty"`
+	// Detail-only derived blocks (omitted on list responses and non-running
+	// activities): the read-time derivation the detail page renders verbatim.
+	// See sows/running-detail-metric-alignment.md.
+	Unit               string               `json:"unit,omitempty"`
+	Splits             []splitDTO           `json:"splits,omitempty"`
+	StripSummary       *stripSummaryDTO     `json:"strip_summary,omitempty"`
+	BestPaceSecPerUnit *float64             `json:"best_pace_sec_per_unit,omitempty"`
+	Intervals          []intervalSegmentDTO `json:"intervals,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -236,6 +248,44 @@ type heartRateZonesDTO struct {
 	Zones               []heartRateZoneDTO `json:"zones"`
 }
 
+// splitDTO is one distance bucket of the run's derived splits table. Pace is
+// per DISPLAY UNIT (the response's `unit`), and by construction equals
+// duration_seconds / distance_meters normalized to one unit — the invariant
+// gate asserts it.
+type splitDTO struct {
+	Index                int      `json:"index"`
+	Partial              bool     `json:"partial"`
+	DistanceMeters       float64  `json:"distance_meters"`
+	DurationSeconds      int      `json:"duration_seconds"`
+	PaceSecPerUnit       *float64 `json:"pace_sec_per_unit"`
+	AvgHRBpm             *float64 `json:"avg_hr_bpm"`
+	ElevationDeltaMeters *float64 `json:"elevation_delta_meters"`
+	Fastest              bool     `json:"fastest"`
+	Slowest              bool     `json:"slowest"`
+}
+
+// stripSummaryDTO carries the pace-chart header numbers so the client renders
+// text straight from the server (the chart line itself is a presentation
+// mapping of the trackpoints, which are already in the payload — the strip is
+// deliberately NOT duplicated as a parallel array; the detail response flows
+// through MCP to the agent where doubling point data has real token cost).
+type stripSummaryDTO struct {
+	FastestSecPerUnit *float64 `json:"fastest_sec_per_unit"`
+	SlowestSecPerUnit *float64 `json:"slowest_sec_per_unit"`
+	DropoutCount      int      `json:"dropout_count"`
+}
+
+// intervalSegmentDTO is one labeled bout of a detected interval workout.
+type intervalSegmentDTO struct {
+	Kind            string   `json:"kind"`
+	Rep             *int     `json:"rep"`
+	Label           string   `json:"label"`
+	DistanceMeters  float64  `json:"distance_meters"`
+	DurationSeconds int      `json:"duration_seconds"`
+	PaceSecPerUnit  *float64 `json:"pace_sec_per_unit"`
+	AvgHRBpm        *float64 `json:"avg_hr_bpm"`
+}
+
 func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 	dto := activityDTO{
 		ID:                  a.ID,
@@ -259,7 +309,15 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 	if withTrackpoints {
 		dto.Trackpoints = make([]trackpointDTO, 0, len(a.Trackpoints))
 		for _, tp := range a.Trackpoints {
-			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO(tp))
+			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO{
+				Sequence:        tp.Sequence,
+				ElapsedSeconds:  tp.ElapsedSeconds,
+				DistanceMeters:  tp.DistanceMeters,
+				HeartRateBpm:    tp.HeartRateBpm,
+				PaceSecPerKm:    tp.PaceSecPerKm,
+				ElevationMeters: tp.ElevationMeters,
+				CleanPace:       isCleanTrackpointPace(tp.PaceSecPerKm),
+			})
 		}
 	}
 	return dto
@@ -482,6 +540,17 @@ func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
 	return &t, nil
 }
 
+// parseUnitParam reads ?unit= for the detail derivation. Absent defaults to
+// miles (the UI default); anything but mi/km is a client error.
+func parseUnitParam(r *http.Request) (DistanceUnit, bool) {
+	raw := r.URL.Query().Get("unit")
+	if raw == "" {
+		return UnitMiles, true
+	}
+	u := DistanceUnit(raw)
+	return u, u.Valid()
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -491,6 +560,11 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	activityID := chi.URLParam(r, "id")
 	if activityID == "" {
 		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
+		return
+	}
+	unit, ok := parseUnitParam(r)
+	if !ok {
+		httpresp.Error(w, http.StatusBadRequest, "unit must be 'mi' or 'km'")
 		return
 	}
 	a, err := h.repo.Get(r.Context(), userID, activityID)
@@ -503,7 +577,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto, err := h.buildDetailDTO(r.Context(), userID, *a)
+	dto, err := h.buildDetailDTO(r.Context(), userID, *a, unit)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "build activity detail", err)
 		return
@@ -512,40 +586,72 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildDetailDTO renders the full single-activity detail shape: the base DTO
-// with trackpoints plus, for running activities with usable HR when the
-// engine is wired, the heart_rate_zones block. Shared by the detail GET and
-// the calibrate response so both return an identical shape.
-func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity) (activityDTO, error) {
+// with trackpoints plus, for running activities, the read-time derived blocks
+// (splits, strip summary, best pace, intervals) and — when the engine is
+// wired and HR is usable — the heart_rate_zones block. Shared by the detail
+// GET and the calibrate response so both return an identical shape.
+func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity, unit DistanceUnit) (activityDTO, error) {
 	dto := toActivityDTO(a, true)
-	if h.hrEngine == nil || a.ActivityType != ActivityRunning {
-		return dto, nil
-	}
-	tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
-	currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
-	for _, tp := range a.Trackpoints {
-		tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
-		if tp.HeartRateBpm != nil {
-			currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
+	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
+		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
+		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
+		for _, tp := range a.Trackpoints {
+			tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
+			if tp.HeartRateBpm != nil {
+				currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
+			}
+		}
+		stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
+		if err != nil {
+			return activityDTO{}, err
+		}
+		stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
+		ref := h.hrEngine.EstimateReference(stats)
+		if res, ok := h.hrEngine.Compute(ref, tps); ok {
+			zones := make([]heartRateZoneDTO, 0, len(res.Zones))
+			for _, z := range res.Zones {
+				zones = append(zones, heartRateZoneDTO{
+					Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
+					MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
+				})
+			}
+			dto.HeartRateZones = &heartRateZonesDTO{
+				Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
+				ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
+				Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
+			}
 		}
 	}
-	stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
-	if err != nil {
-		return activityDTO{}, err
-	}
-	stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
-	ref := h.hrEngine.EstimateReference(stats)
-	if res, ok := h.hrEngine.Compute(ref, tps); ok {
-		zones := make([]heartRateZoneDTO, 0, len(res.Zones))
-		for _, z := range res.Zones {
-			zones = append(zones, heartRateZoneDTO{
-				Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
-				MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
+	// Read-time derivation + invariant gate (running only). Violations are
+	// ERROR-logged but the response is still served: a read never 500s over
+	// an accounting mismatch — CI fixtures assert the gate stays quiet.
+	if a.ActivityType == ActivityRunning && len(a.Trackpoints) >= 2 {
+		der := deriveRunning(a.Trackpoints, unit)
+		dto.Unit = string(unit)
+		dto.Splits = make([]splitDTO, 0, len(der.Splits))
+		for _, s := range der.Splits {
+			dto.Splits = append(dto.Splits, splitDTO{
+				Index: s.Index, Partial: s.Partial,
+				DistanceMeters: s.DistanceMeters, DurationSeconds: s.DurationSeconds,
+				PaceSecPerUnit: s.PaceSecPerUnit, AvgHRBpm: s.AvgHRBpm,
+				ElevationDeltaMeters: s.ElevDeltaMeters,
+				Fastest:              s.Fastest, Slowest: s.Slowest,
 			})
 		}
-		dto.HeartRateZones = &heartRateZonesDTO{
-			Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
-			ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
-			Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
+		dto.StripSummary = &stripSummaryDTO{
+			FastestSecPerUnit: der.StripSummary.FastestSecPerUnit,
+			SlowestSecPerUnit: der.StripSummary.SlowestSecPerUnit,
+			DropoutCount:      der.StripSummary.DropoutCount,
+		}
+		dto.BestPaceSecPerUnit = der.BestPaceSecPerUnit
+		if len(der.Intervals) > 0 {
+			dto.Intervals = make([]intervalSegmentDTO, 0, len(der.Intervals))
+			for _, seg := range der.Intervals {
+				dto.Intervals = append(dto.Intervals, intervalSegmentDTO(seg))
+			}
+		}
+		for _, violation := range checkDetailInvariants(a, der, unit, dto.HeartRateZones) {
+			log.Printf("ERROR activity detail invariant violation: activity_id=%s %s", a.ID, violation)
 		}
 	}
 	return dto, nil
@@ -628,6 +734,11 @@ func (h *Handler) calibrate(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
 		return
 	}
+	unit, ok := parseUnitParam(r)
+	if !ok {
+		httpresp.Error(w, http.StatusBadRequest, "unit must be 'mi' or 'km'")
+		return
+	}
 	var req struct {
 		DistanceMeters float64 `json:"distance_meters"`
 	}
@@ -676,7 +787,7 @@ func (h *Handler) calibrate(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "calibrate activity", err)
 		return
 	}
-	dto, err := h.buildDetailDTO(r.Context(), userID, *updated)
+	dto, err := h.buildDetailDTO(r.Context(), userID, *updated, unit)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "build activity detail", err)
 		return

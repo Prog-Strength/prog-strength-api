@@ -1,3 +1,10 @@
+# [0.74.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.73.0...v0.74.0) (2026-07-03)
+
+
+### Features
+
+* **activity:** server-side running detail derivation + invariant gate ([#67](https://github.com/Prog-Strength/prog-strength-api/issues/67)) ([a7b43aa](https://github.com/Prog-Strength/prog-strength-api/commit/a7b43aa438b62bb9b62c13f7a27d3720f7aab3fe))
+
 # [0.73.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.72.0...v0.73.0) (2026-07-03)
 
 

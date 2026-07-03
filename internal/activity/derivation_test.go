@@ -234,3 +234,75 @@ func TestBuildStripSummary_CleanMinMaxAndDropoutCount(t *testing.T) {
 		t.Errorf("empty strip summary = %+v", none)
 	}
 }
+
+// intervalsTrack builds warmup + n×(work,recovery) + cooldown with clean
+// samples throughout. Work pace 240 s/km, recovery/warmup/cooldown 420 —
+// wait: 420 > 410 would flag dropout; use 400 s/km so everything stays clean.
+func intervalsTrack(nReps int) []Trackpoint {
+	tps := []Trackpoint{tp(0, 0, 0, nil, nil, nil)}
+	dist, elapsed, seq := 0.0, 0, 1
+	add := (func(meters float64, paceSecPerKm float64) {
+		// 100 m steps so each bout is several segments long (survives denoise).
+		steps := int(meters / 100)
+		for i := 0; i < steps; i++ {
+			dist += 100
+			elapsed += int(paceSecPerKm * 0.1)
+			p := paceSecPerKm
+			tps = append(tps, tp(seq, elapsed, dist, &p, nil, nil))
+			seq++
+		}
+	})
+	add(800, 400) // warm-up
+	for i := 0; i < nReps; i++ {
+		add(400, 240) // work
+		add(200, 400) // recovery
+	}
+	add(800, 400) // cool-down (the final recovery merges into it)
+	return tps
+}
+
+// TestDetectIntervals_HappyPath: 4 reps detect with warmup/work/recovery/
+// cooldown labels and per-bout pace = time/dist.
+func TestDetectIntervals_HappyPath(t *testing.T) {
+	segs := buildSegments(intervalsTrack(4), 1000)
+	got := detectIntervals(segs, 1000)
+	if got == nil {
+		t.Fatal("expected detected intervals")
+	}
+	if got[0].Kind != "warmup" || got[0].Label != "Warm-up" {
+		t.Errorf("first segment = %+v, want warm-up", got[0])
+	}
+	var reps int
+	for _, s := range got {
+		if s.Kind == "work" {
+			reps++
+			if s.Rep == nil || *s.Rep != reps {
+				t.Errorf("work rep = %v, want %d", s.Rep, reps)
+			}
+			if s.PaceSecPerUnit == nil ||
+				math.Abs(*s.PaceSecPerUnit-float64(s.DurationSeconds)/s.DistanceMeters*1000) > 0.5 {
+				t.Errorf("work pace %v != time/dist", s.PaceSecPerUnit)
+			}
+		}
+	}
+	if reps != 4 {
+		t.Errorf("work reps = %d, want 4", reps)
+	}
+	if last := got[len(got)-1]; last.Kind != "cooldown" {
+		t.Errorf("last segment kind = %s, want cooldown", last.Kind)
+	}
+}
+
+// TestDetectIntervals_ConservativeNil: steady runs and too-few-rep runs
+// return nil rather than fabricating structure.
+func TestDetectIntervals_ConservativeNil(t *testing.T) {
+	if got := detectIntervals(buildSegments(steadyTrack(50, 100, 30), 1000), 1000); got != nil {
+		t.Errorf("steady run detected intervals: %+v", got)
+	}
+	if got := detectIntervals(buildSegments(intervalsTrack(2), 1000), 1000); got != nil {
+		t.Errorf("2-rep run detected intervals (needs >= 3): %+v", got)
+	}
+	if got := detectIntervals(nil, 1000); got != nil {
+		t.Errorf("nil segments detected intervals: %+v", got)
+	}
+}

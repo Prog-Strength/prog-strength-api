@@ -1,6 +1,9 @@
 package activity
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 // This file is the read-time derivation for the running detail response: the
 // single computation every rendered number on /running/[id] traces back to.
@@ -287,4 +290,170 @@ func bestRollingPace(tps []Trackpoint, windowMeters float64) *float64 {
 	return &best
 }
 
-func detectIntervals(segs []segment, bucketMeters float64) []IntervalSegment { return nil }
+// bout is a coalesced run of same-class clean segments.
+type bout struct {
+	fast    bool
+	dDist   float64
+	dTime   int
+	hrSum   float64
+	hrCount int
+}
+
+// detectIntervals conservatively detects interval structure from CLEAN
+// segments (detection heuristics predate the split-pace policy change and
+// deliberately keep ignoring dropout segments — structure detection on
+// device noise fabricates reps). Ported behavior-for-behavior from the web's
+// lib/running-splits.ts. Returns nil unless >= 3 strictly-alternating work
+// bouts emerge from >= 8 clean segments.
+func detectIntervals(segs []segment, bucketMeters float64) []IntervalSegment {
+	var clean []segment
+	for _, s := range segs {
+		if s.clean && s.dDist > 0 {
+			clean = append(clean, s)
+		}
+	}
+	if len(clean) < 8 {
+		return nil
+	}
+	var totalDist float64
+	var totalTime int
+	for _, s := range clean {
+		totalDist += s.dDist
+		totalTime += s.dTime
+	}
+	if totalDist <= 0 {
+		return nil
+	}
+	avgSecPerMeter := float64(totalTime) / totalDist
+
+	// Classify each clean segment fast/slow, forward-filling the neutral band.
+	classes := make([]bool, len(clean)) // true = fast
+	prevFast := false
+	for i, s := range clean {
+		rel := (float64(s.dTime) / s.dDist) / avgSecPerMeter
+		switch {
+		case rel <= 0.9:
+			prevFast = true
+		case rel >= 1.05:
+			prevFast = false
+		}
+		classes[i] = prevFast
+	}
+
+	bouts := coalesceBouts(clean, classes)
+	bouts = denoiseBouts(bouts)
+
+	// Plausibility: >= 3 work bouts, no two adjacent (strict alternation).
+	var workIdx []int
+	for i, b := range bouts {
+		if b.fast {
+			workIdx = append(workIdx, i)
+		}
+	}
+	if len(workIdx) < 3 {
+		return nil
+	}
+	for i := 1; i < len(workIdx); i++ {
+		if workIdx[i] == workIdx[i-1]+1 {
+			return nil
+		}
+	}
+	return labelBouts(bouts, bucketMeters)
+}
+
+func coalesceBouts(clean []segment, classes []bool) []bout {
+	var bouts []bout
+	for i, s := range clean {
+		if len(bouts) == 0 || bouts[len(bouts)-1].fast != classes[i] {
+			bouts = append(bouts, bout{fast: classes[i]})
+		}
+		b := &bouts[len(bouts)-1]
+		b.dDist += s.dDist
+		b.dTime += s.dTime
+		if s.hr != nil {
+			b.hrSum += float64(*s.hr)
+			b.hrCount++
+		}
+	}
+	return bouts
+}
+
+// denoiseBouts folds any sub-60 m bout into its predecessor (keeping the
+// predecessor's class), then re-merges neighbours left same-classed.
+func denoiseBouts(bouts []bout) []bout {
+	var merged []bout
+	for _, b := range bouts {
+		if n := len(merged); n > 0 && (b.dDist < 60 || merged[n-1].fast == b.fast) {
+			p := &merged[n-1]
+			p.dDist += b.dDist
+			p.dTime += b.dTime
+			p.hrSum += b.hrSum
+			p.hrCount += b.hrCount
+			continue
+		}
+		merged = append(merged, b)
+	}
+	return merged
+}
+
+func labelBouts(bouts []bout, bucketMeters float64) []IntervalSegment {
+	firstWork, lastWork := -1, -1
+	for i, b := range bouts {
+		if b.fast {
+			if firstWork < 0 {
+				firstWork = i
+			}
+			lastWork = i
+		}
+	}
+	var out []IntervalSegment
+	rep := 0
+	appendBout := func(kind, label string, repNum *int, b bout) {
+		seg := IntervalSegment{
+			Kind: kind, Rep: repNum, Label: label,
+			DistanceMeters: b.dDist, DurationSeconds: b.dTime,
+		}
+		if b.dDist > 0 {
+			pace := float64(b.dTime) / b.dDist * bucketMeters
+			seg.PaceSecPerUnit = &pace
+		}
+		if b.hrCount > 0 {
+			hr := b.hrSum / float64(b.hrCount)
+			seg.AvgHRBpm = &hr
+		}
+		out = append(out, seg)
+	}
+	mergeSlow := func(bs []bout) (bout, bool) {
+		var m bout
+		found := false
+		for _, b := range bs {
+			if b.fast {
+				continue
+			}
+			found = true
+			m.dDist += b.dDist
+			m.dTime += b.dTime
+			m.hrSum += b.hrSum
+			m.hrCount += b.hrCount
+		}
+		return m, found
+	}
+	if lead, ok := mergeSlow(bouts[:firstWork]); ok {
+		appendBout("warmup", "Warm-up", nil, lead)
+	}
+	for i := firstWork; i <= lastWork; i++ {
+		b := bouts[i]
+		if b.fast {
+			rep++
+			r := rep
+			appendBout("work", fmt.Sprintf("Rep %d", rep), &r, b)
+		} else {
+			r := rep
+			appendBout("recovery", fmt.Sprintf("Recovery %d", rep), &r, b)
+		}
+	}
+	if trail, ok := mergeSlow(bouts[lastWork+1:]); ok {
+		appendBout("cooldown", "Cool-down", nil, trail)
+	}
+	return out
+}

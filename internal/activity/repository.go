@@ -71,6 +71,21 @@ type Repository interface {
 	// scale-bounds guards before invoking this.
 	Calibrate(ctx context.Context, userID, id string, newDistanceMeters float64) (*Activity, error)
 
+	// ChangeEnvironment sets a live activity's environment and maintains its
+	// best-effort rows for the transition:
+	//   outdoor -> indoor: delete this activity's activity_best_efforts rows
+	//     (indoor runs are excluded from PR surfaces). distance_meters,
+	//     including any prior calibration, is preserved.
+	//   indoor -> outdoor: regenerate best-efforts by fetching the archived
+	//     TCX, scaling each raw cumulative distance by the effective factor
+	//     distance_meters/raw_distance_meters, sweeping at full resolution,
+	//     and inserting the rows.
+	// A same-environment call is a no-op that returns the current row.
+	// Best-effort maintenance only applies to running activities. Returns
+	// ErrNotFound when missing/soft-deleted/not owned; returns the updated
+	// activity summary (no trackpoints).
+	ChangeEnvironment(ctx context.Context, userID, id string, newEnv Environment) (*Activity, error)
+
 	// SoftDelete stamps deleted_at on a live activity. The S3 object and
 	// trackpoints are left untouched. Returns ErrNotFound when no live
 	// row matches.

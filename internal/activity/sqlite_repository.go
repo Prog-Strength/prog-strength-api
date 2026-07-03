@@ -496,6 +496,113 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 	return r.Get(ctx, userID, activityID)
 }
 
+func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activityID string, newEnv Environment) (*Activity, error) {
+	var (
+		curEnv      Environment
+		rawDistance float64
+		distance    float64
+		s3Key       string
+		actType     ActivityType
+	)
+	row := r.db.QueryRowContext(ctx, `
+		SELECT environment, raw_distance_meters, distance_meters, tcx_s3_key, activity_type
+		FROM activities
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID)
+	if err := row.Scan(&curEnv, &rawDistance, &distance, &s3Key, &actType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if curEnv == newEnv {
+		return r.readActivitySummary(ctx, userID, activityID)
+	}
+
+	// For indoor -> outdoor on a running activity, regenerate best efforts from
+	// the archived raw TCX BEFORE opening the write transaction, so a slow S3
+	// fetch never holds a DB write lock and a fetch/parse failure aborts the
+	// whole change (rather than leaving an outdoor run with no PR rows).
+	var regenerated []ActivityBestEffort
+	if actType == ActivityRunning && newEnv == EnvironmentOutdoor {
+		body, err := r.archiver.Get(ctx, s3Key)
+		if err != nil {
+			return nil, fmt.Errorf("change environment: fetch tcx: %w", err)
+		}
+		parsed, err := parseTCX(body)
+		if err != nil {
+			return nil, fmt.Errorf("change environment: parse tcx: %w", err)
+		}
+		if err := validate(parsed); err != nil {
+			return nil, fmt.Errorf("change environment: validate tcx: %w", err)
+		}
+		// Apply the effective calibration factor to the raw cumulative
+		// distances so regenerated efforts match the (possibly calibrated)
+		// current distance. Never-calibrated runs have distance == raw => 1.0.
+		scale := 1.0
+		if rawDistance > 0 {
+			scale = distance / rawDistance
+		}
+		scaled := make([]parsedTrackpoint, len(parsed.Trackpoints))
+		copy(scaled, parsed.Trackpoints)
+		for i := range scaled {
+			scaled[i].DistanceMeters *= scale
+		}
+		regenerated = bestEfforts(scaled, StandardDistances)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities SET environment = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, newEnv, activityID, userID); err != nil {
+		return nil, err
+	}
+
+	if actType == ActivityRunning {
+		switch newEnv {
+		case EnvironmentIndoor:
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM activity_best_efforts WHERE activity_id = ?
+			`, activityID); err != nil {
+				return nil, err
+			}
+		case EnvironmentOutdoor:
+			// Replace any existing rows, then insert the freshly swept set.
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM activity_best_efforts WHERE activity_id = ?
+			`, activityID); err != nil {
+				return nil, err
+			}
+			if err := insertBestEffortsTx(ctx, tx, activityID, regenerated); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return r.readActivitySummary(ctx, userID, activityID)
+}
+
+// readActivitySummary re-reads a row (without trackpoints) after a mutation,
+// mirroring Rename's return shape. It does not filter deleted_at because the
+// caller has just confirmed/updated a live row.
+func (r *SQLiteRepository) readActivitySummary(ctx context.Context, userID, activityID string) (*Activity, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+activityColumns+`
+		FROM activities
+		WHERE id = ? AND user_id = ?
+	`, activityID, userID)
+	return scanActivity(row)
+}
+
 func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, activityID string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `

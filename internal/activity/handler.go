@@ -138,7 +138,7 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Get("/", h.list)
 		r.Get("/running-metrics", h.runningMetrics)
 		r.Get("/{id}", h.get)
-		r.Patch("/{id}", h.rename)
+		r.Patch("/{id}", h.patch)
 		r.Post("/{id}/calibrate", h.calibrate)
 		r.Delete("/{id}", h.delete)
 	})
@@ -551,7 +551,7 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity)
 	return dto, nil
 }
 
-func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
@@ -563,31 +563,58 @@ func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name        *string `json:"name"`
+		Environment *string `json:"environment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		httpresp.Error(w, http.StatusBadRequest, "name is required")
+	if req.Name == nil && req.Environment == nil {
+		httpresp.Error(w, http.StatusBadRequest, "name or environment is required")
 		return
 	}
-	if len(name) > 200 {
-		httpresp.Error(w, http.StatusBadRequest, "name is too long")
-		return
-	}
-	a, err := h.repo.Rename(r.Context(), userID, activityID, name)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+
+	var updated *Activity
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			httpresp.Error(w, http.StatusBadRequest, "name is required")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "rename activity", err)
-		return
+		if len(name) > 200 {
+			httpresp.Error(w, http.StatusBadRequest, "name is too long")
+			return
+		}
+		a, err := h.repo.Rename(r.Context(), userID, activityID, name)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "rename activity", err)
+			return
+		}
+		updated = a
 	}
-	httpresp.OK(w, "renamed activity", toActivityDTO(*a, false))
+	if req.Environment != nil {
+		env := Environment(*req.Environment)
+		if !env.Valid() {
+			httpresp.ErrorWithCode(w, http.StatusBadRequest, "environment must be 'outdoor' or 'indoor'", "invalid_environment")
+			return
+		}
+		a, err := h.repo.ChangeEnvironment(r.Context(), userID, activityID, env)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "change environment", err)
+			return
+		}
+		updated = a
+	}
+	httpresp.OK(w, "updated activity", toActivityDTO(*updated, false))
 }
 
 func (h *Handler) calibrate(w http.ResponseWriter, r *http.Request) {

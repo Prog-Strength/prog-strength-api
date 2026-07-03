@@ -417,6 +417,45 @@ func TestCalibrate_UniformScale(t *testing.T) {
 	}
 }
 
+// TestChangeEnvironment_NoOpAndOwnership covers the same-environment no-op and
+// the ownership guard. Best-effort maintenance across a real transition is
+// exercised end-to-end through the handler tests (which have an archived TCX).
+func TestChangeEnvironment_NoOpAndOwnership(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivity("u1", IngestManualTCX, "env1", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	a.Environment = EnvironmentOutdoor
+	if err := repo.Create(ctx, a, []byte("x")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Same-environment is a no-op returning the current row.
+	got, err := repo.ChangeEnvironment(ctx, "u1", a.ID, EnvironmentOutdoor)
+	if err != nil {
+		t.Fatalf("ChangeEnvironment no-op: %v", err)
+	}
+	if got.Environment != EnvironmentOutdoor {
+		t.Errorf("environment = %q, want outdoor", got.Environment)
+	}
+
+	// Cross-user is ErrNotFound.
+	if _, xerr := repo.ChangeEnvironment(ctx, "u2", a.ID, EnvironmentIndoor); !errors.Is(xerr, ErrNotFound) {
+		t.Fatalf("cross-user ChangeEnvironment: want ErrNotFound, got %v", xerr)
+	}
+
+	// outdoor -> indoor flips the column (best-effort delete is a no-op here
+	// since this hand-built activity has no best-effort rows).
+	ind, err := repo.ChangeEnvironment(ctx, "u1", a.ID, EnvironmentIndoor)
+	if err != nil {
+		t.Fatalf("ChangeEnvironment to indoor: %v", err)
+	}
+	if ind.Environment != EnvironmentIndoor {
+		t.Errorf("environment = %q, want indoor", ind.Environment)
+	}
+}
+
 func TestSoftDelete_ThenGetNotFound(t *testing.T) {
 	t.Parallel()
 	repo, _ := newRepo(t)

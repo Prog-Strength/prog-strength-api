@@ -24,7 +24,7 @@ const activityColumns = `
 	start_time, name, distance_meters, duration_seconds,
 	avg_pace_sec_per_km, best_pace_sec_per_km,
 	avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-	tcx_s3_key, created_at, deleted_at`
+	tcx_s3_key, created_at, deleted_at, environment, raw_distance_meters`
 
 type SQLiteRepository struct {
 	db       *sql.DB
@@ -61,6 +61,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 	a.TCXS3Key = key
 	a.CreatedAt = now
 	a.DeletedAt = nil
+	// environment is a NOT NULL column with a CHECK (outdoor|indoor); an
+	// unset Environment ("") would fail that CHECK. The summarizers always set
+	// it, but hand-built Activities (and older test seeds) may not — default
+	// to outdoor, matching the migration's per-row default.
+	if a.Environment == "" {
+		a.Environment = EnvironmentOutdoor
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -75,13 +82,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 			start_time, name, distance_meters, duration_seconds,
 			avg_pace_sec_per_km, best_pace_sec_per_km,
 			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-			tcx_s3_key, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tcx_s3_key, created_at, environment, raw_distance_meters
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, a.ID, a.UserID, a.ActivityType, a.IngestSource, a.SourceActivityID,
 		a.StartTime, a.Name, a.DistanceMeters, a.DurationSeconds,
 		a.AvgPaceSecPerKm, a.BestPaceSecPerKm,
 		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories, a.ElevationGainMeters,
-		a.TCXS3Key, a.CreatedAt); err != nil {
+		a.TCXS3Key, a.CreatedAt, a.Environment, a.RawDistanceMeters); err != nil {
 		if isUniqueViolation(err) {
 			return ErrDuplicate
 		}
@@ -583,7 +590,7 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 		&act.StartTime, &name, &act.DistanceMeters, &act.DurationSeconds,
 		&avgPace, &bestPace,
 		&avgHR, &maxHR, &calories, &elevation,
-		&act.TCXS3Key, &act.CreatedAt, &deletedAt,
+		&act.TCXS3Key, &act.CreatedAt, &deletedAt, &act.Environment, &act.RawDistanceMeters,
 	); err != nil {
 		return nil, err
 	}

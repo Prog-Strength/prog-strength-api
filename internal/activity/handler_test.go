@@ -143,6 +143,54 @@ func TestImportHappyPath(t *testing.T) {
 	}
 }
 
+// TestImportEnvironmentFields asserts the new DTO fields flow through ingest:
+// the outdoor 5k fixture returns environment=outdoor with raw==distance, while
+// the no-position treadmill fixture returns environment=indoor and writes zero
+// activity_best_efforts rows (indoor runs are excluded from PR surfaces).
+func TestImportEnvironmentFields(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+
+	out := doImport(t, h, readFixture(t, "typical_5k.tcx"))
+	if out.Code != http.StatusCreated {
+		t.Fatalf("outdoor import status = %d; body=%s", out.Code, out.Body.String())
+	}
+	var outEnv activityEnvelope
+	if err := json.Unmarshal(out.Body.Bytes(), &outEnv); err != nil {
+		t.Fatalf("decode outdoor: %v", err)
+	}
+	if outEnv.Data.Environment != EnvironmentOutdoor {
+		t.Errorf("outdoor environment = %q, want outdoor", outEnv.Data.Environment)
+	}
+	if outEnv.Data.RawDistanceMeters != outEnv.Data.DistanceMeters {
+		t.Errorf("outdoor raw_distance = %.2f, want == distance %.2f", outEnv.Data.RawDistanceMeters, outEnv.Data.DistanceMeters)
+	}
+
+	in := doImport(t, h, readFixture(t, "treadmill_5k.tcx"))
+	if in.Code != http.StatusCreated {
+		t.Fatalf("treadmill import status = %d; body=%s", in.Code, in.Body.String())
+	}
+	var inEnv activityEnvelope
+	if err := json.Unmarshal(in.Body.Bytes(), &inEnv); err != nil {
+		t.Fatalf("decode treadmill: %v", err)
+	}
+	if inEnv.Data.Environment != EnvironmentIndoor {
+		t.Errorf("treadmill environment = %q, want indoor", inEnv.Data.Environment)
+	}
+	if inEnv.Data.RawDistanceMeters != inEnv.Data.DistanceMeters {
+		t.Errorf("treadmill raw_distance = %.2f, want == distance %.2f", inEnv.Data.RawDistanceMeters, inEnv.Data.DistanceMeters)
+	}
+
+	// The indoor run must have written no best-effort rows.
+	var count int
+	if err := repo.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM activity_best_efforts WHERE activity_id = ?`, inEnv.Data.ID).Scan(&count); err != nil {
+		t.Fatalf("count indoor best efforts: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("indoor run wrote %d best-effort rows, want 0", count)
+	}
+}
+
 // A biking TCX no longer rejects with SlugNotRunning — the validator
 // accepts any sport; the ingest pipeline classifies it as cycling.
 func TestImportBikingClassifiesAsCycling(t *testing.T) {

@@ -184,6 +184,8 @@ type activityDTO struct {
 	Name                *string         `json:"name"`
 	StartTime           time.Time       `json:"start_time"`
 	DistanceMeters      float64         `json:"distance_meters"`
+	RawDistanceMeters   float64         `json:"raw_distance_meters"`
+	Environment         Environment     `json:"environment"`
 	DurationSeconds     int             `json:"duration_seconds"`
 	AvgPaceSecPerKm     *float64        `json:"avg_pace_sec_per_km"`
 	BestPaceSecPerKm    *float64        `json:"best_pace_sec_per_km"`
@@ -234,6 +236,8 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		Name:                a.Name,
 		StartTime:           a.StartTime,
 		DistanceMeters:      a.DistanceMeters,
+		RawDistanceMeters:   a.RawDistanceMeters,
+		Environment:         a.Environment,
 		DurationSeconds:     a.DurationSeconds,
 		AvgPaceSecPerKm:     a.AvgPaceSecPerKm,
 		BestPaceSecPerKm:    a.BestPaceSecPerKm,

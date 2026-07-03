@@ -45,6 +45,8 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 		StartTime:           first.Time,
 		Name:                p.Notes,
 		DistanceMeters:      distance,
+		RawDistanceMeters:   distance,
+		Environment:         EnvironmentOutdoor,
 		DurationSeconds:     duration,
 		AvgHeartRateBpm:     avgHeartRate(tps),
 		MaxHeartRateBpm:     maxHeartRate(tps),
@@ -52,6 +54,12 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 	}
 
 	if actType == ActivityRunning {
+		// A running activity with no <Position> anywhere was recorded without
+		// GPS — treadmill/indoor. Non-running sports keep the outdoor default;
+		// only running is auto-tagged here.
+		if !p.HasPosition {
+			a.Environment = EnvironmentIndoor
+		}
 		// Guard the division rather than risk a +Inf/NaN pace: validate
 		// guarantees at least one non-zero-distance trackpoint, but the
 		// cumulative distance axis isn't guaranteed monotonic for
@@ -61,10 +69,12 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 			a.AvgPaceSecPerKm = &avg
 		}
 		a.BestPaceSecPerKm = bestPace(tps)
-		// Per-distance best efforts (running PRs): the fastest window of
-		// each standard distance found anywhere inside this activity. Empty
-		// for runs too short to cover even the 1-mile target.
-		a.BestEfforts = bestEfforts(tps, StandardDistances)
+		// Best efforts (running PRs) are an outdoor-only surface. Indoor runs
+		// are excluded by design: no activity_best_efforts rows are written,
+		// so they never appear in PRs or feed max-effort estimates.
+		if a.Environment == EnvironmentOutdoor {
+			a.BestEfforts = bestEfforts(tps, StandardDistances)
+		}
 	}
 
 	if p.hasCalories {

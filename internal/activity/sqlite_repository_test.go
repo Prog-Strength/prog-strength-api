@@ -357,6 +357,105 @@ func TestRename(t *testing.T) {
 	}
 }
 
+// TestCalibrate_UniformScale asserts the header distance and every trackpoint
+// distance scale by the same factor, avg pace recomputes from the new
+// distance, best pace scales by 1/f, and raw_distance is left untouched.
+func TestCalibrate_UniformScale(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivity("u1", IngestManualTCX, "cal1", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	a.Environment = EnvironmentIndoor
+	a.RawDistanceMeters = 5000
+	bestPace := 280.0
+	a.BestPaceSecPerKm = &bestPace
+	pace := 300.0
+	a.Trackpoints = []Trackpoint{
+		{Sequence: 0, ElapsedSeconds: 0, DistanceMeters: 0},
+		{Sequence: 1, ElapsedSeconds: 750, DistanceMeters: 2500, PaceSecPerKm: &pace},
+		{Sequence: 2, ElapsedSeconds: 1500, DistanceMeters: 5000, PaceSecPerKm: &pace},
+	}
+	if err := repo.Create(ctx, a, []byte("x")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newDist := 4500.0
+	f := newDist / 5000.0
+	got, err := repo.Calibrate(ctx, "u1", a.ID, newDist)
+	if err != nil {
+		t.Fatalf("Calibrate: %v", err)
+	}
+	if math.Abs(got.DistanceMeters-newDist) > 0.001 {
+		t.Errorf("distance = %.4f, want %.4f", got.DistanceMeters, newDist)
+	}
+	if math.Abs(got.RawDistanceMeters-5000) > 0.001 {
+		t.Errorf("raw_distance = %.4f, want 5000 (untouched)", got.RawDistanceMeters)
+	}
+	wantAvg := 1500.0 / (newDist / 1000)
+	if got.AvgPaceSecPerKm == nil || math.Abs(*got.AvgPaceSecPerKm-wantAvg) > 0.001 {
+		t.Errorf("avg pace = %v, want %.4f", got.AvgPaceSecPerKm, wantAvg)
+	}
+	if got.BestPaceSecPerKm == nil || math.Abs(*got.BestPaceSecPerKm-(280.0/f)) > 0.001 {
+		t.Errorf("best pace = %v, want %.4f", got.BestPaceSecPerKm, 280.0/f)
+	}
+	// Trackpoints scaled uniformly; the last cumulative distance == new total.
+	last := got.Trackpoints[len(got.Trackpoints)-1]
+	if math.Abs(last.DistanceMeters-newDist) > 0.001 {
+		t.Errorf("last trackpoint distance = %.4f, want %.4f", last.DistanceMeters, newDist)
+	}
+	mid := got.Trackpoints[1]
+	if math.Abs(mid.DistanceMeters-2500*f) > 0.001 {
+		t.Errorf("mid trackpoint distance = %.4f, want %.4f", mid.DistanceMeters, 2500*f)
+	}
+	if mid.PaceSecPerKm == nil || math.Abs(*mid.PaceSecPerKm-(300.0/f)) > 0.001 {
+		t.Errorf("mid trackpoint pace = %v, want %.4f", mid.PaceSecPerKm, 300.0/f)
+	}
+
+	if _, err := repo.Calibrate(ctx, "u2", a.ID, newDist); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user Calibrate: want ErrNotFound, got %v", err)
+	}
+}
+
+// TestChangeEnvironment_NoOpAndOwnership covers the same-environment no-op and
+// the ownership guard. Best-effort maintenance across a real transition is
+// exercised end-to-end through the handler tests (which have an archived TCX).
+func TestChangeEnvironment_NoOpAndOwnership(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivity("u1", IngestManualTCX, "env1", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	a.Environment = EnvironmentOutdoor
+	if err := repo.Create(ctx, a, []byte("x")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Same-environment is a no-op returning the current row.
+	got, err := repo.ChangeEnvironment(ctx, "u1", a.ID, EnvironmentOutdoor)
+	if err != nil {
+		t.Fatalf("ChangeEnvironment no-op: %v", err)
+	}
+	if got.Environment != EnvironmentOutdoor {
+		t.Errorf("environment = %q, want outdoor", got.Environment)
+	}
+
+	// Cross-user is ErrNotFound.
+	if _, xerr := repo.ChangeEnvironment(ctx, "u2", a.ID, EnvironmentIndoor); !errors.Is(xerr, ErrNotFound) {
+		t.Fatalf("cross-user ChangeEnvironment: want ErrNotFound, got %v", xerr)
+	}
+
+	// outdoor -> indoor flips the column (best-effort delete is a no-op here
+	// since this hand-built activity has no best-effort rows).
+	ind, err := repo.ChangeEnvironment(ctx, "u1", a.ID, EnvironmentIndoor)
+	if err != nil {
+		t.Fatalf("ChangeEnvironment to indoor: %v", err)
+	}
+	if ind.Environment != EnvironmentIndoor {
+		t.Errorf("environment = %q, want indoor", ind.Environment)
+	}
+}
+
 func TestSoftDelete_ThenGetNotFound(t *testing.T) {
 	t.Parallel()
 	repo, _ := newRepo(t)

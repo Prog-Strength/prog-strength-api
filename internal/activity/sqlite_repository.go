@@ -24,7 +24,7 @@ const activityColumns = `
 	start_time, name, distance_meters, duration_seconds,
 	avg_pace_sec_per_km, best_pace_sec_per_km,
 	avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-	tcx_s3_key, created_at, deleted_at`
+	tcx_s3_key, created_at, deleted_at, environment, raw_distance_meters`
 
 type SQLiteRepository struct {
 	db       *sql.DB
@@ -61,6 +61,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 	a.TCXS3Key = key
 	a.CreatedAt = now
 	a.DeletedAt = nil
+	// environment is a NOT NULL column with a CHECK (outdoor|indoor); an
+	// unset Environment ("") would fail that CHECK. The summarizers always set
+	// it, but hand-built Activities (and older test seeds) may not — default
+	// to outdoor, matching the migration's per-row default.
+	if a.Environment == "" {
+		a.Environment = EnvironmentOutdoor
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -75,13 +82,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 			start_time, name, distance_meters, duration_seconds,
 			avg_pace_sec_per_km, best_pace_sec_per_km,
 			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-			tcx_s3_key, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tcx_s3_key, created_at, environment, raw_distance_meters
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, a.ID, a.UserID, a.ActivityType, a.IngestSource, a.SourceActivityID,
 		a.StartTime, a.Name, a.DistanceMeters, a.DurationSeconds,
 		a.AvgPaceSecPerKm, a.BestPaceSecPerKm,
 		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories, a.ElevationGainMeters,
-		a.TCXS3Key, a.CreatedAt); err != nil {
+		a.TCXS3Key, a.CreatedAt, a.Environment, a.RawDistanceMeters); err != nil {
 		if isUniqueViolation(err) {
 			return ErrDuplicate
 		}
@@ -428,6 +435,174 @@ func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name 
 	return scanActivity(row)
 }
 
+func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID string, newDistanceMeters float64) (*Activity, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var (
+		curDistance float64
+		duration    int
+	)
+	row := tx.QueryRowContext(ctx, `
+		SELECT distance_meters, duration_seconds
+		FROM activities
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID)
+	if err := row.Scan(&curDistance, &duration); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if curDistance <= 0 {
+		// Nothing to scale from; the handler also guards this, but a zero here
+		// would divide by zero below.
+		return nil, fmt.Errorf("activity: cannot calibrate zero-distance activity %s", activityID)
+	}
+	f := newDistanceMeters / curDistance
+
+	// avg pace is recomputed from the corrected distance; best pace scales
+	// inversely with the distance factor (a longer real distance => faster
+	// pace). NULL best pace stays NULL under SQL arithmetic.
+	avgPace := float64(duration) / (newDistanceMeters / 1000)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities
+		SET distance_meters = ?,
+		    avg_pace_sec_per_km = ?,
+		    best_pace_sec_per_km = best_pace_sec_per_km / ?
+		WHERE id = ? AND user_id = ?
+	`, newDistanceMeters, avgPace, f, activityID, userID); err != nil {
+		return nil, err
+	}
+
+	// Rescale every trackpoint's cumulative distance and (non-null) pace. A
+	// NULL pace_sec_per_km divided by f is NULL, so stationary-filtered points
+	// keep their null.
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activity_trackpoints
+		SET distance_meters = distance_meters * ?,
+		    pace_sec_per_km = pace_sec_per_km / ?
+		WHERE activity_id = ?
+	`, f, f, activityID); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return r.Get(ctx, userID, activityID)
+}
+
+func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activityID string, newEnv Environment) (*Activity, error) {
+	var (
+		curEnv      Environment
+		rawDistance float64
+		distance    float64
+		s3Key       string
+		actType     ActivityType
+	)
+	row := r.db.QueryRowContext(ctx, `
+		SELECT environment, raw_distance_meters, distance_meters, tcx_s3_key, activity_type
+		FROM activities
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID)
+	if err := row.Scan(&curEnv, &rawDistance, &distance, &s3Key, &actType); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if curEnv == newEnv {
+		return r.readActivitySummary(ctx, userID, activityID)
+	}
+
+	// For indoor -> outdoor on a running activity, regenerate best efforts from
+	// the archived raw TCX BEFORE opening the write transaction, so a slow S3
+	// fetch never holds a DB write lock and a fetch/parse failure aborts the
+	// whole change (rather than leaving an outdoor run with no PR rows).
+	var regenerated []ActivityBestEffort
+	if actType == ActivityRunning && newEnv == EnvironmentOutdoor {
+		body, err := r.archiver.Get(ctx, s3Key)
+		if err != nil {
+			return nil, fmt.Errorf("change environment: fetch tcx: %w", err)
+		}
+		parsed, err := parseTCX(body)
+		if err != nil {
+			return nil, fmt.Errorf("change environment: parse tcx: %w", err)
+		}
+		if err := validate(parsed); err != nil {
+			return nil, fmt.Errorf("change environment: validate tcx: %w", err)
+		}
+		// Apply the effective calibration factor to the raw cumulative
+		// distances so regenerated efforts match the (possibly calibrated)
+		// current distance. Never-calibrated runs have distance == raw => 1.0.
+		scale := 1.0
+		if rawDistance > 0 {
+			scale = distance / rawDistance
+		}
+		scaled := make([]parsedTrackpoint, len(parsed.Trackpoints))
+		copy(scaled, parsed.Trackpoints)
+		for i := range scaled {
+			scaled[i].DistanceMeters *= scale
+		}
+		regenerated = bestEfforts(scaled, StandardDistances)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE activities SET environment = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, newEnv, activityID, userID); err != nil {
+		return nil, err
+	}
+
+	if actType == ActivityRunning {
+		switch newEnv {
+		case EnvironmentIndoor:
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM activity_best_efforts WHERE activity_id = ?
+			`, activityID); err != nil {
+				return nil, err
+			}
+		case EnvironmentOutdoor:
+			// Replace any existing rows, then insert the freshly swept set.
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM activity_best_efforts WHERE activity_id = ?
+			`, activityID); err != nil {
+				return nil, err
+			}
+			if err := insertBestEffortsTx(ctx, tx, activityID, regenerated); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return r.readActivitySummary(ctx, userID, activityID)
+}
+
+// readActivitySummary re-reads a row (without trackpoints) after a mutation,
+// mirroring Rename's return shape. It does not filter deleted_at because the
+// caller has just confirmed/updated a live row.
+func (r *SQLiteRepository) readActivitySummary(ctx context.Context, userID, activityID string) (*Activity, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+activityColumns+`
+		FROM activities
+		WHERE id = ? AND user_id = ?
+	`, activityID, userID)
+	return scanActivity(row)
+}
+
 func (r *SQLiteRepository) SoftDelete(ctx context.Context, userID, activityID string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `
@@ -583,7 +758,7 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 		&act.StartTime, &name, &act.DistanceMeters, &act.DurationSeconds,
 		&avgPace, &bestPace,
 		&avgHR, &maxHR, &calories, &elevation,
-		&act.TCXS3Key, &act.CreatedAt, &deletedAt,
+		&act.TCXS3Key, &act.CreatedAt, &deletedAt, &act.Environment, &act.RawDistanceMeters,
 	); err != nil {
 		return nil, err
 	}

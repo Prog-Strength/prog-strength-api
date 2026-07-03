@@ -8,6 +8,12 @@ import (
 	"time"
 )
 
+// testPositionXML is a minimal <Position> element the generated running
+// fixtures embed on every trackpoint so they classify as outdoor (GPS) — the
+// default for a real run. Indoor/treadmill behavior is covered separately with
+// no-position input.
+const testPositionXML = `<Position><LatitudeDegrees>40.0</LatitudeDegrees><LongitudeDegrees>-105.0</LongitudeDegrees></Position>`
+
 func TestSummarize_Typical5k(t *testing.T) {
 	p, err := parseTCX(readFixture(t, "typical_5k.tcx"))
 	if err != nil {
@@ -56,6 +62,60 @@ func TestSummarize_Typical5k(t *testing.T) {
 	}
 	if a.ActivityType != ActivityRunning {
 		t.Errorf("ActivityType = %q, want %q", a.ActivityType, ActivityRunning)
+	}
+	// The fixture now carries Position on every trackpoint, so it stays
+	// outdoor and keeps its best efforts; raw distance mirrors the ingest.
+	if a.Environment != EnvironmentOutdoor {
+		t.Errorf("Environment = %q, want outdoor", a.Environment)
+	}
+	if a.RawDistanceMeters != a.DistanceMeters {
+		t.Errorf("RawDistanceMeters = %.2f, want == DistanceMeters %.2f", a.RawDistanceMeters, a.DistanceMeters)
+	}
+	if len(a.BestEfforts) == 0 {
+		t.Error("expected best efforts on the outdoor 5k fixture")
+	}
+}
+
+// TestSummarize_IndoorRunFromNoPosition verifies environment defaulting and
+// the best-effort exclusion for indoor runs. A running parsedTCX with no
+// position (HasPosition=false) defaults to indoor and skips the best-effort
+// sweep; the same track with HasPosition=true stays outdoor and keeps its best
+// efforts. Both mirror the ingest distance into RawDistanceMeters.
+func TestSummarize_IndoorRunFromNoPosition(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "treadmill_5k.tcx"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := validate(p); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if p.HasPosition {
+		t.Fatal("treadmill fixture unexpectedly carries Position")
+	}
+
+	indoor := summarize(p, ActivityRunning)
+	if indoor.Environment != EnvironmentIndoor {
+		t.Errorf("Environment = %q, want indoor for a no-position run", indoor.Environment)
+	}
+	if len(indoor.BestEfforts) != 0 {
+		t.Errorf("indoor run produced %d best efforts, want 0", len(indoor.BestEfforts))
+	}
+	if indoor.RawDistanceMeters != indoor.DistanceMeters {
+		t.Errorf("RawDistanceMeters = %.2f, want == DistanceMeters %.2f", indoor.RawDistanceMeters, indoor.DistanceMeters)
+	}
+
+	// Flip the presence bit only; the same track now classifies outdoor and
+	// regains its best efforts (a 5000 m run covers 1mi/2mi/5k).
+	p.HasPosition = true
+	outdoor := summarize(p, ActivityRunning)
+	if outdoor.Environment != EnvironmentOutdoor {
+		t.Errorf("Environment = %q, want outdoor when Position present", outdoor.Environment)
+	}
+	if len(outdoor.BestEfforts) == 0 {
+		t.Error("outdoor run produced no best efforts, want at least 1mi/2mi/5k")
+	}
+	if outdoor.RawDistanceMeters != outdoor.DistanceMeters {
+		t.Errorf("RawDistanceMeters = %.2f, want == DistanceMeters %.2f", outdoor.RawDistanceMeters, outdoor.DistanceMeters)
 	}
 }
 
@@ -307,7 +367,7 @@ func buildEmbeddedFast5KTCX() []byte {
 	b.WriteString("        <Track>\n")
 	for i := range dists {
 		ts := start.Add(time.Duration(elapsedSecs[i]) * time.Second).Format(time.RFC3339)
-		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters></Trackpoint>\n", ts, dists[i])
+		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters>%s</Trackpoint>\n", ts, dists[i], testPositionXML)
 	}
 	b.WriteString("        </Track>\n")
 	b.WriteString("      </Lap>\n")
@@ -342,7 +402,7 @@ func buildStationaryStartTCX(stationarySamples int, slowMps float64, runSamples 
 			dist += step
 		}
 		ts := start.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
-		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters></Trackpoint>\n", ts, dist)
+		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters>%s</Trackpoint>\n", ts, dist, testPositionXML)
 	}
 	b.WriteString("        </Track>\n")
 	b.WriteString("      </Lap>\n")
@@ -368,7 +428,7 @@ func buildMarathonTCX(n int, totalDist float64) []byte {
 	b.WriteString("        <Track>\n")
 	for i := 0; i < n; i++ {
 		ts := start.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
-		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters></Trackpoint>\n", ts, step*float64(i))
+		fmt.Fprintf(&b, "          <Trackpoint><Time>%s</Time><DistanceMeters>%.2f</DistanceMeters>%s</Trackpoint>\n", ts, step*float64(i), testPositionXML)
 	}
 	b.WriteString("        </Track>\n")
 	b.WriteString("      </Lap>\n")

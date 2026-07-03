@@ -30,10 +30,19 @@ type Activity struct {
 	// this row (the <Id> element for TCX, the Garmin Connect activity ID
 	// for the API). Combined with (user_id, ingest_source) it's the dedup
 	// key for re-ingests.
-	SourceActivityID    string
-	StartTime           time.Time
-	Name                *string
-	DistanceMeters      float64
+	SourceActivityID string
+	StartTime        time.Time
+	Name             *string
+	DistanceMeters   float64
+	// RawDistanceMeters is the distance as originally ingested. Set equal to
+	// DistanceMeters at ingest and never touched by calibration, so
+	// "calibrated" is derivable as RawDistanceMeters != DistanceMeters and a
+	// reset is a calibrate back to this value.
+	RawDistanceMeters float64
+	// Environment is 'outdoor' (GPS) or 'indoor' (treadmill/no-position).
+	// Defaulted at ingest for running activities from Position presence;
+	// user-overridable via PATCH.
+	Environment         Environment
 	DurationSeconds     int
 	AvgPaceSecPerKm     *float64
 	BestPaceSecPerKm    *float64

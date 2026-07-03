@@ -119,6 +119,14 @@ linters:
         # an allowlist (Handler.isAllowedReturnTo). gosec can't follow
         # the validation across the function boundary.
         - G710
+        # G709 ("unsafe deserialization via taint analysis") fires on
+        # parseTCX's xml.Unmarshal when the bytes originate from our own S3
+        # archive (the environment-retag and best-effort backfill re-parse the
+        # stored TCX). encoding/xml only fills a fixed, private struct with no
+        # custom Unmarshaler and no external entity resolution, and the file was
+        # already parsed+validated at ingest; there is no gadget surface. gosec's
+        # taint analysis can't see that the source is our own controlled archive.
+        - G709
         # G120 ("unbounded form parsing") fires on ParseMultipartForm
         # even though the import handler explicitly wraps the body in
         # http.MaxBytesReader BEFORE parsing. False positive here.

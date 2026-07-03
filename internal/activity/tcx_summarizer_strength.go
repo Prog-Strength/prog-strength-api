@@ -25,8 +25,14 @@ func summarizeStrength(p *parsedTCX) Activity {
 		StartTime:        strengthStartTime(p),
 		Name:             p.Notes,
 		DistanceMeters:   0,
-		AvgHeartRateBpm:  avgHeartRate(tps),
-		MaxHeartRateBpm:  maxHeartRate(tps),
+		// A strength session is stationary, so it's neither indoor nor outdoor
+		// in the treadmill sense; the environment column is general and NOT
+		// NULL, so default it to outdoor (the same default the migration gives
+		// every pre-existing row). RawDistanceMeters stays 0, matching the
+		// zero distance.
+		Environment:     EnvironmentOutdoor,
+		AvgHeartRateBpm: avgHeartRate(tps),
+		MaxHeartRateBpm: maxHeartRate(tps),
 		// Distance-free: paces, elevation, and best efforts stay nil/empty.
 	}
 

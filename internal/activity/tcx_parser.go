@@ -24,6 +24,12 @@ type parsedTCX struct {
 	// We track presence separately from the sum because a real summed
 	// value of 0 is meaningful, whereas "no calories reported" is nil.
 	hasCalories bool
+	// HasPosition is true iff at least one trackpoint carried a <Position>
+	// element (GPS lat/lon). Used only at ingest to default a running
+	// activity's environment (no position anywhere => indoor/treadmill). We
+	// deliberately do not store the coordinates — route geometry is a
+	// separate SOW; this is a presence bit, nothing more.
+	HasPosition bool
 	// LapStartTimes holds each lap's parsed StartTime attribute, in order.
 	// Used by the strength summarizer as a start-time fallback when a file
 	// somehow carries laps but no trackpoints. A lap whose StartTime is
@@ -70,8 +76,18 @@ type xmlLap struct {
 type xmlTrackpoint struct {
 	Time           string        `xml:"Time"`
 	DistanceMeters *float64      `xml:"DistanceMeters"`
+	Position       *xmlPosition  `xml:"Position"`
 	HeartRate      *xmlHeartRate `xml:"HeartRateBpm"`
 	AltitudeMeters *float64      `xml:"AltitudeMeters"`
+}
+
+// xmlPosition models <Position><LatitudeDegrees>..</LatitudeDegrees>
+// <LongitudeDegrees>..</LongitudeDegrees></Position>. We only need to know
+// the element was present, so the fields are parsed but never read beyond a
+// nil check on the pointer.
+type xmlPosition struct {
+	LatitudeDegrees  *float64 `xml:"LatitudeDegrees"`
+	LongitudeDegrees *float64 `xml:"LongitudeDegrees"`
 }
 
 // xmlHeartRate models <HeartRateBpm><Value>148</Value></HeartRateBpm>.
@@ -131,6 +147,9 @@ func parseTCX(data []byte) (*parsedTCX, error) {
 			if tp.HeartRate != nil {
 				hr := tp.HeartRate.Value
 				out.HeartRateBpm = &hr
+			}
+			if tp.Position != nil {
+				p.HasPosition = true
 			}
 			p.Trackpoints = append(p.Trackpoints, out)
 		}

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -140,6 +142,54 @@ func TestImportHappyPath(t *testing.T) {
 	}
 	if arch.Len() != 1 {
 		t.Errorf("archiver = %d objects, want 1", arch.Len())
+	}
+}
+
+// TestImportEnvironmentFields asserts the new DTO fields flow through ingest:
+// the outdoor 5k fixture returns environment=outdoor with raw==distance, while
+// the no-position treadmill fixture returns environment=indoor and writes zero
+// activity_best_efforts rows (indoor runs are excluded from PR surfaces).
+func TestImportEnvironmentFields(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+
+	out := doImport(t, h, readFixture(t, "typical_5k.tcx"))
+	if out.Code != http.StatusCreated {
+		t.Fatalf("outdoor import status = %d; body=%s", out.Code, out.Body.String())
+	}
+	var outEnv activityEnvelope
+	if err := json.Unmarshal(out.Body.Bytes(), &outEnv); err != nil {
+		t.Fatalf("decode outdoor: %v", err)
+	}
+	if outEnv.Data.Environment != EnvironmentOutdoor {
+		t.Errorf("outdoor environment = %q, want outdoor", outEnv.Data.Environment)
+	}
+	if outEnv.Data.RawDistanceMeters != outEnv.Data.DistanceMeters {
+		t.Errorf("outdoor raw_distance = %.2f, want == distance %.2f", outEnv.Data.RawDistanceMeters, outEnv.Data.DistanceMeters)
+	}
+
+	in := doImport(t, h, readFixture(t, "treadmill_5k.tcx"))
+	if in.Code != http.StatusCreated {
+		t.Fatalf("treadmill import status = %d; body=%s", in.Code, in.Body.String())
+	}
+	var inEnv activityEnvelope
+	if err := json.Unmarshal(in.Body.Bytes(), &inEnv); err != nil {
+		t.Fatalf("decode treadmill: %v", err)
+	}
+	if inEnv.Data.Environment != EnvironmentIndoor {
+		t.Errorf("treadmill environment = %q, want indoor", inEnv.Data.Environment)
+	}
+	if inEnv.Data.RawDistanceMeters != inEnv.Data.DistanceMeters {
+		t.Errorf("treadmill raw_distance = %.2f, want == distance %.2f", inEnv.Data.RawDistanceMeters, inEnv.Data.DistanceMeters)
+	}
+
+	// The indoor run must have written no best-effort rows.
+	var count int
+	if err := repo.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM activity_best_efforts WHERE activity_id = ?`, inEnv.Data.ID).Scan(&count); err != nil {
+		t.Fatalf("count indoor best efforts: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("indoor run wrote %d best-effort rows, want 0", count)
 	}
 }
 
@@ -400,7 +450,7 @@ func TestRenameHandler(t *testing.T) {
 	req := httptest.NewRequest("PATCH", "/activities/"+a.ID, strings.NewReader(`{"name":"Tempo Run"}`))
 	req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", a.ID)
 	w := httptest.NewRecorder()
-	h.rename(w, req)
+	h.patch(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("rename status = %d; body=%s", w.Code, w.Body.String())
 	}
@@ -416,7 +466,7 @@ func TestRenameHandler(t *testing.T) {
 		req := httptest.NewRequest("PATCH", "/activities/"+a.ID, strings.NewReader(body))
 		req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", a.ID)
 		w := httptest.NewRecorder()
-		h.rename(w, req)
+		h.patch(w, req)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("rename %q status = %d, want 400", body, w.Code)
 		}
@@ -425,9 +475,263 @@ func TestRenameHandler(t *testing.T) {
 	req404 := httptest.NewRequest("PATCH", "/activities/nope", strings.NewReader(`{"name":"x"}`))
 	req404 = withParam(req404.WithContext(authctx.WithUserID(req404.Context(), testUserID)), "id", "nope")
 	w404 := httptest.NewRecorder()
-	h.rename(w404, req404)
+	h.patch(w404, req404)
 	if w404.Code != http.StatusNotFound {
 		t.Errorf("rename missing status = %d, want 404", w404.Code)
+	}
+}
+
+// doCalibrate drives the calibrate handler with a JSON body for activityID.
+func doCalibrate(t *testing.T, h *Handler, activityID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/activities/"+activityID+"/calibrate", strings.NewReader(body))
+	req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", activityID)
+	w := httptest.NewRecorder()
+	h.calibrate(w, req)
+	return w
+}
+
+// importedID uploads a fixture and returns the created activity's id.
+func importedID(t *testing.T, h *Handler, fixture string) string {
+	t.Helper()
+	w := doImport(t, h, readFixture(t, fixture))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("import %s status = %d; body=%s", fixture, w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode import %s: %v", fixture, err)
+	}
+	return env.Data.ID
+}
+
+// TestCalibrateHandler_IndoorHappyPath calibrates a treadmill run ~5% shorter
+// and asserts the summary, trackpoints, and raw-distance provenance all stay
+// internally consistent.
+func TestCalibrateHandler_IndoorHappyPath(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "treadmill_5k.tcx")
+
+	// Read the current state to compute a target and to know the original raw.
+	getW := httptest.NewRequest("GET", "/activities/"+id, nil)
+	getW = withParam(getW.WithContext(authctx.WithUserID(getW.Context(), testUserID)), "id", id)
+	gr := httptest.NewRecorder()
+	h.get(gr, getW)
+	var before activityEnvelope
+	if err := json.Unmarshal(gr.Body.Bytes(), &before); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	origDistance := before.Data.DistanceMeters
+	origRaw := before.Data.RawDistanceMeters
+	target := origDistance * 0.95
+
+	w := doCalibrate(t, h, id, fmt.Sprintf(`{"distance_meters":%f}`, target))
+	if w.Code != http.StatusOK {
+		t.Fatalf("calibrate status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if math.Abs(env.Data.DistanceMeters-target) > 0.01 {
+		t.Errorf("distance = %.4f, want %.4f", env.Data.DistanceMeters, target)
+	}
+	// raw_distance is provenance and must be untouched by calibration.
+	if math.Abs(env.Data.RawDistanceMeters-origRaw) > 0.01 {
+		t.Errorf("raw_distance = %.4f, want unchanged %.4f", env.Data.RawDistanceMeters, origRaw)
+	}
+	// avg pace recomputed from the corrected distance.
+	wantPace := float64(env.Data.DurationSeconds) / (target / 1000)
+	if env.Data.AvgPaceSecPerKm == nil || math.Abs(*env.Data.AvgPaceSecPerKm-wantPace) > 0.5 {
+		t.Errorf("avg_pace = %v, want ~%.2f", env.Data.AvgPaceSecPerKm, wantPace)
+	}
+	// last trackpoint's cumulative distance ~= the calibrated total.
+	if n := len(env.Data.Trackpoints); n == 0 {
+		t.Fatal("no trackpoints on calibrate response")
+	} else if last := env.Data.Trackpoints[n-1].DistanceMeters; math.Abs(last-target) > 1.0 {
+		t.Errorf("last trackpoint distance = %.4f, want ~%.4f", last, target)
+	}
+}
+
+// TestCalibrateHandler_Guards covers the handler's rejection paths.
+func TestCalibrateHandler_Guards(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+
+	// Outdoor run cannot be calibrated directly.
+	outdoorID := importedID(t, h, "typical_5k.tcx")
+	w := doCalibrate(t, h, outdoorID, `{"distance_meters":4800}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("outdoor calibrate status = %d, want 400", w.Code)
+	}
+	var ce codeEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &ce)
+	if ce.Code != "outdoor_run_not_calibratable" {
+		t.Errorf("outdoor code = %q, want outdoor_run_not_calibratable", ce.Code)
+	}
+
+	indoorID := importedID(t, h, "treadmill_5k.tcx")
+
+	// distance_meters <= 0.
+	wz := doCalibrate(t, h, indoorID, `{"distance_meters":0}`)
+	var cz codeEnvelope
+	_ = json.Unmarshal(wz.Body.Bytes(), &cz)
+	if wz.Code != http.StatusBadRequest || cz.Code != "invalid_calibration_distance" {
+		t.Errorf("zero-distance status/code = %d/%q, want 400/invalid_calibration_distance", wz.Code, cz.Code)
+	}
+
+	// factor out of [0.5, 2.0] — current is 5000, so 20000 => f=4.
+	wr := doCalibrate(t, h, indoorID, `{"distance_meters":20000}`)
+	var cr codeEnvelope
+	_ = json.Unmarshal(wr.Body.Bytes(), &cr)
+	if wr.Code != http.StatusBadRequest || cr.Code != "calibration_out_of_range" {
+		t.Errorf("out-of-range status/code = %d/%q, want 400/calibration_out_of_range", wr.Code, cr.Code)
+	}
+
+	// Unknown id => 404.
+	w404 := doCalibrate(t, h, "nope", `{"distance_meters":4800}`)
+	if w404.Code != http.StatusNotFound {
+		t.Errorf("unknown id status = %d, want 404", w404.Code)
+	}
+}
+
+// doPatch drives the patch handler with a JSON body for activityID.
+func doPatch(t *testing.T, h *Handler, activityID, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest("PATCH", "/activities/"+activityID, strings.NewReader(body))
+	req = withParam(req.WithContext(authctx.WithUserID(req.Context(), testUserID)), "id", activityID)
+	w := httptest.NewRecorder()
+	h.patch(w, req)
+	return w
+}
+
+// countBestEfforts returns how many activity_best_efforts rows exist for id.
+func countBestEfforts(t *testing.T, repo *SQLiteRepository, id string) int {
+	t.Helper()
+	var n int
+	if err := repo.db.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM activity_best_efforts WHERE activity_id = ?`, id).Scan(&n); err != nil {
+		t.Fatalf("count best efforts: %v", err)
+	}
+	return n
+}
+
+// TestPatchEnvironment_RoundTrip toggles an outdoor run to indoor (deleting its
+// best efforts) and back to outdoor (regenerating them from the archived TCX).
+func TestPatchEnvironment_RoundTrip(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+	id := importedID(t, h, "typical_5k.tcx")
+
+	if got := countBestEfforts(t, repo, id); got == 0 {
+		t.Fatalf("outdoor import wrote %d best efforts, want > 0", got)
+	}
+	original := countBestEfforts(t, repo, id)
+
+	// outdoor -> indoor deletes the rows.
+	w := doPatch(t, h, id, `{"environment":"indoor"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("patch indoor status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	if env.Data.Environment != EnvironmentIndoor {
+		t.Errorf("environment = %q, want indoor", env.Data.Environment)
+	}
+	if got := countBestEfforts(t, repo, id); got != 0 {
+		t.Errorf("after indoor, best efforts = %d, want 0", got)
+	}
+
+	// indoor -> outdoor regenerates from the archived TCX (uncalibrated => same set).
+	w2 := doPatch(t, h, id, `{"environment":"outdoor"}`)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("patch outdoor status = %d; body=%s", w2.Code, w2.Body.String())
+	}
+	if got := countBestEfforts(t, repo, id); got != original {
+		t.Errorf("after outdoor, best efforts = %d, want %d (regenerated)", got, original)
+	}
+}
+
+// TestPatchEnvironment_RegenReflectsCalibration verifies that after an indoor
+// calibration, retagging outdoor regenerates efforts scaled to the calibrated
+// distance (distance/raw), not the raw ingest distance.
+func TestPatchEnvironment_RegenReflectsCalibration(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+	// Start indoor (treadmill fixture: no best efforts at ingest).
+	id := importedID(t, h, "treadmill_5k.tcx")
+	if got := countBestEfforts(t, repo, id); got != 0 {
+		t.Fatalf("indoor import wrote %d best efforts, want 0", got)
+	}
+
+	// Calibrate 10% shorter (5000 -> 4500), well within [0.5, 2.0].
+	wc := doCalibrate(t, h, id, `{"distance_meters":4500}`)
+	if wc.Code != http.StatusOK {
+		t.Fatalf("calibrate status = %d; body=%s", wc.Code, wc.Body.String())
+	}
+
+	// Retag outdoor: efforts regenerate from the raw TCX scaled by 4500/5000.
+	wo := doPatch(t, h, id, `{"environment":"outdoor"}`)
+	if wo.Code != http.StatusOK {
+		t.Fatalf("patch outdoor status = %d; body=%s", wo.Code, wo.Body.String())
+	}
+	if got := countBestEfforts(t, repo, id); got == 0 {
+		t.Fatal("expected regenerated best efforts after outdoor retag, got 0")
+	}
+
+	// Calibrating to 0.9x scales every cumulative distance down by 0.9, so
+	// covering the fixed 1-mile target now spans MORE raw track and the window
+	// takes proportionally longer: calibrated_1mi ~= raw_1mi / 0.9. Compare
+	// against the pristine outdoor fixture (same track, never calibrated) to
+	// prove the effective scale was applied to the regenerated efforts.
+	h2, _, repo2 := newTestHandler(t)
+	rawID := importedID(t, h2, "typical_5k.tcx")
+	var calMi, rawMi float64
+	if err := repo.db.QueryRowContext(context.Background(),
+		`SELECT duration_seconds FROM activity_best_efforts WHERE activity_id = ? AND distance_key = '1mi'`, id).Scan(&calMi); err != nil {
+		t.Fatalf("read calibrated 1mi: %v", err)
+	}
+	if err := repo2.db.QueryRowContext(context.Background(),
+		`SELECT duration_seconds FROM activity_best_efforts WHERE activity_id = ? AND distance_key = '1mi'`, rawID).Scan(&rawMi); err != nil {
+		t.Fatalf("read raw 1mi: %v", err)
+	}
+	wantCal := rawMi / 0.9
+	if math.Abs(calMi-wantCal) > wantCal*0.03 {
+		t.Errorf("calibrated 1mi = %.2f, want ~%.2f (raw %.2f / 0.9 scale)", calMi, wantCal, rawMi)
+	}
+	if !(calMi > rawMi) {
+		t.Errorf("calibrated 1mi = %.2f, want > raw 1mi %.2f (0.9x distance => longer window)", calMi, rawMi)
+	}
+}
+
+// TestPatchValidation covers the both-fields, bad-env, and empty-body paths.
+func TestPatchValidation(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "typical_5k.tcx")
+
+	// Both name and environment applied.
+	w := doPatch(t, h, id, `{"name":"Renamed","environment":"indoor"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("both-fields status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	if env.Data.Name == nil || *env.Data.Name != "Renamed" {
+		t.Errorf("name = %v, want Renamed", env.Data.Name)
+	}
+	if env.Data.Environment != EnvironmentIndoor {
+		t.Errorf("environment = %q, want indoor", env.Data.Environment)
+	}
+
+	// Bad environment.
+	wb := doPatch(t, h, id, `{"environment":"sideways"}`)
+	var cb codeEnvelope
+	_ = json.Unmarshal(wb.Body.Bytes(), &cb)
+	if wb.Code != http.StatusBadRequest || cb.Code != "invalid_environment" {
+		t.Errorf("bad env status/code = %d/%q, want 400/invalid_environment", wb.Code, cb.Code)
+	}
+
+	// Neither field.
+	we := doPatch(t, h, id, `{}`)
+	if we.Code != http.StatusBadRequest {
+		t.Errorf("empty patch status = %d, want 400", we.Code)
 	}
 }
 

@@ -33,6 +33,14 @@ const (
 	listLimitMax     = 100
 )
 
+// Calibration rejects a correction factor outside these bounds to catch a
+// unit-entry mistake (miles typed as meters, etc.). Documented in the SOW;
+// tune if a real calibration legitimately exceeds them.
+const (
+	calibrationMinFactor = 0.5
+	calibrationMaxFactor = 2.0
+)
+
 // Handler exposes the HTTP surface for activities: TCX import, the
 // list/detail/rename/delete CRUD, and the running-specific dashboard
 // metrics tiles.
@@ -130,7 +138,8 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Get("/", h.list)
 		r.Get("/running-metrics", h.runningMetrics)
 		r.Get("/{id}", h.get)
-		r.Patch("/{id}", h.rename)
+		r.Patch("/{id}", h.patch)
+		r.Post("/{id}/calibrate", h.calibrate)
 		r.Delete("/{id}", h.delete)
 	})
 
@@ -184,6 +193,8 @@ type activityDTO struct {
 	Name                *string         `json:"name"`
 	StartTime           time.Time       `json:"start_time"`
 	DistanceMeters      float64         `json:"distance_meters"`
+	RawDistanceMeters   float64         `json:"raw_distance_meters"`
+	Environment         Environment     `json:"environment"`
 	DurationSeconds     int             `json:"duration_seconds"`
 	AvgPaceSecPerKm     *float64        `json:"avg_pace_sec_per_km"`
 	BestPaceSecPerKm    *float64        `json:"best_pace_sec_per_km"`
@@ -234,6 +245,8 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		Name:                a.Name,
 		StartTime:           a.StartTime,
 		DistanceMeters:      a.DistanceMeters,
+		RawDistanceMeters:   a.RawDistanceMeters,
+		Environment:         a.Environment,
 		DurationSeconds:     a.DurationSeconds,
 		AvgPaceSecPerKm:     a.AvgPaceSecPerKm,
 		BestPaceSecPerKm:    a.BestPaceSecPerKm,
@@ -490,64 +503,55 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := toActivityDTO(*a, true)
-
-	// Attach the heart-rate-zone breakdown for running activities when the
-	// engine is wired. Kept out of toActivityDTO (which is pure and shared by
-	// the list/import paths) — only the detail path has the trackpoint stream
-	// and the ctx/userID needed to resolve the reference. A no-HR run yields
-	// ok=false from Compute, leaving the block nil (omitempty drops the key).
-	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
-		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
-		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
-		for _, tp := range a.Trackpoints {
-			tps = append(tps, hrzones.Trackpoint{
-				ElapsedSeconds: tp.ElapsedSeconds,
-				HeartRateBpm:   tp.HeartRateBpm,
-			})
-			if tp.HeartRateBpm != nil {
-				currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
-			}
-		}
-
-		stats, err := h.repo.RecentHRStats(r.Context(), userID, h.hrWindow, a.ID)
-		if err != nil {
-			httpresp.ServerError(w, r.Context(), "recent hr stats", err)
-			return
-		}
-		stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
-
-		ref := h.hrEngine.EstimateReference(stats)
-		if res, ok := h.hrEngine.Compute(ref, tps); ok {
-			zones := make([]heartRateZoneDTO, 0, len(res.Zones))
-			for _, z := range res.Zones {
-				zones = append(zones, heartRateZoneDTO{
-					Zone:        z.Number,
-					Name:        z.Name,
-					LowerPct:    z.LowerPct,
-					UpperPct:    z.UpperPct,
-					MinBpm:      z.MinBpm,
-					MaxBpm:      z.MaxBpm,
-					TimeSeconds: z.TimeSeconds,
-					TimePct:     z.TimePct,
-				})
-			}
-			dto.HeartRateZones = &heartRateZonesDTO{
-				Model:               res.Model,
-				MaxHRReferenceBpm:   res.Reference.MaxHRBpm,
-				ReferenceSource:     res.Reference.Source,
-				ReferenceConfidence: string(res.Reference.Confidence),
-				Calibrating:         res.Calibrating,
-				TotalHRSeconds:      res.TotalHRSeconds,
-				Zones:               zones,
-			}
-		}
+	dto, err := h.buildDetailDTO(r.Context(), userID, *a)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "build activity detail", err)
+		return
 	}
-
 	httpresp.OK(w, "fetched activity", dto)
 }
 
-func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
+// buildDetailDTO renders the full single-activity detail shape: the base DTO
+// with trackpoints plus, for running activities with usable HR when the
+// engine is wired, the heart_rate_zones block. Shared by the detail GET and
+// the calibrate response so both return an identical shape.
+func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity) (activityDTO, error) {
+	dto := toActivityDTO(a, true)
+	if h.hrEngine == nil || a.ActivityType != ActivityRunning {
+		return dto, nil
+	}
+	tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
+	currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
+	for _, tp := range a.Trackpoints {
+		tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
+		if tp.HeartRateBpm != nil {
+			currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
+		}
+	}
+	stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
+	if err != nil {
+		return activityDTO{}, err
+	}
+	stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
+	ref := h.hrEngine.EstimateReference(stats)
+	if res, ok := h.hrEngine.Compute(ref, tps); ok {
+		zones := make([]heartRateZoneDTO, 0, len(res.Zones))
+		for _, z := range res.Zones {
+			zones = append(zones, heartRateZoneDTO{
+				Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
+				MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
+			})
+		}
+		dto.HeartRateZones = &heartRateZonesDTO{
+			Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
+			ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
+			Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
+		}
+	}
+	return dto, nil
+}
+
+func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
@@ -559,31 +563,125 @@ func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name        *string `json:"name"`
+		Environment *string `json:"environment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	name := strings.TrimSpace(req.Name)
-	if name == "" {
-		httpresp.Error(w, http.StatusBadRequest, "name is required")
+	if req.Name == nil && req.Environment == nil {
+		httpresp.Error(w, http.StatusBadRequest, "name or environment is required")
 		return
 	}
-	if len(name) > 200 {
-		httpresp.Error(w, http.StatusBadRequest, "name is too long")
+
+	var updated *Activity
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			httpresp.Error(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		if len(name) > 200 {
+			httpresp.Error(w, http.StatusBadRequest, "name is too long")
+			return
+		}
+		a, err := h.repo.Rename(r.Context(), userID, activityID, name)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "rename activity", err)
+			return
+		}
+		updated = a
+	}
+	if req.Environment != nil {
+		env := Environment(*req.Environment)
+		if !env.Valid() {
+			httpresp.ErrorWithCode(w, http.StatusBadRequest, "environment must be 'outdoor' or 'indoor'", "invalid_environment")
+			return
+		}
+		a, err := h.repo.ChangeEnvironment(r.Context(), userID, activityID, env)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "change environment", err)
+			return
+		}
+		updated = a
+	}
+	httpresp.OK(w, "updated activity", toActivityDTO(*updated, false))
+}
+
+func (h *Handler) calibrate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
-	a, err := h.repo.Rename(r.Context(), userID, activityID, name)
+	activityID := chi.URLParam(r, "id")
+	if activityID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
+		return
+	}
+	var req struct {
+		DistanceMeters float64 `json:"distance_meters"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	a, err := h.repo.Get(r.Context(), userID, activityID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "rename activity", err)
+		httpresp.ServerError(w, r.Context(), "get activity", err)
 		return
 	}
-	httpresp.OK(w, "renamed activity", toActivityDTO(*a, false))
+	if a.ActivityType != ActivityRunning {
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, "only running activities can be calibrated", "not_a_running_activity")
+		return
+	}
+	if a.Environment != EnvironmentIndoor {
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, "tag the run as indoor before calibrating its distance", "outdoor_run_not_calibratable")
+		return
+	}
+	if req.DistanceMeters <= 0 {
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, "distance_meters must be greater than zero", "invalid_calibration_distance")
+		return
+	}
+	if a.DistanceMeters <= 0 {
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, "activity has no distance to calibrate from", "invalid_calibration_distance")
+		return
+	}
+	f := req.DistanceMeters / a.DistanceMeters
+	if f < calibrationMinFactor || f > calibrationMaxFactor {
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, "calibrated distance implies an implausible correction (must be between 0.5x and 2x the current distance)", "calibration_out_of_range")
+		return
+	}
+
+	updated, err := h.repo.Calibrate(r.Context(), userID, activityID, req.DistanceMeters)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "calibrate activity", err)
+		return
+	}
+	dto, err := h.buildDetailDTO(r.Context(), userID, *updated)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "build activity detail", err)
+		return
+	}
+	httpresp.OK(w, "calibrated activity", dto)
 }
 
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {

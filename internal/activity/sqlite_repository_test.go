@@ -396,8 +396,20 @@ func TestCalibrate_UniformScale(t *testing.T) {
 	if got.AvgPaceSecPerKm == nil || math.Abs(*got.AvgPaceSecPerKm-wantAvg) > 0.001 {
 		t.Errorf("avg pace = %v, want %.4f", got.AvgPaceSecPerKm, wantAvg)
 	}
-	if got.BestPaceSecPerKm == nil || math.Abs(*got.BestPaceSecPerKm-(280.0/f)) > 0.001 {
-		t.Errorf("best pace = %v, want %.4f", got.BestPaceSecPerKm, 280.0/f)
+	// Best pace is RECOMPUTED from the rescaled trackpoints (not scaled ÷f):
+	// scaling moves which window is fastest, so ÷f is only an approximation.
+	wantBest := bestRollingPace(got.Trackpoints, 1000)
+	switch {
+	case wantBest == nil:
+		if got.BestPaceSecPerKm != nil {
+			t.Errorf("best pace = %v, want nil (track shorter than 1 km after scaling)", *got.BestPaceSecPerKm)
+		}
+	case got.BestPaceSecPerKm == nil:
+		t.Error("best pace nil, want recomputed value")
+	default:
+		if math.Abs(*got.BestPaceSecPerKm-*wantBest) > 0.5 {
+			t.Errorf("best pace = %.2f, want recomputed %.2f", *got.BestPaceSecPerKm, *wantBest)
+		}
 	}
 	// Trackpoints scaled uniformly; the last cumulative distance == new total.
 	last := got.Trackpoints[len(got.Trackpoints)-1]

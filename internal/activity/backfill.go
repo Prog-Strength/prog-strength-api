@@ -147,7 +147,7 @@ func (r *SQLiteRepository) BackfillBestEffortWindowBounds(ctx context.Context) e
 			skipped++
 			continue
 		}
-		if err := validate(parsed); err != nil {
+		if valErr := validate(parsed); valErr != nil {
 			skipped++
 			continue
 		}
@@ -168,17 +168,20 @@ func (r *SQLiteRepository) BackfillBestEffortWindowBounds(ctx context.Context) e
 			tx.Rollback()
 			return err
 		}
+		defer rowRows.Close()
 		var keys []string
 		for rowRows.Next() {
 			var k string
-			if err := rowRows.Scan(&k); err != nil {
-				rowRows.Close()
+			if scanErr := rowRows.Scan(&k); scanErr != nil {
 				tx.Rollback()
-				return err
+				return scanErr
 			}
 			keys = append(keys, k)
 		}
-		rowRows.Close()
+		if err := rowRows.Err(); err != nil {
+			tx.Rollback()
+			return err
+		}
 
 		for _, k := range keys {
 			e, ok := byKey[k]

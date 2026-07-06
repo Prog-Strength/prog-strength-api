@@ -60,7 +60,7 @@ type EstimateInput struct {
 }
 
 // EstimateResult is the engine's prediction plus provenance for honest UI
-// labelling.
+// labeling.
 type EstimateResult struct {
 	Seconds             float64
 	LowerSeconds        float64

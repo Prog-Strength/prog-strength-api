@@ -2,127 +2,102 @@
 
 ## What it does
 
-Given an athlete's history of running efforts at various distances (plus
-optional demographics), this package predicts the time they would run **if
-they raced a standard distance today** — e.g. a projected marathon time. This
-is a *forward-looking model output* and is deliberately distinct from the
-historical best efforts the activity layer extracts: a best effort is the
-fastest window the athlete has *already* run; an estimate is what the model
-believes they are *currently capable of* at a distance they may never have
-raced. The package is pure and self-contained — it imports nothing from the
-HTTP, DB, or activity layers and reads its clock only from `EstimateInput.Now`,
-so it is trivially unit-testable and back-testable.
+Predicts the time an athlete would run **if they raced a standard distance today**.
+Distinct from logged best efforts (historical fact) and from demographic tables alone
+(forward-looking model output). Pure package — no HTTP/DB imports; `EstimateInput.Now`
+is injected for deterministic back-tests.
 
-## The model (v1: `riegelBayes`)
+Product context: [`running-max-effort-estimates.md`](../../../../prog-strength-docs/sows/running-max-effort-estimates.md).
+v2 refactor: [`running-max-effort-estimation-v2.md`](../../../../prog-strength-docs/sows/running-max-effort-estimation-v2.md).
 
-The engine fits the classic **Riegel power law** `T = a · D^b` — the empirical
-rule that race time scales with distance raised to a fatigue exponent `b`. In
-log-space this is a straight line:
+## Version history
 
-```
-y = β0 + β1·x        where x = ln(distance), y = ln(time)
-```
+| Version | Summary |
+| --- | --- |
+| `1.0.0` | Shipped Bayesian Riegel fit; full best-effort history as evidence; no logged-best floor. |
+| `2.0.0` | Anchor + filtered history evidence; pace/HR quality weights; logged-best floor; age/sex standards; demographics wired from profile. |
 
-so `β1` *is* the fatigue exponent and `β0` sets the athlete's overall level.
-We fit `(β0, β1)` with a **weighted Bayesian linear regression**:
+**Bump `EstimatorVersion` on any behavioral change** (constants, weighting, floor, standards).
 
-- **Prior** `β ~ N(m0, S0)`, diagonal. The slope prior is pinned tight at
-  `β1 = 1.06` (Riegel's exponent, variance `0.0025`, sd `0.05`) — this is the
-  conservatism knob that stops one short effort from implying an absurd
-  long-distance time. The level prior `β0` comes from a demographic standard
-  when available (moderate variance `0.25`); otherwise it is seeded from the
-  fastest effort and given a diffuse variance (`100`) so the data sets the
-  level.
-- **Likelihood**: each usable effort `i` contributes precision
-  `w_i / obsVar`, where `w_i = recencyWeight · qualityWeight` down-weights old
-  and sub-maximal efforts and `obsVar` (sd `0.03`, ~3% log-time noise) is the
-  fixed observation noise.
-- **Posterior**: because the model is conjugate Gaussian, the posterior is
-  closed-form. We accumulate the 2×2 normal equations
-  `A = S0⁻¹ + Σ (w_i/obsVar)·φ_iφ_iᵀ`, `b = S0⁻¹·m0 + Σ (w_i/obsVar)·φ_i·y_i`
-  (with `φ = [1, x]`), **invert the 2×2 by hand**, and get `S_N = A⁻¹`,
-  `m_N = S_N·b`. No solver, no iteration — fully deterministic.
+## The model
 
-Prediction at `x* = ln(target)`: `yhat = m_N·φ*`, predictive variance
-`v = φ*ᵀ S_N φ* + obsVar`. The point estimate is `exp(yhat)` and the band is
-`exp(yhat ± bandZ·√v)`. Because the math lives in log-time, the band is an
-**asymmetric lognormal** interval in seconds — the slow tail is longer, which
-is the correct shape for race times.
+Log-space Riegel power law: `y = β0 + β1·x` with `x = ln(distance)`, `y = ln(time)`.
+Weighted Bayesian linear regression with diagonal prior; conjugate Gaussian posterior
+(closed-form 2×2 invert). Prediction at target distance; asymmetric lognormal band.
+
+v2 keeps this core; changes are **evidence selection**, **weights**, **floor**, and **standards**.
+
+## Evidence policy
+
+Implemented in `activity.assembleAttempts` (handler), helpers in `evidence.go`:
+
+1. **Anchors** — one row per distance: current best from `GetUserRunningBestEfforts`,
+   marked `IsCurrentBestAtDistance`.
+2. **Supporting history** — other rows at the same distance only if within
+   `HistoryMaxGapPct` (3%) of the anchor duration. Stale slower PRs are excluded.
+3. **Cross-distance** — anchors at other distances always participate (quality-weighted).
+
+## Weighting signals
+
+Combined weight: `w_recency · w_distance_ratio · w_pace_ratio · w_hr_intensity · w_anchor_boost`
+
+| Factor | File | Role |
+| --- | --- | --- |
+| Recency | `weighting.go` | `exp(-Δt / tauDays)`, default τ=180d |
+| Distance ratio | `weighting.go` | effort / activity distance (v1 heuristic) |
+| Pace ratio | `weighting.go` | window pace vs activity avg; >1.0 down-weights |
+| HR intensity | handler | fraction of window in zones 4–5; nil → neutral |
+| Anchor boost | `riegel_bayes.go` | ×2.0 on current-best rows |
+
+Tune when estimates feel too conservative (raise anchor boost, tighten history gap) or
+too aggressive (widen gap, strengthen pace/HR down-weight).
+
+## Invariants
+
+**Logged-best floor:** when `LoggedBestSeconds` is set, post-fit
+`Seconds ≤ logged best` and `LowerSeconds ≤ logged best`. Sets
+`FlooredAtLoggedBest` and `Basis = logged_best_floor` when the raw model was slower.
+`RawSeconds` preserves the pre-floor projection for UI footnotes.
+
+A max-effort estimate must never be **slower** than a time the athlete has already run
+at that distance.
+
+## Demographics
+
+`DemographicsFromProfile(height_cm, birthdate, sex, now)` — age from ISO birthdate;
+`demographicLevelPrior` requires **sex**; age refines the 5K reference via embedded
+age-band table (`standards.go`, WMA-style weak priors). Missing fields widen toward data-only fit.
 
 ## Inputs & outputs
 
-**`EstimateInput`**
-| Field | Meaning |
-|---|---|
-| `TargetDistanceKey` / `TargetDistanceMeters` | which standard distance to predict |
-| `Attempts` | efforts at **all** distances (not just the target — multi-distance evidence is what fits the slope) |
-| `Demographics` | optional age/sex/weight/height; missing fields widen the prior |
-| `Now` | injected clock for deterministic recency weighting and back-testing |
+See `estimator.go` for `Attempt`, `EstimateInput`, `EstimateResult`. Notable v2 fields:
+`ActivityAvgPaceSecPerKm`, window bounds, `HRZoneHighIntensityPct`, `IsCurrentBestAtDistance`,
+`LoggedBestSeconds`, `RawSeconds`, `FlooredAtLoggedBest`.
 
-**`Attempt`** carries `DistanceMeters`, `DurationSeconds`, `AchievedAt`, and
-`ActivityDistanceMeters` (the total distance of the run the effort came from;
-`0` = unknown). An attempt is *usable* only if duration and distance are both
-positive.
+## Evaluation fixtures
 
-**`EstimateResult`**
-| Field | Meaning |
-|---|---|
-| `Seconds` | point prediction for the target |
-| `LowerSeconds` / `UpperSeconds` | asymmetric ~68% (one σ) band |
-| `Basis` | which evidence regime produced it (below) |
-| `Confidence` | `low` / `medium` / `high`, derived from band width |
-| `NPoints` / `NDistances` | usable effort count and distinct-distance count |
-| `Version` | `EstimatorVersion`, stamped on every result |
+```bash
+go test ./internal/running/estimate/...
+```
 
-**Basis states** (priority order):
-- `insufficient_data` — no usable efforts and no demographic anchor (`Seconds = 0`).
-- `demographic_prior` — no efforts, but age+sex give a population standard.
-- `single_effort` — usable efforts all at one distance (slope leans on the prior).
-- `fitted_curve` — usable efforts span ≥2 distances (slope is genuinely fit).
-
-**Confidence** is derived from the relative half-width
-`h = (Upper − Lower) / (2·Seconds)`: `h ≤ 0.04` → `high`, `h ≤ 0.10` →
-`medium`, else `low`.
-
-## Assumptions & known limitations
-
-- **Best efforts may be sub-maximal.** An effort is the fastest *window* inside
-  a run, which is often not an all-out race. We can only partially correct for
-  this (see quality heuristic).
-- **Quality heuristic is distance-ratio only (v1).** `qualityWeight` infers
-  "was this a real race effort?" purely from `effort / activity` distance. A
-  *pace-ratio* refinement (was the window actually run hard relative to the rest
-  of the run?) is a planned fast follow.
-- **Demographics are weak today.** The standards table is keyed on age + sex,
-  but those aren't persisted yet — only height is available. So the
-  `demographic_prior` path runs on a deliberately minimal **placeholder** table
-  (`standards.go`) whose only job is to make the path real and testable. Do not
-  read clinical meaning into its numbers.
-- **Fixed observation noise.** `obsVar` is a single constant; the model does
-  not yet learn per-athlete or per-distance noise.
+| Test | Asserts |
+| --- | --- |
+| `TestFixture_Owner5KMismatch` | 5K estimate ≤ logged 23:06 with mixed history |
+| `TestFixture_MileFloor` | Mile estimate ≤ logged 7:20 |
+| `TestLoggedBestFloor_Clamp` | Floor math |
+| `TestIncludeSupportingHistory_ExcludesStalePRs` | 3% gap rule |
 
 ## How to iterate
 
-The whole model is a handful of named constants. **Any change to these — or to
-the standards table, weighting, or basis/confidence logic — is a behavioral
-change and requires bumping `EstimatorVersion`** (`estimator.go`), because that
-string is stamped on cached/labeled output downstream.
+| Constant | Default | Role |
+| --- | --- | --- |
+| `HistoryMaxGapPct` | 0.03 | supporting history inclusion |
+| `anchorBoost` | 2.0 | anchor weight multiplier |
+| `priorBeta1Mean` | 1.06 | Riegel exponent prior |
+| `priorBeta1Var` | 0.0025 | slope tightness |
+| `tauDays` | 180 | recency |
+| `paceRatioKnee` | 1.15 | pace down-weight start |
+| `hrIntensityFullPct` | 0.25 | HR fraction for full weight |
 
-| Constant | File | Role |
-|---|---|---|
-| `priorBeta1Mean` (1.06) | `riegel_bayes.go` | Riegel fatigue exponent; the conservatism knob |
-| `priorBeta1Var` (0.0025) | `riegel_bayes.go` | slope prior tightness (sd 0.05) — how much multi-distance evidence it takes to move the exponent |
-| `priorBeta0Var` (0.25) | `riegel_bayes.go` | level prior variance when a demographic standard anchors it |
-| `diffuseBeta0Var` (100.0) | `riegel_bayes.go` | level prior variance when there is no standard (v1 default) |
-| `tauDays` (180.0) | `riegel_bayes.go` | recency e-folding constant (weight = 1/e at this age) |
-| `obsVar` (0.0009) | `riegel_bayes.go` | observation noise in log-time (sd 0.03 ≈ ~3%) |
-| `bandZ` (1.0) | `riegel_bayes.go` | band half-width in σ (~68%) |
-| `qualityFloor` (0.25) | `weighting.go` | minimum weight for a tiny window of a long run |
-| `qualityKnee` (0.9) | `weighting.go` | effort/activity ratio at/above which an effort earns full weight |
-
-**To add a demographic factor**, extend `demographicLevelPrior` in
-`standards.go`: it returns `(m_beta0, variance, ok)` and currently keys on
-age + sex with an optional height refinement. Replace the placeholder table
-with calibrated standards (and widen the `ok` condition as new demographic
-fields are persisted). Keep the level conversion `β0 = ln(T_std) − β1·ln(D_ref)`
-so the standard stays consistent with the model's slope.
+Checklist before merge: update fixtures, bump `EstimatorVersion`, run
+`go test ./internal/running/estimate/...`, spot-check handler tests.

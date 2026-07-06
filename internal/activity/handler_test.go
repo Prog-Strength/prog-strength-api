@@ -1047,7 +1047,7 @@ func TestRunningMaxEffort_SummaryHappyPath(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if env.Data.EstimatorVersion != "1.0.0" {
+	if env.Data.EstimatorVersion != "2.0.0" {
 		t.Errorf("estimator_version = %q, want 1.0.0", env.Data.EstimatorVersion)
 	}
 	if len(env.Data.Distances) != 6 {
@@ -1152,7 +1152,7 @@ func TestRunningMaxEffortDetail_HappyPath(t *testing.T) {
 	if env.Data.Estimate == nil {
 		t.Fatalf("expected non-null estimate block; body=%s", w.Body.String())
 	}
-	if env.Data.EstimatorVersion != "1.0.0" {
+	if env.Data.EstimatorVersion != "2.0.0" {
 		t.Errorf("estimator_version = %q, want 1.0.0", env.Data.EstimatorVersion)
 	}
 	// estimate_history has >= 1 point and is ascending by as_of.

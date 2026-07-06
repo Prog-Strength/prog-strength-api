@@ -294,7 +294,7 @@ func fittedExponent(t *testing.T, in EstimateInput) float64 {
 		if a.DurationSeconds <= 0 || a.DistanceMeters <= 0 {
 			continue
 		}
-		w := recencyWeight(in.Now, a.AchievedAt) * qualityWeight(a.DistanceMeters, a.ActivityDistanceMeters)
+		w := attemptWeight(in.Now, a)
 		used = append(used, usableAttempt{x: math.Log(a.DistanceMeters), y: math.Log(a.DurationSeconds), weight: w})
 	}
 	dm0, _, ok := demographicLevelPrior(in.Demographics)

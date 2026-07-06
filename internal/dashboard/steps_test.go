@@ -35,6 +35,7 @@ func TestBuildSteps_WindowAvgAndToday(t *testing.T) {
 	got := buildSteps(entries, steps.Goal{}, now, denver)
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	wantSpark := []int{1000, 0, 0, 2000, 0, 0, 4000}
 	if !reflect.DeepEqual(got.DailySpark, wantSpark) {
@@ -59,6 +60,7 @@ func TestBuildSteps_NoTodayEntry(t *testing.T) {
 	got := buildSteps(entries, steps.Goal{}, now, denver)
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	if got.Today != 0 {
 		t.Errorf("today = %d, want 0", got.Today)

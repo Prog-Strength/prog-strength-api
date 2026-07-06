@@ -234,6 +234,9 @@ func New(cfg config.Config) (*Server, error) {
 	if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityBestEfforts(context.Background()); err != nil {
 		return nil, err
 	}
+	if err := activityRepo.(*activity.SQLiteRepository).BackfillBestEffortWindowBounds(context.Background()); err != nil {
+		return nil, err
+	}
 
 	// Seed the timeline feed index from existing workouts, runs, PR
 	// events, and best efforts. Gated on timeline_post being empty, so it
@@ -465,6 +468,7 @@ func New(cfg config.Config) (*Server, error) {
 			ZoneNames:              cfg.HRZones.ZoneNames,
 		})
 		activityHandler.SetHRZonesEngine(hrEngine, time.Duration(cfg.HRZones.RecencyWindowDays)*24*time.Hour)
+		activityHandler.SetDemographicsLoader(user.EstimateDemographicsLoader{Repo: userRepo})
 		activityHandler.Mount(r)
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the

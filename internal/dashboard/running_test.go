@@ -58,6 +58,7 @@ func TestBuildRunning_PassThroughAndLatest(t *testing.T) {
 	got := buildRunning(m, runs, now, denver)
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	if got.CurrentWeek.DistanceMeters != 21214.5 || got.CurrentWeek.RunCount != 3 {
 		t.Errorf("current week mismatch: %+v", got.CurrentWeek)

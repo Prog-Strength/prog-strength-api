@@ -53,6 +53,7 @@ func TestBuildLifting_CurrentWeek(t *testing.T) {
 	got := buildLifting(workouts, 4, headline, "lb", now, denver)
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	if got.CurrentWeek.Sessions != 3 {
 		t.Errorf("sessions = %d, want 3", got.CurrentWeek.Sessions)

@@ -13,6 +13,8 @@ const (
 	HeightCmMin       = 50.0
 	HeightCmMax       = 250.0
 	BioMaxLen         = 160
+	MinEstimateAge    = 10
+	MaxEstimateAge    = 100
 )
 
 // User is an authenticated account. Authentication is OAuth-only; there are
@@ -32,6 +34,10 @@ type User struct {
 	DistanceUnit DistanceUnit `json:"distance_unit"`
 	// HeightCm is an optional static body metric in canonical centimeters.
 	HeightCm *float64 `json:"height_cm"`
+	// Birthdate is optional ISO YYYY-MM-DD for age-aware running estimates.
+	Birthdate *string `json:"birthdate"`
+	// Sex is optional ("male" | "female") for running estimate priors.
+	Sex *string `json:"sex"`
 	// Bio is an optional short, plain-text blurb shown on the public profile.
 	// nil means unset; validated (<=160 runes) at the write edge.
 	Bio *string `json:"bio"`
@@ -77,6 +83,14 @@ func (u *User) Validate() error {
 	}
 	if u.Bio != nil && utf8.RuneCountInString(*u.Bio) > BioMaxLen {
 		return ErrBioTooLong
+	}
+	if u.Birthdate != nil {
+		if err := validateBirthdate(*u.Birthdate); err != nil {
+			return err
+		}
+	}
+	if u.Sex != nil && *u.Sex != "male" && *u.Sex != "female" {
+		return ErrInvalidSex
 	}
 	if u.Timezone == "" {
 		return ErrInvalidTimezone

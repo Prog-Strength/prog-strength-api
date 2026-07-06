@@ -148,15 +148,15 @@ type RunningBestEffort struct {
 	ActivityStartTime time.Time
 }
 
-// BestEffortPoint is one point in a single distance's progression series:
-// the time achieved by one activity and that activity's start time.
+// BestEffortPoint is one point in a single distance's progression series.
 type BestEffortPoint struct {
-	ActivityID        string
-	ActivityStartTime time.Time
-	DurationSeconds   float64
-	// ActivityDistanceMeters is the total distance of the source activity,
-	// used by the max-effort estimator's quality weight.
-	ActivityDistanceMeters float64
+	ActivityID              string
+	ActivityStartTime       time.Time
+	DurationSeconds         float64
+	ActivityDistanceMeters  float64
+	ActivityAvgPaceSecPerKm *float64
+	WindowStartElapsed      *float64
+	WindowEndElapsed        *float64
 }
 
 // PeriodStat is a distance + activity-count rollup over some window of

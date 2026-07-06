@@ -35,6 +35,7 @@ func TestBuildBodyweight_CurrentIsNewestRegardlessOfOrder(t *testing.T) {
 	got := buildBodyweight(entries, bodyweight.Goal{})
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	if got.Current != 190 {
 		t.Errorf("current = %v, want 190 (newest)", got.Current)

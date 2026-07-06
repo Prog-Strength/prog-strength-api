@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"fmt"
 	"log"
 )
 
@@ -95,6 +96,113 @@ func (r *SQLiteRepository) BackfillActivityBestEfforts(ctx context.Context) erro
 	}
 
 	log.Printf("backfill best efforts: complete processed=%d skipped=%d total=%d", processed, skipped, len(targets))
+	return nil
+}
+
+// BackfillBestEffortWindowBounds populates window_start/end columns for rows
+// that predate the v2 migration. Idempotent: only touches rows with NULL
+// window bounds. Re-parses archived TCX at full resolution.
+func (r *SQLiteRepository) BackfillBestEffortWindowBounds(ctx context.Context) error {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT e.activity_id, a.tcx_s3_key, a.user_id
+		FROM activity_best_efforts e
+		JOIN activities a ON a.id = e.activity_id
+		WHERE e.window_start_elapsed_seconds IS NULL
+		GROUP BY e.activity_id
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type target struct {
+		id, s3Key, userID string
+	}
+	var targets []target
+	for rows.Next() {
+		var t target
+		if err := rows.Scan(&t.id, &t.s3Key, &t.userID); err != nil {
+			return err
+		}
+		targets = append(targets, t)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+
+	var updated, skipped int
+	for _, t := range targets {
+		body, err := r.archiver.Get(ctx, t.s3Key)
+		if err != nil {
+			log.Printf("backfill best effort windows: skip activity_id=%s: fetch tcx: %v", t.id, err)
+			skipped++
+			continue
+		}
+		parsed, err := parseTCX(body)
+		if err != nil {
+			log.Printf("backfill best effort windows: skip activity_id=%s: parse: %v", t.id, err)
+			skipped++
+			continue
+		}
+		if valErr := validate(parsed); valErr != nil {
+			skipped++
+			continue
+		}
+		efforts := bestEfforts(parsed.Trackpoints, StandardDistances)
+		byKey := make(map[string]ActivityBestEffort, len(efforts))
+		for _, e := range efforts {
+			byKey[e.DistanceKey] = e
+		}
+
+		tx, err := r.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		rowRows, err := tx.QueryContext(ctx, `
+			SELECT distance_key FROM activity_best_efforts WHERE activity_id = ?
+		`, t.id)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		defer rowRows.Close()
+		var keys []string
+		for rowRows.Next() {
+			var k string
+			if scanErr := rowRows.Scan(&k); scanErr != nil {
+				tx.Rollback()
+				return scanErr
+			}
+			keys = append(keys, k)
+		}
+		if err := rowRows.Err(); err != nil {
+			tx.Rollback()
+			return err
+		}
+
+		for _, k := range keys {
+			e, ok := byKey[k]
+			if !ok {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE activity_best_efforts
+				SET window_start_elapsed_seconds = ?, window_end_elapsed_seconds = ?
+				WHERE activity_id = ? AND distance_key = ?
+			`, e.WindowStartElapsedSeconds, e.WindowEndElapsedSeconds, t.id, k); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("update windows activity_id=%s: %w", t.id, err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		updated++
+	}
+	log.Printf("backfill best effort windows: complete updated=%d skipped=%d total=%d", updated, skipped, len(targets))
 	return nil
 }
 

@@ -148,15 +148,15 @@ func insertBestEffortsTx(ctx context.Context, tx *sql.Tx, activityID string, eff
 		return nil
 	}
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds)
-		VALUES (?, ?, ?)
+		INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds, window_start_elapsed_seconds, window_end_elapsed_seconds)
+		VALUES (?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, e := range efforts {
-		if _, err := stmt.ExecContext(ctx, activityID, e.DistanceKey, e.DurationSeconds); err != nil {
+		if _, err := stmt.ExecContext(ctx, activityID, e.DistanceKey, e.DurationSeconds, e.WindowStartElapsedSeconds, e.WindowEndElapsedSeconds); err != nil {
 			return err
 		}
 	}
@@ -206,7 +206,8 @@ func (r *SQLiteRepository) GetUserRunningBestEfforts(ctx context.Context, userID
 // for the user's live running activities, ascending by start_time.
 func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.activity_id, a.start_time, e.duration_seconds, a.distance_meters
+		SELECT e.activity_id, a.start_time, e.duration_seconds, a.distance_meters,
+		       a.avg_pace_sec_per_km, e.window_start_elapsed_seconds, e.window_end_elapsed_seconds
 		FROM activity_best_efforts e
 		JOIN activities a ON a.id = e.activity_id
 		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.activity_type = ? AND e.distance_key = ?
@@ -220,7 +221,8 @@ func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, user
 	var out []BestEffortPoint
 	for rows.Next() {
 		var p BestEffortPoint
-		if err := rows.Scan(&p.ActivityID, &p.ActivityStartTime, &p.DurationSeconds, &p.ActivityDistanceMeters); err != nil {
+		if err := rows.Scan(&p.ActivityID, &p.ActivityStartTime, &p.DurationSeconds, &p.ActivityDistanceMeters,
+			&p.ActivityAvgPaceSecPerKm, &p.WindowStartElapsed, &p.WindowEndElapsed); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

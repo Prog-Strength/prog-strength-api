@@ -15,67 +15,66 @@ import "time"
 // EstimatorVersion is stamped onto every result so output is traceable and
 // caches/labels can react to model changes. Bump on any behavioral change
 // (see README "How to iterate").
-const EstimatorVersion = "1.0.0"
+const EstimatorVersion = "2.0.0"
 
-// Estimator is the engine seam. v1 is riegelBayes; callers depend on this
+// Estimator is the engine seam. v2 is riegelBayes; callers depend on this
 // interface so a future model can be swapped in without touching call sites.
 type Estimator interface {
 	Estimate(in EstimateInput) EstimateResult
 }
 
 // Attempt is one usable max-effort data point: a (distance, time) pair the
-// athlete actually produced, plus the provenance the quality heuristic needs.
-// These come from the activity layer's best-effort sweep, but this package
-// neither knows nor cares about that — it sees only the plain numbers.
+// athlete actually produced, plus provenance the quality heuristics need.
 type Attempt struct {
-	DistanceKey            string    // source distance of the effort ("5k", ...)
-	DistanceMeters         float64   // distance the effort covered
-	DurationSeconds        float64   // time taken over that distance
-	AchievedAt             time.Time // when the effort happened (drives recency weight)
-	ActivityDistanceMeters float64   // total distance of the run the effort came from (0 = unknown)
+	DistanceKey             string
+	DistanceMeters          float64
+	DurationSeconds         float64
+	AchievedAt              time.Time
+	ActivityDistanceMeters  float64 // total distance of the source run (0 = unknown)
+	ActivityAvgPaceSecPerKm *float64
+	WindowStartElapsed      *float64 // seconds into the source activity; nil = unknown
+	WindowEndElapsed        *float64
+	HRZoneHighIntensityPct  *float64 // fraction of window time in zones 4–5; nil = unknown
+	IsCurrentBestAtDistance bool     // true for the per-distance anchor row
 }
 
 // Demographics is the optional athlete context that anchors the prior level
-// when there is little or no effort history. Every field is optional; a
-// missing field simply widens the prior (the model leans more on data).
-type Demographics struct { // every field optional
-	Age      *int     // years
-	Sex      *string  // "male" | "female"
-	WeightKg *float64 // body mass
-	HeightCm *float64 // stature
+// when there is little or no effort history. Every field is optional.
+type Demographics struct {
+	Age      *int
+	Sex      *string // "male" | "female"
+	WeightKg *float64
+	HeightCm *float64
 }
 
-// EstimateInput is the full, self-contained request to the engine. Attempts
-// carries efforts at ALL distances (not just the target) because the curve
-// fit gets its power from multi-distance evidence. Now is injected rather
-// than read from the clock so recency weighting is deterministic and the
-// engine can be replayed against historical snapshots for back-testing.
+// EstimateInput is the full, self-contained request to the engine.
 type EstimateInput struct {
-	TargetDistanceKey    string       // which standard distance to predict ("marathon", ...)
-	TargetDistanceMeters float64      // the target distance in meters
-	Attempts             []Attempt    // ALL distances, not just the target
-	Demographics         Demographics // optional; missing fields widen the prior
-	Now                  time.Time    // injected for deterministic recency + back-testing
+	TargetDistanceKey    string
+	TargetDistanceMeters float64
+	Attempts             []Attempt
+	Demographics         Demographics
+	Now                  time.Time
+	// LoggedBestSeconds is the user's current logged best at the target
+	// distance, when one exists. Drives the logged-best floor post-process.
+	LoggedBestSeconds *float64
 }
 
-// EstimateResult is the engine's prediction plus enough provenance for a UI
-// to label it honestly. The band is asymmetric because the model lives in
-// log-time: a symmetric ±σ in log-space maps to an asymmetric interval in
-// seconds (the slow tail is longer), which is the correct shape for race
-// times. Basis and Confidence let the caller communicate how much to trust
-// the number without re-deriving the math.
+// EstimateResult is the engine's prediction plus provenance for honest UI
+// labelling.
 type EstimateResult struct {
-	Seconds      float64 // point prediction for the target distance
-	LowerSeconds float64 // confidence band (asymmetric — lognormal)
-	UpperSeconds float64 // confidence band upper bound
-	Basis        string  // "insufficient_data" | "demographic_prior" | "single_effort" | "fitted_curve"
-	Confidence   string  // "low" | "medium" | "high" (derived from band width)
-	NPoints      int     // count of usable efforts that fed the fit
-	NDistances   int     // distinct distances among those efforts
-	Version      string  // = EstimatorVersion
+	Seconds             float64
+	LowerSeconds        float64
+	UpperSeconds        float64
+	RawSeconds          float64 // pre-floor model output; 0 when insufficient_data
+	FlooredAtLoggedBest bool
+	Basis               string // insufficient_data | demographic_prior | single_effort | fitted_curve | logged_best_floor
+	Confidence          string // low | medium | high
+	NPoints             int
+	NDistances          int
+	Version             string
 }
 
-// NewEstimator returns the current production model (v1: riegelBayes).
+// NewEstimator returns the current production model (v2: riegelBayes).
 func NewEstimator() Estimator {
 	return riegelBayes{}
 }

@@ -34,6 +34,10 @@ var StandardDistances = []StandardDistance{
 type ActivityBestEffort struct {
 	DistanceKey     string
 	DurationSeconds float64
+	// Window bounds are elapsed seconds from the first trackpoint's time,
+	// matching activity trackpoint elapsed_seconds semantics.
+	WindowStartElapsedSeconds *float64
+	WindowEndElapsedSeconds   *float64
 }
 
 // bestEfforts runs a distance-anchored sweep over the raw trackpoint
@@ -81,6 +85,8 @@ func bestEfforts(tps []parsedTrackpoint, targets []StandardDistance) []ActivityB
 		}
 
 		best := math.Inf(1)
+		var bestStart, bestEnd float64
+		baseTime := tps[0].Time
 		// right brackets the crossing of the current left anchor: the
 		// smallest index with tps[right].dist >= left.dist + T. It only ever
 		// advances, so the inner loop is amortized O(1) across the sweep.
@@ -115,6 +121,8 @@ func bestEfforts(tps []parsedTrackpoint, targets []StandardDistance) []ActivityB
 			windowS := endT.Sub(tps[left].Time).Seconds()
 			if windowS < best {
 				best = windowS
+				bestStart = tps[left].Time.Sub(baseTime).Seconds()
+				bestEnd = endT.Sub(baseTime).Seconds()
 			}
 		}
 
@@ -124,7 +132,13 @@ func bestEfforts(tps []parsedTrackpoint, targets []StandardDistance) []ActivityB
 			// leave best unset. Omit rather than emit +Inf.
 			continue
 		}
-		out = append(out, ActivityBestEffort{DistanceKey: target.Key, DurationSeconds: best})
+		start, end := bestStart, bestEnd
+		out = append(out, ActivityBestEffort{
+			DistanceKey:               target.Key,
+			DurationSeconds:           best,
+			WindowStartElapsedSeconds: &start,
+			WindowEndElapsedSeconds:   &end,
+		})
 	}
 	return out
 }

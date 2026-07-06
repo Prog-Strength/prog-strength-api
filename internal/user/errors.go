@@ -13,6 +13,8 @@ var (
 	ErrDisplayNameTooLong    = fmt.Errorf("user: display name exceeds %d characters", 60)
 	ErrHeightOutOfRange      = fmt.Errorf("user: height must be between %g and %g cm", 50.0, 250.0)
 	ErrBioTooLong            = fmt.Errorf("user: bio exceeds %d characters", 160)
+	ErrInvalidBirthdate      = errors.New("user: birthdate must be YYYY-MM-DD and imply age 10–100")
+	ErrInvalidSex            = errors.New("user: sex must be male or female")
 	ErrInvalidTimezone       = errors.New("user: timezone must be a valid IANA timezone")
 	ErrInvalidCalendarDetail = errors.New("user: calendar_default_detail must be time_block or full_agenda")
 	ErrNotFound              = errors.New("user: not found")

@@ -138,6 +138,12 @@ func (e *Engine) classify(value float64, maxHR int) int {
 	return len(e.cfg.ZoneUpperBounds)
 }
 
+// ZoneForBPM returns the 0-indexed zone for bpm at ref. Exported for callers
+// that need single-sample classification (e.g. max-effort window enrichment).
+func (e *Engine) ZoneForBPM(ref Reference, bpm int) int {
+	return e.classify(float64(bpm), ref.MaxHRBpm)
+}
+
 // EstimateReference resolves a max-HR reference along a cold-start -> calibrated
 // ladder. As HR history accumulates the source shifts from a population default
 // to the run's own p99 and finally to the p99 over recent runs, with confidence

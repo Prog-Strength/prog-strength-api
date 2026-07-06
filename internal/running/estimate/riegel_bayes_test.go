@@ -83,7 +83,7 @@ func TestDemographicLevelPrior_RequiresAgeAndSex(t *testing.T) {
 	}{
 		{"empty", Demographics{}, false},
 		{"age only", Demographics{Age: intPtr(30)}, false},
-		{"sex only", Demographics{Sex: strPtr("male")}, false},
+		{"sex only", Demographics{Sex: strPtr("male")}, true},
 		{"height only", Demographics{HeightCm: f64Ptr(180)}, false},
 		{"age+sex", Demographics{Age: intPtr(30), Sex: strPtr("male")}, true},
 		{"age+sex+height", Demographics{Age: intPtr(30), Sex: strPtr("male"), HeightCm: f64Ptr(180)}, true},
@@ -101,7 +101,7 @@ func TestDemographicLevelPrior_RequiresAgeAndSex(t *testing.T) {
 
 func TestDemographicLevelPrior_RecoversStandardTime(t *testing.T) {
 	// With age==refAgeYears and male sex the standard is exactly the base 5k.
-	d := Demographics{Age: intPtr(int(refAgeYears)), Sex: strPtr("male")}
+	d := Demographics{Age: intPtr(30), Sex: strPtr("male")}
 	mBeta0, _, ok := demographicLevelPrior(d)
 	if !ok {
 		t.Fatal("expected ok=true")
@@ -109,12 +109,13 @@ func TestDemographicLevelPrior_RecoversStandardTime(t *testing.T) {
 	// Reconstruct the implied 5k time from the prior line and check it matches.
 	xRef := math.Log(refDistanceMeters)
 	tStd := math.Exp(mBeta0 + priorBeta1Mean*xRef)
-	if math.Abs(tStd-baseMale5kSeconds) > 1e-6 {
-		t.Errorf("recovered 5k standard = %.3f, want %.3f", tStd, baseMale5kSeconds)
+	wantMale := male5kForAge(30)
+	if math.Abs(tStd-wantMale) > 1e-6 {
+		t.Errorf("recovered 5k standard = %.3f, want %.3f", tStd, wantMale)
 	}
 
 	// Female standard should imply a slower (larger) time than male.
-	mFemale, _, _ := demographicLevelPrior(Demographics{Age: intPtr(int(refAgeYears)), Sex: strPtr("female")})
+	mFemale, _, _ := demographicLevelPrior(Demographics{Age: intPtr(30), Sex: strPtr("female")})
 	tFemale := math.Exp(mFemale + priorBeta1Mean*xRef)
 	if !(tFemale > tStd) {
 		t.Errorf("female standard %.1f not slower than male %.1f", tFemale, tStd)

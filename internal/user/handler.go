@@ -59,6 +59,8 @@ type meResponse struct {
 	WeightUnit            string   `json:"weight_unit"`
 	DistanceUnit          string   `json:"distance_unit"`
 	HeightCm              *float64 `json:"height_cm"`
+	Birthdate             *string  `json:"birthdate"`
+	Sex                   *string  `json:"sex"`
 	Bio                   *string  `json:"bio"`
 	Timezone              string   `json:"timezone"`
 	CalendarDefaultDetail string   `json:"calendar_default_detail"`
@@ -78,6 +80,8 @@ func (h *Handler) resolveMe(r *http.Request, u *User) meResponse {
 		WeightUnit:            string(u.WeightUnit),
 		DistanceUnit:          string(u.DistanceUnit),
 		HeightCm:              u.HeightCm,
+		Birthdate:             u.Birthdate,
+		Sex:                   u.Sex,
 		Bio:                   u.Bio,
 		Timezone:              u.Timezone,
 		CalendarDefaultDetail: u.CalendarDefaultDetail,
@@ -115,6 +119,8 @@ type updateMeRequest struct {
 	WeightUnit            *WeightUnit   `json:"weight_unit"`
 	DistanceUnit          *DistanceUnit `json:"distance_unit"`
 	HeightCm              *float64      `json:"height_cm"`
+	Birthdate             *string       `json:"birthdate"`
+	Sex                   *string       `json:"sex"`
 	Bio                   *string       `json:"bio"`
 	Timezone              *string       `json:"timezone"`
 	CalendarDefaultDetail *string       `json:"calendar_default_detail"`
@@ -165,6 +171,20 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	if req.HeightCm != nil {
 		u.HeightCm = req.HeightCm
 	}
+	if req.Birthdate != nil {
+		if *req.Birthdate == "" {
+			u.Birthdate = nil
+		} else {
+			u.Birthdate = req.Birthdate
+		}
+	}
+	if req.Sex != nil {
+		if *req.Sex == "" {
+			u.Sex = nil
+		} else {
+			u.Sex = req.Sex
+		}
+	}
 	// Bio uses clear-on-empty semantics: a provided empty string clears the bio
 	// to nil (NULL), a provided non-empty value sets it, and absence leaves it.
 	if req.Bio != nil {
@@ -189,6 +209,8 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ErrDisplayNameRequired) ||
 			errors.Is(err, ErrDisplayNameTooLong) ||
 			errors.Is(err, ErrHeightOutOfRange) ||
+			errors.Is(err, ErrInvalidBirthdate) ||
+			errors.Is(err, ErrInvalidSex) ||
 			errors.Is(err, ErrBioTooLong) ||
 			errors.Is(err, ErrInvalidTimezone) ||
 			errors.Is(err, ErrInvalidCalendarDetail) ||

@@ -132,6 +132,7 @@ func TestAggregateStrength_EmptyIsNonNil(t *testing.T) {
 	got := aggregateStrength(nil, nil, nil, "lb", loc)
 	if got == nil {
 		t.Fatal("empty strength must be non-nil")
+		return
 	}
 	if got.SessionCount != 0 || got.ByMuscleGroup == nil || got.Sessions == nil || got.HeadlinePRs == nil {
 		t.Fatalf("empty strength = %+v", got)
@@ -180,6 +181,7 @@ func TestAggregateRunning_NilPaceWhenNoDistance(t *testing.T) {
 	got := aggregateRunning(nil, nil, start, end, loc)
 	if got == nil {
 		t.Fatal("running must be non-nil")
+		return
 	}
 	if got.AvgPaceSecPerKm != nil {
 		t.Fatalf("avg pace should be nil with no distance, got %v", *got.AvgPaceSecPerKm)

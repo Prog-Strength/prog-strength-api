@@ -24,6 +24,7 @@ func TestBuildNutrition_TodayAndNoGoals(t *testing.T) {
 	got := buildNutrition(today, nutrition.MacroGoals{})
 	if got == nil {
 		t.Fatal("expected section")
+		return
 	}
 	if got.Today.Calories != 2100.5 || got.Today.ProteinG != 150 ||
 		got.Today.FatG != 70 || got.Today.CarbsG != 200 {

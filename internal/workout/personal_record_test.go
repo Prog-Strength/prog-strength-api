@@ -68,6 +68,7 @@ func TestRecomputePR_FirstSetIsPR(t *testing.T) {
 	pr, events := RecomputePersonalRecord(snaps, "barbell-bench-press")
 	if pr == nil {
 		t.Fatal("expected a PR, got nil")
+		return
 	}
 	if pr.Weight != 185 || pr.Reps != 5 {
 		t.Errorf("PR weight/reps: got %v×%d, want 185×5", pr.Weight, pr.Reps)
@@ -173,6 +174,7 @@ func TestRecomputePR_MixedUnits_ConvertOnCompare(t *testing.T) {
 	pr, events := RecomputePersonalRecord(snaps, "barbell-bench-press")
 	if pr == nil {
 		t.Fatal("expected a PR")
+		return
 	}
 	if pr.Unit != user.WeightUnitKilograms || pr.Weight != 100 {
 		t.Errorf("PR should be stored in the candidate's original unit; got %v %v", pr.Weight, pr.Unit)

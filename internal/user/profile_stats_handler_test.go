@@ -172,6 +172,7 @@ func TestBucketByWeek_TimezoneLocalWeek(t *testing.T) {
 	}
 	if hit == nil {
 		t.Fatal("no bucket received the value")
+		return
 	}
 	if !hit.WeekStart.Equal(wantMonday) {
 		t.Fatalf("local-week bucket = %v, want %v", hit.WeekStart, wantMonday)

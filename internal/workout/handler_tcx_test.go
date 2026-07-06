@@ -308,6 +308,7 @@ func TestWorkoutList_EnrichmentOmitsTrackpoints(t *testing.T) {
 	e := env.Data.Items[0].Enrichment
 	if e == nil {
 		t.Fatal("list enrichment = nil, want summary present")
+		return
 	}
 	if e.AvgHeartRateBpm == nil || *e.AvgHeartRateBpm != 140 {
 		t.Errorf("list avg_heart_rate_bpm = %v, want 140", e.AvgHeartRateBpm)

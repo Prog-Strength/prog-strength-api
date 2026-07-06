@@ -336,6 +336,7 @@ func TestSQLiteRepositoryGetMissAndHitBump(t *testing.T) {
 	}
 	if got == nil {
 		t.Fatal("Get hit = nil, want row")
+		return
 	}
 	if !got.FetchedAt.Equal(fetched) {
 		t.Errorf("FetchedAt = %v, want %v (Get must not touch fetched_at)", got.FetchedAt, fetched)

@@ -134,6 +134,7 @@ func TestWorkoutNoteSource_PendingUnits(t *testing.T) {
 	}
 	if both == nil {
 		t.Fatal("w-both missing from units")
+		return
 	}
 	if !strings.Contains(both.content, "Workout notes: felt strong") {
 		t.Fatalf("content missing workout note line: %q", both.content)

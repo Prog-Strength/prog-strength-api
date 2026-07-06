@@ -327,9 +327,11 @@ func TestComputeMuscleGroupProgression_PerExerciseSlope(t *testing.T) {
 	downTrend := trendForExercise(result, "down")
 	if upTrend == nil || downTrend == nil {
 		t.Fatal("expected per-exercise trends for both exercises")
+		return
 	}
 	if upTrend.SlopePerMonth == nil || downTrend.SlopePerMonth == nil {
-		t.Fatal("expected non-nil slope for both exercises")
+		t.Fatal("expected slope for both exercises")
+		return
 	}
 	if math.Abs(*upTrend.SlopePerMonth-analytical("up")) > 0.05 {
 		t.Errorf("up slope: got %v, analytical %v", *upTrend.SlopePerMonth, analytical("up"))
@@ -388,6 +390,7 @@ func TestComputeMuscleGroupProgression_MinSessionsThreshold(t *testing.T) {
 	trend := trendForExercise(result, "barbell-bench-press")
 	if trend == nil {
 		t.Fatal("expected a per-exercise trend entry")
+		return
 	}
 	if trend.SessionCount != 2 {
 		t.Errorf("session_count: got %d, want 2", trend.SessionCount)

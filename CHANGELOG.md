@@ -1,3 +1,10 @@
+# [0.75.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.74.0...v0.75.0) (2026-07-06)
+
+
+### Features
+
+* **running:** max-effort estimation engine v2 with logged-best floor ([#68](https://github.com/Prog-Strength/prog-strength-api/issues/68)) ([f703e2e](https://github.com/Prog-Strength/prog-strength-api/commit/f703e2e9c7cccb07886a3e0a1ec796dc0256b529))
+
 # [0.74.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.73.0...v0.74.0) (2026-07-03)
 
 

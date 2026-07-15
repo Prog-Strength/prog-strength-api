@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
@@ -116,6 +117,96 @@ func TestLoggerLevelGatesDebug(t *testing.T) {
 	if got := records[0]["msg"]; got != "lookup request served" {
 		t.Errorf("surviving record = %v", got)
 	}
+}
+
+func TestServiceLogsProviderMergeAndCandidatesAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, slog.LevelInfo)
+	ctx := ctxWithRequestID(t, "req-merge")
+	fs := &fakeProvider{
+		source:     "fatsecret",
+		configured: true,
+		hits: []Candidate{newCandidate(
+			"Halo Top", "Halo Top", "1 container",
+			Macros{Calories: 320, ProteinG: 20, FatG: 8, CarbsG: 48},
+			"fatsecret", "123",
+		)},
+	}
+	usda := &fakeProvider{source: "usda", configured: true}
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), logger, fs, usda)
+
+	if _, err := svc.Lookup(ctx, "halo top", 1, 5); err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+
+	records := logLines(t, &buf)
+	msgs := recordMessages(records)
+	for _, want := range []string{
+		"provider search ok",
+		"lookup provider merge",
+		"lookup served",
+		"lookup candidates",
+	} {
+		if !containsMessage(msgs, want) {
+			t.Errorf("missing INFO log %q; got %v", want, msgs)
+		}
+	}
+	for _, record := range records {
+		if record["msg"] == "lookup provider merge" {
+			if record["macro_selection"] != "api_returns_candidates_agent_chooses" {
+				t.Errorf("merge macro_selection = %v", record["macro_selection"])
+			}
+			if record["providers_queried"] != "fatsecret,usda" {
+				t.Errorf("providers_queried = %v, want fatsecret,usda", record["providers_queried"])
+			}
+		}
+		if record["msg"] == "lookup candidates" {
+			summary, ok := record["matches_summary"].(string)
+			if !ok || !strings.Contains(summary, "fatsecret/123") {
+				t.Errorf("matches_summary = %v, want fatsecret candidate", record["matches_summary"])
+			}
+		}
+	}
+}
+
+func TestServiceLookupDetailGatedAtInfo(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, slog.LevelInfo)
+	ctx := ctxWithRequestID(t, "req-info-only")
+	fs := &fakeProvider{
+		source:     "fatsecret",
+		configured: true,
+		hits:       []Candidate{fsCandidate("Eggs", Macros{Calories: 70, ProteinG: 6, FatG: 5, CarbsG: 0})},
+	}
+	svc := NewService(NewSQLiteRepository(dbtest.New(t)), logger, fs)
+
+	if _, err := svc.Lookup(ctx, "eggs", 1, 5); err != nil {
+		t.Fatalf("lookup: %v", err)
+	}
+	for _, record := range logLines(t, &buf) {
+		if strings.HasSuffix(record["msg"].(string), " detail") {
+			t.Errorf("debug detail leaked at info level: %v", record["msg"])
+		}
+	}
+}
+
+func recordMessages(records []map[string]any) []string {
+	out := make([]string, 0, len(records))
+	for _, r := range records {
+		if msg, ok := r["msg"].(string); ok {
+			out = append(out, msg)
+		}
+	}
+	return out
+}
+
+func containsMessage(msgs []string, target string) bool {
+	for _, msg := range msgs {
+		if msg == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServiceLogsCacheHitWithRequestID(t *testing.T) {

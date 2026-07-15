@@ -93,18 +93,34 @@ func (p *USDAProvider) Search(ctx context.Context, query string, limit int) ([]C
 	}
 
 	out := make([]Candidate, 0, len(payload.Foods))
+	var skippedMissingMacros int
 	for _, food := range payload.Foods {
 		c, ok := usdaToCandidate(food)
 		if !ok {
+			skippedMissingMacros++
 			p.log.DebugContext(ctx, "usda candidate skipped: missing macros",
-				"fdc_id", food.FdcID.String())
+				"fdc_id", food.FdcID.String(),
+				"description", food.Description)
 			continue
 		}
+		p.log.DebugContext(ctx, "usda candidate accepted",
+			"fdc_id", food.FdcID.String(),
+			"description", c.Name,
+			"serving", c.ServingDescription,
+			"calories", c.PerServing.Calories,
+			"protein_g", c.PerServing.ProteinG,
+			"fat_g", c.PerServing.FatG,
+			"carbs_g", c.PerServing.CarbsG)
 		out = append(out, c)
 		if len(out) >= limit {
 			break
 		}
 	}
+	p.log.InfoContext(ctx, "usda search parsed",
+		"raw_foods", len(payload.Foods),
+		"accepted", len(out),
+		"skipped_missing_macros", skippedMissingMacros,
+		"returned", len(out))
 	return out, nil
 }
 

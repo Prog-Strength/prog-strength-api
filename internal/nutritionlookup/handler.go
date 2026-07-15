@@ -91,7 +91,9 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 		}
 		h.log.WarnContext(r.Context(), "lookup request failed",
 			"query", query, "quantity", quantity,
-			"elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+			"elapsed_ms", time.Since(started).Milliseconds(),
+			"macro_selection", macroSelectionAgentMustEstimate,
+			"error", err)
 		return
 	}
 	// The request-level summary line: one INFO record per served
@@ -101,6 +103,12 @@ func (h *Handler) lookup(w http.ResponseWriter, r *http.Request) {
 	h.log.InfoContext(r.Context(), "lookup request served",
 		"query", query, "quantity", quantity, "max_results", maxResults,
 		"matches", len(result.Matches),
+		"macro_selection", macroSelectionForMatches(result.Matches),
 		"elapsed_ms", time.Since(started).Milliseconds())
+	if h.log.Enabled(r.Context(), slog.LevelDebug) {
+		h.log.DebugContext(r.Context(), "lookup request served detail",
+			"query", query, "quantity", quantity, "max_results", maxResults,
+			"matches_detail", candidateDebugRows(result.Matches))
+	}
 	httpresp.OK(w, "nutrition lookup results", result)
 }

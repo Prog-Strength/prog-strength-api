@@ -93,11 +93,16 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 		case age < freshnessTTL:
 			cacheEventsTotal.WithLabelValues("hit").Inc()
 			lookupRequestsTotal.WithLabelValues("cache_hit").Inc()
+			result := s.result(candidates, quantity, maxResults, false)
 			s.log.InfoContext(ctx, "cache hit",
 				"query", normalized,
 				"age_hours", int(age.Hours()),
-				"candidates", len(candidates))
-			return s.result(candidates, quantity, maxResults, false), nil
+				"candidates", len(candidates),
+				"disposition", "cache_hit",
+				"macro_selection", macroSelectionForMatches(result.Matches))
+			logLookupCandidates(ctx, s.log, "cache hit candidates", result.Matches,
+				"query", normalized)
+			return result, nil
 		default:
 			cacheEventsTotal.WithLabelValues("stale").Inc()
 			s.log.DebugContext(ctx, "cache stale; re-pulling",
@@ -111,9 +116,12 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	// maxResults. Unconfigured providers are skipped; erroring ones are
 	// logged and collected so the failure detail names each source.
 	var (
-		merged        []Candidate
-		providerErrs  []string
-		anyConfigured bool
+		merged           []Candidate
+		providerErrs     []string
+		anyConfigured    bool
+		providersQueried []string
+		fatsecretHits    int
+		usdaHits         int
 	)
 	for _, p := range s.providers {
 		if !p.Configured() {
@@ -122,30 +130,55 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 		}
 		anyConfigured = true
 		if len(merged) >= maxResults {
+			s.log.DebugContext(ctx, "provider skipped: quota filled",
+				"source", p.Source(), "merged", len(merged), "max_results", maxResults)
 			break
 		}
+		requested := maxResults - len(merged)
 		started := s.now()
-		hits, err := p.Search(ctx, normalized, maxResults-len(merged))
+		hits, err := p.Search(ctx, normalized, requested)
 		elapsed := s.now().Sub(started)
 		providerDuration.WithLabelValues(p.Source()).Observe(elapsed.Seconds())
 		if err != nil {
 			providerRequestsTotal.WithLabelValues(p.Source(), "error").Inc()
 			s.log.WarnContext(ctx, "provider search failed",
 				"source", p.Source(), "query", normalized,
+				"requested", requested,
 				"elapsed_ms", elapsed.Milliseconds(), "error", err)
 			providerErrs = append(providerErrs, fmt.Sprintf("%s: %v", p.Source(), err))
 			continue
 		}
 		providerRequestsTotal.WithLabelValues(p.Source(), "ok").Inc()
+		providersQueried = append(providersQueried, p.Source())
+		switch p.Source() {
+		case "fatsecret":
+			fatsecretHits = len(hits)
+		case "usda":
+			usdaHits = len(hits)
+		}
 		s.log.InfoContext(ctx, "provider search ok",
 			"source", p.Source(), "query", normalized,
-			"hits", len(hits), "elapsed_ms", elapsed.Milliseconds())
+			"requested", requested, "hits", len(hits),
+			"elapsed_ms", elapsed.Milliseconds())
 		merged = append(merged, hits...)
+	}
+	if len(providersQueried) > 0 {
+		s.log.InfoContext(ctx, "lookup provider merge",
+			"query", normalized,
+			"max_results", maxResults,
+			"providers_queried", strings.Join(providersQueried, ","),
+			"fatsecret_hits", fatsecretHits,
+			"usda_hits", usdaHits,
+			"merged", len(merged),
+			"merge_order", "fatsecret_first_then_usda_while_short_of_max_results",
+			"macro_selection", "api_returns_candidates_agent_chooses")
 	}
 
 	if !anyConfigured {
 		lookupRequestsTotal.WithLabelValues("unavailable").Inc()
-		s.log.InfoContext(ctx, "lookup unavailable: no providers configured")
+		s.log.InfoContext(ctx, "lookup unavailable: no providers configured",
+			"query", normalized,
+			"macro_selection", macroSelectionAgentMustEstimate)
 		return Result{}, ErrUnavailable
 	}
 
@@ -157,16 +190,22 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 			candidates, err := unmarshalCandidates(staleRow.CandidatesJSON)
 			if err == nil {
 				lookupRequestsTotal.WithLabelValues("served_stale").Inc()
+				result := s.result(candidates, quantity, maxResults, true)
 				s.log.WarnContext(ctx, "all providers failed; serving stale cache",
 					"query", normalized,
 					"age_hours", int(s.now().UTC().Sub(staleRow.FetchedAt).Hours()),
-					"candidates", len(candidates))
-				return s.result(candidates, quantity, maxResults, true), nil
+					"candidates", len(candidates),
+					"disposition", "served_stale",
+					"macro_selection", macroSelectionForMatches(result.Matches))
+				logLookupCandidates(ctx, s.log, "stale cache candidates", result.Matches,
+					"query", normalized)
+				return result, nil
 			}
 		}
 		lookupRequestsTotal.WithLabelValues("failed").Inc()
 		s.log.WarnContext(ctx, "lookup failed: all providers errored, no usable cache",
-			"query", normalized, "errors", strings.Join(providerErrs, "; "))
+			"query", normalized, "errors", strings.Join(providerErrs, "; "),
+			"macro_selection", macroSelectionAgentMustEstimate)
 		return Result{}, fmt.Errorf("%w: %s", ErrFailed, strings.Join(providerErrs, "; "))
 	}
 
@@ -198,7 +237,26 @@ func (s *Service) Lookup(ctx context.Context, query string, quantity float64, ma
 	}
 
 	lookupRequestsTotal.WithLabelValues("served").Inc()
-	return s.result(merged, quantity, maxResults, false), nil
+	result := s.result(merged, quantity, maxResults, false)
+	disposition := "served_fresh"
+	if len(result.Matches) == 0 {
+		disposition = "served_empty"
+	}
+	s.log.InfoContext(ctx, "lookup served",
+		"query", normalized,
+		"disposition", disposition,
+		"matches", len(result.Matches),
+		"macro_selection", macroSelectionForMatches(result.Matches))
+	logLookupCandidates(ctx, s.log, "lookup candidates", result.Matches,
+		"query", normalized)
+	return result, nil
+}
+
+func macroSelectionForMatches(matches []Candidate) string {
+	if len(matches) == 0 {
+		return macroSelectionAgentMustEstimate
+	}
+	return macroSelectionAgentChooses
 }
 
 // result scales per-serving candidates to quantity (attaching

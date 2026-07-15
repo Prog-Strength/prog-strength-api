@@ -1,3 +1,10 @@
+# [0.76.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.75.0...v0.76.0) (2026-07-15)
+
+
+### Features
+
+* **nutritionlookup:** add provider merge and candidate visibility to logs ([#69](https://github.com/Prog-Strength/prog-strength-api/issues/69)) ([c3fd06a](https://github.com/Prog-Strength/prog-strength-api/commit/c3fd06a21f1ed4f89c6e906078a27ce0f93712ad))
+
 # [0.75.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.74.0...v0.75.0) (2026-07-06)
 
 

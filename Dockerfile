@@ -4,7 +4,7 @@
 # against the latest govulncheck advisories. Bump in lockstep with
 # the `go` directive in go.mod; CI's setup-go reads go.mod and will
 # install the matching toolchain.
-FROM golang:1.25.11-alpine AS builder
+FROM golang:1.25.12-alpine AS builder
 
 # Install build dependencies for CGo (required for go-sqlite3).
 # sqlite-dev provides sqlite3.h, which the sqlite-vec cgo bindings #include.

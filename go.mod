@@ -1,6 +1,6 @@
 module github.com/jwallace145/progressive-overload-fitness-tracker
 
-go 1.25.11
+go 1.25.12
 
 require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6

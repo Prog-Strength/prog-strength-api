@@ -238,6 +238,14 @@ func New(cfg config.Config) (*Server, error) {
 		return nil, err
 	}
 
+	// TEMPORARY — route geometry backfill (sows/sow-trail-map-backfill.md).
+	// Remove this call and BackfillActivityRoutes once prod outdoor history has
+	// maps (or you no longer care about pre-trail-map uploads). Safe to delete:
+	// new ingest already writes route_geojson; this only repairs the past.
+	if err := activityRepo.(*activity.SQLiteRepository).BackfillActivityRoutes(context.Background()); err != nil {
+		log.Printf("backfill activity routes: %v", err)
+	}
+
 	// Seed the timeline feed index from existing workouts, runs, PR
 	// events, and best efforts. Gated on timeline_post being empty, so it
 	// runs once after migration 019 ships and is a no-op thereafter.

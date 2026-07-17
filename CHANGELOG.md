@@ -1,3 +1,10 @@
+# [0.77.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.76.0...v0.77.0) (2026-07-17)
+
+
+### Features
+
+* **activity:** capture tcx gps route and expose on activity detail ([#70](https://github.com/Prog-Strength/prog-strength-api/issues/70)) ([4c34d59](https://github.com/Prog-Strength/prog-strength-api/commit/4c34d59ab90fbb6364d8f009724fb9bebf8dbdeb))
+
 # [0.76.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.75.0...v0.76.0) (2026-07-15)
 
 

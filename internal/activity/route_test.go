@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"testing"
-	"time"
 )
 
 func ll(lat, lon float64) parsedTrackpoint {
@@ -157,5 +156,4 @@ func TestBuildRoute_RealTrailFixtureReduces(t *testing.T) {
 	if simplified == 0 || simplified >= raw {
 		t.Fatalf("simplified=%d raw=%d, expected a material reduction", simplified, raw)
 	}
-	_ = time.Now
 }

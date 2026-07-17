@@ -229,6 +229,11 @@ type activityDTO struct {
 	StripSummary       *stripSummaryDTO     `json:"strip_summary,omitempty"`
 	BestPaceSecPerUnit *float64             `json:"best_pace_sec_per_unit,omitempty"`
 	Intervals          []intervalSegmentDTO `json:"intervals,omitempty"`
+	// Route is the simplified GPS route as a GeoJSON Feature (MultiLineString
+	// + bounds), passed through verbatim from storage. Detail-only; omitted
+	// (key absent) when the activity has no route. The map consumes this; the
+	// per-trackpoint DTO deliberately stays coordinate-free.
+	Route json.RawMessage `json:"route,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -327,6 +332,9 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 				CleanPace:       isCleanTrackpointPace(tp.PaceSecPerKm),
 			})
 		}
+	}
+	if a.RouteGeoJSON != nil {
+		dto.Route = json.RawMessage(*a.RouteGeoJSON)
 	}
 	return dto
 }

@@ -831,3 +831,41 @@ func TestRecentHRStats_NoQualifyingRuns(t *testing.T) {
 		t.Errorf("CurrentRunP99 = %v, want nil", stats.CurrentRunP99)
 	}
 }
+
+func TestRepository_RoundTripsRouteAndCoords(t *testing.T) {
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	lat, lon := 40.123456, -105.654321
+	route := `{"type":"Feature","geometry":{"type":"MultiLineString","coordinates":[[[-105.654321,40.123456],[-105.654000,40.124000]]]},"properties":{"bounds":{"min_lat":40.123456,"min_lng":-105.654321,"max_lat":40.124,"max_lng":-105.654}}}`
+	a := &Activity{
+		UserID:           "u1",
+		ActivityType:     ActivityRunning,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: "route-test-1",
+		StartTime:        time.Now().UTC(),
+		Environment:      EnvironmentOutdoor,
+		RouteGeoJSON:     &route,
+		Trackpoints: []Trackpoint{
+			{Sequence: 0, ElapsedSeconds: 0, DistanceMeters: 0, Latitude: &lat, Longitude: &lon},
+			{Sequence: 1, ElapsedSeconds: 1, DistanceMeters: 5},
+		},
+	}
+	if err := repo.Create(ctx, a, []byte("<xml/>")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, "u1", a.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.RouteGeoJSON == nil || *got.RouteGeoJSON != route {
+		t.Fatalf("route not round-tripped: %v", got.RouteGeoJSON)
+	}
+	if got.Trackpoints[0].Latitude == nil || *got.Trackpoints[0].Latitude != lat {
+		t.Fatalf("trackpoint latitude not round-tripped: %+v", got.Trackpoints[0])
+	}
+	if got.Trackpoints[1].Latitude != nil {
+		t.Fatal("second trackpoint should have NULL latitude")
+	}
+}

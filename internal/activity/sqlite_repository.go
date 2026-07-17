@@ -82,13 +82,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 			start_time, name, distance_meters, duration_seconds,
 			avg_pace_sec_per_km, best_pace_sec_per_km,
 			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-			tcx_s3_key, created_at, environment, raw_distance_meters
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tcx_s3_key, created_at, environment, raw_distance_meters, route_geojson
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, a.ID, a.UserID, a.ActivityType, a.IngestSource, a.SourceActivityID,
 		a.StartTime, a.Name, a.DistanceMeters, a.DurationSeconds,
 		a.AvgPaceSecPerKm, a.BestPaceSecPerKm,
 		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories, a.ElevationGainMeters,
-		a.TCXS3Key, a.CreatedAt, a.Environment, a.RawDistanceMeters); err != nil {
+		a.TCXS3Key, a.CreatedAt, a.Environment, a.RawDistanceMeters, a.RouteGeoJSON); err != nil {
 		if isUniqueViolation(err) {
 			return ErrDuplicate
 		}
@@ -124,8 +124,8 @@ func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, activityID string, poi
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO activity_trackpoints (
 			activity_id, sequence, elapsed_seconds, distance_meters,
-			heart_rate_bpm, pace_sec_per_km, elevation_meters
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+			heart_rate_bpm, pace_sec_per_km, elevation_meters, latitude, longitude
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -133,7 +133,8 @@ func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, activityID string, poi
 	defer stmt.Close()
 	for _, p := range points {
 		if _, err := stmt.ExecContext(ctx, activityID, p.Sequence, p.ElapsedSeconds,
-			p.DistanceMeters, p.HeartRateBpm, p.PaceSecPerKm, p.ElevationMeters); err != nil {
+			p.DistanceMeters, p.HeartRateBpm, p.PaceSecPerKm, p.ElevationMeters,
+			p.Latitude, p.Longitude); err != nil {
 			return err
 		}
 	}
@@ -335,6 +336,17 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID, activityID string) (
 		return nil, err
 	}
 	a.Trackpoints = points
+
+	var route sql.NullString
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT route_geojson FROM activities
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, activityID, userID).Scan(&route); err != nil {
+		return nil, err
+	}
+	if route.Valid {
+		a.RouteGeoJSON = &route.String
+	}
 	return a, nil
 }
 
@@ -374,7 +386,7 @@ func (r *SQLiteRepository) SummariesByIDs(ctx context.Context, userID string, id
 func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID string) ([]Trackpoint, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT sequence, elapsed_seconds, distance_meters,
-		       heart_rate_bpm, pace_sec_per_km, elevation_meters
+		       heart_rate_bpm, pace_sec_per_km, elevation_meters, latitude, longitude
 		FROM activity_trackpoints
 		WHERE activity_id = ?
 		ORDER BY sequence ASC
@@ -387,12 +399,14 @@ func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID strin
 	var out []Trackpoint
 	for rows.Next() {
 		var (
-			p  Trackpoint
-			hr sql.NullInt64
-			pa sql.NullFloat64
-			el sql.NullFloat64
+			p   Trackpoint
+			hr  sql.NullInt64
+			pa  sql.NullFloat64
+			el  sql.NullFloat64
+			lat sql.NullFloat64
+			lon sql.NullFloat64
 		)
-		if err := rows.Scan(&p.Sequence, &p.ElapsedSeconds, &p.DistanceMeters, &hr, &pa, &el); err != nil {
+		if err := rows.Scan(&p.Sequence, &p.ElapsedSeconds, &p.DistanceMeters, &hr, &pa, &el, &lat, &lon); err != nil {
 			return nil, err
 		}
 		if hr.Valid {
@@ -406,6 +420,14 @@ func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID strin
 		if el.Valid {
 			v := el.Float64
 			p.ElevationMeters = &v
+		}
+		if lat.Valid {
+			v := lat.Float64
+			p.Latitude = &v
+		}
+		if lon.Valid {
+			v := lon.Float64
+			p.Longitude = &v
 		}
 		out = append(out, p)
 	}

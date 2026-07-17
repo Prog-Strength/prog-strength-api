@@ -50,8 +50,14 @@ type Activity struct {
 	MaxHeartRateBpm     *int
 	TotalCalories       *int
 	ElevationGainMeters *float64
-	TCXS3Key            string
-	CreatedAt           time.Time
+	// RouteGeoJSON is the serialized GeoJSON Feature (MultiLineString +
+	// bounds) for the simplified GPS route, computed at ingest from the raw
+	// positioned series. nil when the activity had fewer than two positioned
+	// points (indoor / no-GPS). Loaded only on the detail path, never on
+	// list/summary reads.
+	RouteGeoJSON *string
+	TCXS3Key     string
+	CreatedAt    time.Time
 	// Soft delete, consistent with the rest of the repo. json:"-" lives
 	// on the API DTO, not here; this is the in-memory domain type.
 	DeletedAt *time.Time
@@ -76,4 +82,10 @@ type Trackpoint struct {
 	HeartRateBpm    *int
 	PaceSecPerKm    *float64
 	ElevationMeters *float64
+	// Latitude/Longitude are the WGS84 coordinates of this kept sample,
+	// truncated to 6 decimals, when the source trackpoint had a <Position>;
+	// nil otherwise. The map renders from Activity.RouteGeoJSON, not these —
+	// they are stored for future pace↔map correlation / FIT parity.
+	Latitude  *float64
+	Longitude *float64
 }

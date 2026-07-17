@@ -193,6 +193,62 @@ func TestImportEnvironmentFields(t *testing.T) {
 	}
 }
 
+func TestUploadTCX_OutdoorReturnsRoute(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	w := doImport(t, h, readFixture(t, "typical_5k.tcx"))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var env struct {
+		Data struct {
+			Route *struct {
+				Type     string `json:"type"`
+				Geometry struct {
+					Type        string          `json:"type"`
+					Coordinates json.RawMessage `json:"coordinates"`
+				} `json:"geometry"`
+				Properties struct {
+					Bounds struct {
+						MinLat float64 `json:"min_lat"`
+						MaxLat float64 `json:"max_lat"`
+					} `json:"bounds"`
+				} `json:"properties"`
+			} `json:"route"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if env.Data.Route == nil {
+		t.Fatal("expected route on outdoor upload response")
+	}
+	if env.Data.Route.Type != "Feature" || env.Data.Route.Geometry.Type != "MultiLineString" {
+		t.Fatalf("unexpected route shape: %+v", env.Data.Route)
+	}
+	if env.Data.Route.Properties.Bounds.MinLat > env.Data.Route.Properties.Bounds.MaxLat {
+		t.Fatal("bounds inverted")
+	}
+}
+
+func TestUploadTCX_IndoorOmitsRoute(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	w := doImport(t, h, readFixture(t, "treadmill_5k.tcx"))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", w.Code)
+	}
+	var env struct {
+		Data struct {
+			Route json.RawMessage `json:"route"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(env.Data.Route) != 0 {
+		t.Fatalf("expected no route key for indoor run, got %s", env.Data.Route)
+	}
+}
+
 // A biking TCX no longer rejects with SlugNotRunning — the validator
 // accepts any sport; the ingest pipeline classifies it as cycling.
 func TestImportBikingClassifiesAsCycling(t *testing.T) {

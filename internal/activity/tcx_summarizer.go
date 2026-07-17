@@ -85,6 +85,7 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 		a.TotalCalories = &total
 	}
 
+	a.RouteGeoJSON = buildRoute(tps)
 	a.Trackpoints = downsample(tps, first, actType)
 	return a
 }
@@ -212,6 +213,12 @@ func downsample(raw []parsedTrackpoint, first parsedTrackpoint, actType Activity
 			DistanceMeters:  rp.DistanceMeters,
 			HeartRateBpm:    rp.HeartRateBpm,
 			ElevationMeters: rp.AltitudeMeters,
+		}
+		if rp.Latitude != nil && rp.Longitude != nil {
+			lat := truncateCoord(*rp.Latitude)
+			lon := truncateCoord(*rp.Longitude)
+			tp.Latitude = &lat
+			tp.Longitude = &lon
 		}
 		// Pace is nil for the first kept point (no prior segment), when
 		// two kept points share a distance (would divide by zero), and

@@ -14,6 +14,48 @@ import (
 // no-position input.
 const testPositionXML = `<Position><LatitudeDegrees>40.0</LatitudeDegrees><LongitudeDegrees>-105.0</LongitudeDegrees></Position>`
 
+func TestSummarize_OutdoorRunBuildsRoute(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "typical_5k.tcx"))
+	if err != nil {
+		t.Fatalf("parseTCX: %v", err)
+	}
+	a := summarize(p, ActivityRunning)
+	if a.RouteGeoJSON == nil {
+		t.Fatal("expected a route for the outdoor GPS fixture")
+	}
+	if !strings.Contains(*a.RouteGeoJSON, "MultiLineString") {
+		t.Fatalf("route should be a MultiLineString feature, got: %.80s", *a.RouteGeoJSON)
+	}
+	var withCoords int
+	for _, tp := range a.Trackpoints {
+		if tp.Latitude != nil && tp.Longitude != nil {
+			withCoords++
+			if *tp.Latitude != math.Trunc(*tp.Latitude*1e6)/1e6 {
+				t.Fatalf("stored latitude not truncated to 6 decimals: %v", *tp.Latitude)
+			}
+		}
+	}
+	if withCoords == 0 {
+		t.Fatal("expected downsampled trackpoints to carry lat/lon")
+	}
+}
+
+func TestSummarize_IndoorRunHasNoRoute(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "treadmill_5k.tcx"))
+	if err != nil {
+		t.Fatalf("parseTCX: %v", err)
+	}
+	a := summarize(p, ActivityRunning)
+	if a.RouteGeoJSON != nil {
+		t.Fatalf("expected no route for indoor run, got %q", *a.RouteGeoJSON)
+	}
+	for _, tp := range a.Trackpoints {
+		if tp.Latitude != nil || tp.Longitude != nil {
+			t.Fatal("indoor trackpoints should have no coordinates")
+		}
+	}
+}
+
 func TestSummarize_Typical5k(t *testing.T) {
 	p, err := parseTCX(readFixture(t, "typical_5k.tcx"))
 	if err != nil {

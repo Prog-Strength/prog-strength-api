@@ -1,3 +1,10 @@
+# [0.78.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.77.0...v0.78.0) (2026-07-17)
+
+
+### Features
+
+* **activity:** backfill route geometry for existing outdoor activities ([#71](https://github.com/Prog-Strength/prog-strength-api/issues/71)) ([85d7b19](https://github.com/Prog-Strength/prog-strength-api/commit/85d7b19e78a0b54a6c4bd3dbad9bc8b208bc07e7))
+
 # [0.77.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.76.0...v0.77.0) (2026-07-17)
 
 

@@ -126,3 +126,40 @@ func TestParseTCX_HasPosition(t *testing.T) {
 		t.Error("HasPosition = true for a track with no <Position>, want false")
 	}
 }
+
+func TestParseTCX_CapturesPositionCoords(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "typical_5k.tcx"))
+	if err != nil {
+		t.Fatalf("parseTCX: %v", err)
+	}
+	if !p.HasPosition {
+		t.Fatal("expected HasPosition true for GPS fixture")
+	}
+	var positioned int
+	for _, tp := range p.Trackpoints {
+		if tp.Latitude != nil && tp.Longitude != nil {
+			positioned++
+			if *tp.Latitude < -90 || *tp.Latitude > 90 {
+				t.Fatalf("latitude out of range: %v", *tp.Latitude)
+			}
+			if *tp.Longitude < -180 || *tp.Longitude > 180 {
+				t.Fatalf("longitude out of range: %v", *tp.Longitude)
+			}
+		}
+	}
+	if positioned == 0 {
+		t.Fatal("expected at least one trackpoint with captured lat/lon")
+	}
+}
+
+func TestParseTCX_TreadmillHasNoCoords(t *testing.T) {
+	p, err := parseTCX(readFixture(t, "treadmill_5k.tcx"))
+	if err != nil {
+		t.Fatalf("parseTCX: %v", err)
+	}
+	for _, tp := range p.Trackpoints {
+		if tp.Latitude != nil || tp.Longitude != nil {
+			t.Fatal("treadmill fixture should have no coordinates")
+		}
+	}
+}

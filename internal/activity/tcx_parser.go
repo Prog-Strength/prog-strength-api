@@ -45,6 +45,11 @@ type parsedTrackpoint struct {
 	DistanceMeters float64
 	HeartRateBpm   *int
 	AltitudeMeters *float64
+	// Latitude/Longitude are the WGS84 <Position> coordinates when the
+	// trackpoint carried one; nil otherwise. Full float64 precision here —
+	// truncation to 6 decimals happens on write (summarizer / route).
+	Latitude  *float64
+	Longitude *float64
 }
 
 // The xml* structs below mirror only the subset of the Garmin TCX schema
@@ -150,6 +155,12 @@ func parseTCX(data []byte) (*parsedTCX, error) {
 			}
 			if tp.Position != nil {
 				p.HasPosition = true
+				if tp.Position.LatitudeDegrees != nil && tp.Position.LongitudeDegrees != nil {
+					lat := *tp.Position.LatitudeDegrees
+					lon := *tp.Position.LongitudeDegrees
+					out.Latitude = &lat
+					out.Longitude = &lon
+				}
 			}
 			p.Trackpoints = append(p.Trackpoints, out)
 		}

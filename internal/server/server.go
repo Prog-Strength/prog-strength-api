@@ -34,6 +34,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/telemetry"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
@@ -355,10 +356,10 @@ func New(cfg config.Config) (*Server, error) {
 	// routes to a 503 (mirrors the avatar-store-nil pattern).
 	var calendarScheduler *calendarsync.Service
 	if cfg.CalendarTokenEncKey != "" && cfg.GoogleCalendarRedirectURL != "" && cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
-		key, keyErr := calendarsync.KeyFromEnv(cfg.CalendarTokenEncKey)
+		key, keyErr := tokencrypt.KeyFromEnv(cfg.CalendarTokenEncKey)
 		if keyErr != nil {
 			log.Printf("calendar-sync: disabled (invalid CALENDAR_TOKEN_ENC_KEY): %v", keyErr)
-		} else if cipher, cipherErr := calendarsync.NewCipher(key); cipherErr != nil {
+		} else if cipher, cipherErr := tokencrypt.NewCipher(key); cipherErr != nil {
 			log.Printf("calendar-sync: disabled (cipher init failed): %v", cipherErr)
 		} else {
 			calendarOAuthConfig := calendarsync.NewCalendarConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleCalendarRedirectURL)

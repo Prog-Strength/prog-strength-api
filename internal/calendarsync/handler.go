@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 )
 
 // Cookie names for the calendar OAuth flow. Deliberately distinct from the
@@ -32,7 +33,7 @@ const (
 type Handler struct {
 	oauthConfig            *oauth2.Config
 	conns                  calendarconn.Repository
-	cipher                 *Cipher
+	cipher                 *tokencrypt.Cipher
 	httpClient             *http.Client
 	returnToAllowedOrigins []string
 	// stateHMACKey signs the OAuth state's (random, userID) pair so the public
@@ -49,7 +50,7 @@ type Handler struct {
 // encrypts refresh tokens at rest. stateHMACKey (the server's JWT signing key)
 // signs the OAuth state so the public callback can't be tricked into linking a
 // calendar to the wrong user.
-func NewHandler(oauthConfig *oauth2.Config, conns calendarconn.Repository, cipher *Cipher, httpClient *http.Client, returnToAllowedOrigins []string, stateHMACKey []byte) *Handler {
+func NewHandler(oauthConfig *oauth2.Config, conns calendarconn.Repository, cipher *tokencrypt.Cipher, httpClient *http.Client, returnToAllowedOrigins []string, stateHMACKey []byte) *Handler {
 	return &Handler{
 		oauthConfig:            oauthConfig,
 		conns:                  conns,

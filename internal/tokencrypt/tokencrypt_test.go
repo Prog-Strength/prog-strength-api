@@ -1,4 +1,4 @@
-package calendarsync
+package tokencrypt
 
 import (
 	"bytes"
@@ -59,6 +59,32 @@ func TestCipher_DecryptWrongKeyFails(t *testing.T) {
 	}
 	if _, err := other.Decrypt(ct, nonce); err == nil {
 		t.Fatal("Decrypt with wrong key: want error, got nil")
+	}
+}
+
+// TestCipher_TwoKeyIsolation verifies that ciphertext sealed with a Cipher
+// built from key A cannot be opened by a Cipher built from a different key B:
+// the GCM authentication tag mismatch surfaces as a Decrypt error. This is the
+// property that lets distinct integrations hold independent keys safely.
+func TestCipher_TwoKeyIsolation(t *testing.T) {
+	keyA := key32(0xAA)
+	keyB := key32(0xBB)
+
+	cipherA, err := NewCipher(keyA)
+	if err != nil {
+		t.Fatalf("NewCipher(A): %v", err)
+	}
+	cipherB, err := NewCipher(keyB)
+	if err != nil {
+		t.Fatalf("NewCipher(B): %v", err)
+	}
+
+	ct, nonce, err := cipherA.Encrypt([]byte("cross-integration secret"))
+	if err != nil {
+		t.Fatalf("Encrypt with A: %v", err)
+	}
+	if _, err := cipherB.Decrypt(ct, nonce); err == nil {
+		t.Fatal("Decrypt with key B of ciphertext sealed by key A: want error, got nil")
 	}
 }
 

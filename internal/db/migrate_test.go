@@ -391,6 +391,78 @@ func TestMigrate016_ActivityBestEfforts(t *testing.T) {
 	}
 }
 
+// TestMigrate039And040_WhoopTablesExist verifies the Whoop migrations layer
+// cleanly on the fully-migrated schema: both tables exist, a valid connection
+// and recovery row insert, and the status / (user_id, date) constraints hold.
+func TestMigrate039And040_WhoopTablesExist(t *testing.T) {
+	t.Parallel()
+	db := newMigratedDB(t)
+
+	for _, table := range []string{"user_whoop_connection", "user_whoop_recovery"} {
+		var name string
+		if err := db.QueryRow(`
+			SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?
+		`, table).Scan(&name); err != nil {
+			t.Fatalf("expected table %s to exist: %v", table, err)
+		}
+	}
+
+	// A connection row inserts, and an out-of-set status violates the CHECK.
+	if _, err := db.Exec(`
+		INSERT INTO user_whoop_connection (
+			user_id, whoop_user_id, access_token_enc, access_token_nonce,
+			refresh_token_enc, refresh_token_nonce, token_expires_at, scopes,
+			status, connected_at, updated_at
+		) VALUES ('u1', 42, x'01', x'02', x'03', x'04', '2026-07-22T00:00:00Z',
+		          'read:recovery', 'connected', '2026-07-22', '2026-07-22')
+	`); err != nil {
+		t.Fatalf("insert whoop connection: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO user_whoop_connection (
+			user_id, whoop_user_id, access_token_enc, access_token_nonce,
+			refresh_token_enc, refresh_token_nonce, token_expires_at, scopes,
+			status, connected_at, updated_at
+		) VALUES ('u2', 43, x'01', x'02', x'03', x'04', '2026-07-22T00:00:00Z',
+		          'read:recovery', 'bogus', '2026-07-22', '2026-07-22')
+	`); err == nil {
+		t.Error("invalid status should fail the CHECK, got nil error")
+	}
+
+	// A recovery row inserts, and a duplicate (user_id, date) violates UNIQUE.
+	if _, err := db.Exec(`
+		INSERT INTO user_whoop_recovery (
+			id, user_id, date, recovery_score, resting_heart_rate,
+			hrv_rmssd_milli, cycle_id, sleep_id, created_at, updated_at
+		) VALUES ('r1', 'u1', '2026-07-22', 88.0, 52.0, 65.5, 100, 's1',
+		          '2026-07-22', '2026-07-22')
+	`); err != nil {
+		t.Fatalf("insert whoop recovery: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO user_whoop_recovery (
+			id, user_id, date, recovery_score, resting_heart_rate,
+			hrv_rmssd_milli, cycle_id, sleep_id, created_at, updated_at
+		) VALUES ('r2', 'u1', '2026-07-22', 90.0, 50.0, 70.0, 101, 's2',
+		          '2026-07-22', '2026-07-22')
+	`); err == nil {
+		t.Error("duplicate (user_id, date) should fail UNIQUE, got nil error")
+	}
+
+	// The supporting indexes exist.
+	for _, idx := range []string{
+		"idx_user_whoop_recovery_user_date",
+		"idx_user_whoop_recovery_sleep",
+	} {
+		var name string
+		if err := db.QueryRow(`
+			SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?
+		`, idx).Scan(&name); err != nil {
+			t.Fatalf("expected index %s to exist: %v", idx, err)
+		}
+	}
+}
+
 // TestMigrate013_UsersDistanceUnitDefault verifies the new users column:
 // rows inserted without distance_unit backfill to 'mi', and an out-of-set
 // value is rejected by the CHECK.

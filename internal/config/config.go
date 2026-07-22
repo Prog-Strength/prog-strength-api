@@ -155,6 +155,21 @@ type Config struct {
 	// works without it.
 	CalendarTokenEncKey string
 
+	// WhoopClientID, WhoopClientSecret, and WhoopRedirectURL configure the
+	// WHOOP OAuth 2.0 client. WhoopClientSecret doubles as the HMAC key for
+	// verifying WHOOP webhook signatures. If any (together with
+	// WhoopTokenEncKey) are empty, the Whoop integration routes are not
+	// mounted — useful for local-only iteration.
+	WhoopClientID     string
+	WhoopClientSecret string
+	WhoopRedirectURL  string
+
+	// WhoopTokenEncKey is the base64-encoded 32-byte AES-256-GCM key used to
+	// encrypt stored WHOOP OAuth tokens. Empty (the default) disables the
+	// Whoop integration entirely — the dashboard reads degrade gracefully
+	// without it.
+	WhoopTokenEncKey string
+
 	// LogLevel gates the structured (slog) loggers ("debug", "info",
 	// "warn", "error"; case-insensitive; default "info").
 	LogLevel slog.Level
@@ -231,6 +246,12 @@ type fileConfig struct {
 			CalendarTokenEncKey string `toml:"calendar_token_enc_key"`
 		} `toml:"google"`
 	} `toml:"auth"`
+	Whoop struct {
+		ClientID     string `toml:"client_id"`
+		ClientSecret string `toml:"client_secret"`
+		RedirectURL  string `toml:"redirect_url"`
+		TokenEncKey  string `toml:"token_enc_key"`
+	} `toml:"whoop"`
 	// CORS list fields decode as any because a key may be written either as
 	// a native TOML array (the config.toml literals) or as a single quoted
 	// "${VAR}" / CSV string (an env-sourced or override value). go-toml/v2
@@ -386,6 +407,10 @@ func Load(defaultTOML []byte) (Config, error) {
 		FatSecretClientSecret:     fc.NutritionLookup.FatSecretClientSecret,
 		USDAFDCAPIKey:             fc.NutritionLookup.USDAFDCAPIKey,
 		CalendarTokenEncKey:       fc.Auth.Google.CalendarTokenEncKey,
+		WhoopClientID:             fc.Whoop.ClientID,
+		WhoopClientSecret:         fc.Whoop.ClientSecret,
+		WhoopRedirectURL:          fc.Whoop.RedirectURL,
+		WhoopTokenEncKey:          fc.Whoop.TokenEncKey,
 		LogLevel:                  level,
 		VectorMemory: VectorMemoryConfig{
 			Enabled:              fc.VectorMemory.Enabled,
@@ -437,6 +462,10 @@ func interpolate(fc *fileConfig) {
 	fc.Auth.Google.LoginRedirectURL = interp(fc.Auth.Google.LoginRedirectURL)
 	fc.Auth.Google.CalendarRedirectURL = interp(fc.Auth.Google.CalendarRedirectURL)
 	fc.Auth.Google.CalendarTokenEncKey = interp(fc.Auth.Google.CalendarTokenEncKey)
+	fc.Whoop.ClientID = interp(fc.Whoop.ClientID)
+	fc.Whoop.ClientSecret = interp(fc.Whoop.ClientSecret)
+	fc.Whoop.RedirectURL = interp(fc.Whoop.RedirectURL)
+	fc.Whoop.TokenEncKey = interp(fc.Whoop.TokenEncKey)
 	fc.Storage.AvatarBucketName = interp(fc.Storage.AvatarBucketName)
 	fc.Storage.TCXBucketName = interp(fc.Storage.TCXBucketName)
 	fc.Storage.AWSRegion = interp(fc.Storage.AWSRegion)
@@ -492,6 +521,9 @@ func applyEnvOverrides(fc *fileConfig) {
 	}
 	if v := os.Getenv("GOOGLE_CALENDAR_REDIRECT_URL"); v != "" {
 		fc.Auth.Google.CalendarRedirectURL = v
+	}
+	if v := os.Getenv("WHOOP_REDIRECT_URL"); v != "" {
+		fc.Whoop.RedirectURL = v
 	}
 	if v := os.Getenv("CORS_ALLOWED_ORIGIN"); v != "" {
 		fc.CORS.AllowedOrigins = v

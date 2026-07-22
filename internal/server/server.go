@@ -40,6 +40,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
@@ -406,6 +407,43 @@ func New(cfg config.Config) (*Server, error) {
 		log.Println("calendar-sync: disabled (CALENDAR_TOKEN_ENC_KEY / GOOGLE_CALENDAR_REDIRECT_URL / google client not configured)")
 	}
 
+	// Whoop integration: the WHOOP OAuth connect/callback flow, connection-status
+	// endpoints, recovery reads, and the HMAC-verified recovery webhook. Mirrors
+	// calendar-sync: it stays DORMANT unless ALL of the client id/secret, the
+	// public redirect URL, AND a valid token-encryption key (WHOOP_TOKEN_ENC_KEY)
+	// are configured. An empty or invalid key logs and skips the mount rather than
+	// failing boot — the dashboard's Whoop reads degrade gracefully without it.
+	// The authed half is mounted inside the JWT-gated group below. The two whoop
+	// repos (whoopConnRepo, whoopRecoveryRepo) were constructed above for the
+	// dashboard; they are REUSED here, not re-declared.
+	var whoopHandler *whoopsync.Handler
+	if cfg.WhoopClientID != "" && cfg.WhoopClientSecret != "" && cfg.WhoopTokenEncKey != "" && cfg.WhoopRedirectURL != "" {
+		key, keyErr := tokencrypt.KeyFromEnv(cfg.WhoopTokenEncKey)
+		if keyErr != nil {
+			log.Printf("whoop: disabled (invalid WHOOP_TOKEN_ENC_KEY): %v", keyErr)
+		} else if cipher, cipherErr := tokencrypt.NewCipher(key); cipherErr != nil {
+			log.Printf("whoop: disabled (cipher init failed): %v", cipherErr)
+		} else {
+			// Dedicated client with a timeout so a slow WHOOP token/REST call
+			// can't stall a request indefinitely (mirrors calendarClient).
+			whoopHTTP := &http.Client{Timeout: 8 * time.Second}
+			oauthCfg := whoopsync.NewOAuthConfig(cfg.WhoopClientID, cfg.WhoopClientSecret, cfg.WhoopRedirectURL)
+			whoopClient := whoopsync.NewClient(whoopHTTP)
+			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
+			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
+			// Public callback — WHOOP redirects here; the user id rides in the
+			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
+			whoopHandler.MountPublic(r)
+			// Public webhook — WHOOP posts recovery events here; authenticity is
+			// the HMAC signature (client secret is the key), not our JWT.
+			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
+			whoopWebhook.Mount(r)
+			log.Println("whoop: enabled (oauth + connection + webhook + recovery reads)")
+		}
+	} else {
+		log.Println("whoop: disabled (WHOOP_CLIENT_ID / WHOOP_CLIENT_SECRET / WHOOP_REDIRECT_URL / WHOOP_TOKEN_ENC_KEY not configured)")
+	}
+
 	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)
 	exerciseHandler.Mount(r)
@@ -589,6 +627,14 @@ func New(cfg config.Config) (*Server, error) {
 		// public callback can recover it.
 		if calendarSyncHandler != nil {
 			calendarSyncHandler.MountAuthed(r)
+		}
+		// Whoop (authed half): GET /auth/whoop/connect, GET/DELETE
+		// /me/whoop/connection, and GET /whoop/recovery. Only present when the
+		// Whoop integration is enabled (cipher + client + redirect configured
+		// above). /connect reads the user id from context and encodes it into the
+		// OAuth state so the public callback can recover it.
+		if whoopHandler != nil {
+			whoopHandler.MountAuthed(r)
 		}
 	})
 

@@ -16,6 +16,27 @@ type Summary struct {
 	// Streak is a value, not a pointer: it is always meaningful (an empty
 	// streak is zero, not "no data"), so it always serializes as an object.
 	Streak StreakSection `json:"streak"`
+	// Recovery is the Whoop recovery tile. Present (non-nil) only when the user
+	// has a connected Whoop connection; nil otherwise so the card stays hidden.
+	Recovery *RecoverySection `json:"recovery,omitempty"`
+}
+
+// RecoverySection is the Whoop recovery tile. nil at the Summary level unless a
+// connected Whoop connection exists; when present but with no data, Today is nil
+// and RestingHRSpark is empty.
+type RecoverySection struct {
+	Today          *RecoveryDay `json:"today"`            // nil when no row today
+	RestingHRSpark []float64    `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted
+}
+
+// RecoveryDay is a single day's Whoop recovery snapshot for the tile. The three
+// metric fields are nullable (Whoop may not have computed them) and serialize as
+// JSON null.
+type RecoveryDay struct {
+	Date             string   `json:"date"`
+	RestingHeartRate *float64 `json:"resting_heart_rate"`
+	RecoveryScore    *float64 `json:"recovery_score"`
+	HRVRmssdMilli    *float64 `json:"hrv_rmssd_milli"`
 }
 
 // RunningSection is the running tile. nil at the Summary level when the user

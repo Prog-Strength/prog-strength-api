@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 )
 
 // Cookie names for the WHOOP OAuth flow. Deliberately distinct from the login
@@ -36,7 +37,8 @@ type Handler struct {
 	oauth                  *OAuthConfig
 	client                 *Client
 	conns                  whoopconn.Repository
-	svc                    *Service // for Backfill on first connect
+	rec                    whooprecovery.Repository // GET /whoop/recovery read endpoint
+	svc                    *Service                 // for Backfill on first connect
 	cipher                 *tokencrypt.Cipher
 	httpClient             *http.Client
 	returnToAllowedOrigins []string
@@ -54,7 +56,7 @@ type Handler struct {
 // stateHMACKey (the server's JWT signing key) signs the OAuth state so the
 // public callback can't be tricked into linking a WHOOP account to the wrong
 // user. now defaults to time.Now when nil.
-func NewHandler(oauth *OAuthConfig, client *Client, conns whoopconn.Repository, svc *Service, cipher *tokencrypt.Cipher, httpClient *http.Client, returnToAllowedOrigins []string, stateHMACKey []byte, now func() time.Time) *Handler {
+func NewHandler(oauth *OAuthConfig, client *Client, conns whoopconn.Repository, rec whooprecovery.Repository, svc *Service, cipher *tokencrypt.Cipher, httpClient *http.Client, returnToAllowedOrigins []string, stateHMACKey []byte, now func() time.Time) *Handler {
 	if now == nil {
 		now = time.Now
 	}
@@ -62,6 +64,7 @@ func NewHandler(oauth *OAuthConfig, client *Client, conns whoopconn.Repository, 
 		oauth:                  oauth,
 		client:                 client,
 		conns:                  conns,
+		rec:                    rec,
 		svc:                    svc,
 		cipher:                 cipher,
 		httpClient:             httpClient,
@@ -87,6 +90,7 @@ func (h *Handler) MountAuthed(r chi.Router) {
 	r.Get("/auth/whoop/connect", h.connect)
 	r.Get("/me/whoop/connection", h.getConnection)
 	r.Delete("/me/whoop/connection", h.deleteConnection)
+	r.Get("/whoop/recovery", h.getRecovery)
 }
 
 // connect (authed) redirects the user to WHOOP's consent screen. It reads the

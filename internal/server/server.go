@@ -38,6 +38,8 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
@@ -209,6 +211,11 @@ func New(cfg config.Config) (*Server, error) {
 	calendarConnRepo = calendarconn.NewSQLiteRepository(database)
 	followRepo = follow.NewSQLiteRepository(database)
 	betaRepo = beta.NewSQLiteRepository(database)
+	// Whoop connection + recovery read repos. Harmless without the OAuth
+	// wiring (Task 10): the dashboard reads them defensively and shows the
+	// recovery card only for a connected user, so an empty table is a no-op.
+	whoopConnRepo := whoopconn.NewSQLiteRepository(database)
+	whoopRecoveryRepo := whooprecovery.NewSQLiteRepository(database)
 
 	// Sync exercise catalog: catalog.go is the source of truth; this
 	// upserts new entries and updates non-key fields on existing ones.
@@ -482,7 +489,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo).Mount(r)
+		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo, whoopConnRepo, whoopRecoveryRepo).Mount(r)
 		// Training snapshot — the agent-facing holistic read across every
 		// domain (GET /training-snapshot). Separate surface from the web
 		// dashboard; composes the same domain repos defensively. Arg order

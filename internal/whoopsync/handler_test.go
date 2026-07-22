@@ -66,7 +66,7 @@ func newTestHandler(t *testing.T, d handlerDeps, tokenURL string, api whoopAPI) 
 	}
 	svc := NewService(d.conns, d.rec, d.cipher, api, oauth, http.DefaultClient, nil)
 	client := NewClient(http.DefaultClient)
-	return NewHandler(oauth, client, d.conns, svc, d.cipher, http.DefaultClient,
+	return NewHandler(oauth, client, d.conns, d.rec, svc, d.cipher, http.DefaultClient,
 		[]string{"https://app.example.com"}, testHMACKey, nil)
 }
 

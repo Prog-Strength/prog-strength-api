@@ -72,10 +72,10 @@ func TestSyncMetrics_RowDispositionsAndResult(t *testing.T) {
 			{ID: 3, Start: "2026-01-17T12:00:00Z", TimezoneOffset: "-08:00"},
 		},
 		recoveries: []Recovery{
-			{CycleID: 1, SleepID: "s1", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}},
+			{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}},
 			{CycleID: 2, SleepID: "s2", ScoreState: "PENDING"},
 			{CycleID: 3, SleepID: "s3", ScoreState: "UNSCORABLE"},
-			{CycleID: 99, SleepID: "s4", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}},
+			{CycleID: 99, SleepID: "s4", CreatedAt: "2026-01-18T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}},
 		},
 	}
 

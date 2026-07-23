@@ -100,21 +100,25 @@ func NewService(
 // small value covering the handful of recoveries it announced).
 func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) error {
 	now := s.now()
-	return s.syncWindow(ctx, userID, now.Add(-recentWindow), now, limit)
+	return s.syncWindow(ctx, "window", userID, now.Add(-recentWindow), now, limit)
 }
 
 // Backfill pulls a wider historical window (the last backfillWindow) in one
 // shot, used when a connection is first established.
 func (s *Service) Backfill(ctx context.Context, userID string) error {
 	now := s.now()
-	return s.syncWindow(ctx, userID, now.Add(-backfillWindow), now, backfillLimit)
+	return s.syncWindow(ctx, "backfill", userID, now.Add(-backfillWindow), now, backfillLimit)
 }
 
 // syncWindow is the shared core: obtain a valid token, fetch recoveries + cycles
 // for [start, end], and upsert one recovery entry per SCORED recovery keyed to
 // its cycle's local calendar date. Recoveries that are not SCORED, or whose
-// cycle is absent from the fetched window, are skipped.
-func (s *Service) syncWindow(ctx context.Context, userID string, start, end time.Time, limit int) error {
+// cycle is absent from the fetched window, are skipped. kind labels the caller
+// (backfill / window) in the summary log and metrics.
+func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, end time.Time, limit int) error {
+	result := "error"
+	defer func() { syncsTotal.WithLabelValues(kind, result).Inc() }()
+
 	accessToken, err := s.validToken(ctx, userID)
 	if err != nil {
 		return err
@@ -134,10 +138,12 @@ func (s *Service) syncWindow(ctx context.Context, userID string, start, end time
 		byID[c.ID] = c
 	}
 
+	var upserted, skippedUnscored, skippedNoCycle, skippedBadDate int
 	now := s.now()
 	for _, r := range recoveries {
 		if r.ScoreState != "SCORED" {
-			continue // PENDING / UNSCORABLE: no metrics to store yet.
+			skippedUnscored++ // PENDING / UNSCORABLE: no metrics to store yet.
+			continue
 		}
 		cycle, ok := byID[r.CycleID]
 		if !ok {
@@ -146,12 +152,14 @@ func (s *Service) syncWindow(ctx context.Context, userID string, start, end time
 			// will pick it up.
 			slog.WarnContext(ctx, "whoopsync: recovery has no matching cycle in window; skipping",
 				"user_id", userID, "cycle_id", r.CycleID, "sleep_id", r.SleepID)
+			skippedNoCycle++
 			continue
 		}
 		date, err := deriveDate(cycle.Start, cycle.TimezoneOffset)
 		if err != nil {
 			slog.WarnContext(ctx, "whoopsync: cannot derive date for cycle; skipping",
 				"user_id", userID, "cycle_id", r.CycleID, "error", err)
+			skippedBadDate++
 			continue
 		}
 
@@ -169,7 +177,30 @@ func (s *Service) syncWindow(ctx context.Context, userID string, start, end time
 		if err := s.rec.Upsert(ctx, entry, now); err != nil {
 			return fmt.Errorf("whoopsync: upsert recovery for %s: %w", date, err)
 		}
+		upserted++
 	}
+
+	syncRowsTotal.WithLabelValues("upserted").Add(float64(upserted))
+	syncRowsTotal.WithLabelValues("skipped_unscored").Add(float64(skippedUnscored))
+	syncRowsTotal.WithLabelValues("skipped_no_cycle").Add(float64(skippedNoCycle))
+	syncRowsTotal.WithLabelValues("skipped_bad_date").Add(float64(skippedBadDate))
+
+	// The one-line answer to "did this user's data actually land, and when?" —
+	// upserted=0 on a healthy-looking sync is the first thing to look for when
+	// a dashboard is unexpectedly empty.
+	slog.InfoContext(ctx, "whoopsync: sync complete",
+		"kind", kind,
+		"user_id", userID,
+		"window_start", start.UTC().Format(time.RFC3339),
+		"window_end", end.UTC().Format(time.RFC3339),
+		"recoveries_fetched", len(recoveries),
+		"cycles_fetched", len(cycles),
+		"upserted", upserted,
+		"skipped_unscored", skippedUnscored,
+		"skipped_no_cycle", skippedNoCycle,
+		"skipped_bad_date", skippedBadDate,
+	)
+	result = "ok"
 	return nil
 }
 
@@ -222,20 +253,29 @@ func (s *Service) refresh(ctx context.Context, userID string, bundle *whoopconn.
 	tokens, err := s.oauth.Refresh(ctx, s.httpClient, string(refreshToken))
 	if err != nil {
 		if errors.Is(err, ErrInvalidGrant) {
+			// The refresh token is dead (revoked at WHOOP, or a lost rotation).
+			// This is the transition behind every "my WHOOP stopped syncing"
+			// report — log it as the state change it is, not just an error.
+			slog.WarnContext(ctx, "whoopsync: refresh rejected; connection flipped to error, reconnect required",
+				"user_id", userID)
+			tokenRefreshesTotal.WithLabelValues("invalid_grant").Inc()
 			if serr := s.conns.SetStatus(ctx, userID, whoopconn.StatusError, s.now()); serr != nil {
 				return "", fmt.Errorf("whoopsync: set status error after invalid grant: %w", serr)
 			}
 			return "", fmt.Errorf("%w: %w", ErrReconnectNeeded, err)
 		}
+		tokenRefreshesTotal.WithLabelValues("error").Inc()
 		return "", fmt.Errorf("whoopsync: refresh token: %w", err)
 	}
 
 	accessEnc, accessNonce, err := s.cipher.Encrypt([]byte(tokens.AccessToken))
 	if err != nil {
+		tokenRefreshesTotal.WithLabelValues("persist_error").Inc()
 		return "", fmt.Errorf("whoopsync: encrypt new access token: %w", err)
 	}
 	refreshEnc, refreshNonce, err := s.cipher.Encrypt([]byte(tokens.RefreshToken))
 	if err != nil {
+		tokenRefreshesTotal.WithLabelValues("persist_error").Inc()
 		return "", fmt.Errorf("whoopsync: encrypt new refresh token: %w", err)
 	}
 
@@ -248,8 +288,16 @@ func (s *Service) refresh(ctx context.Context, userID string, bundle *whoopconn.
 	}
 	// Persist BEFORE returning the new access token (single-use rotation).
 	if err := s.conns.UpdateTokens(ctx, userID, rotated, s.now()); err != nil {
+		// WHOOP already rotated: the old refresh token is now invalid and the
+		// new one wasn't stored. The connection is likely orphaned — the next
+		// refresh will invalid_grant and force a reconnect. Log accordingly.
+		slog.ErrorContext(ctx, "whoopsync: rotated tokens not persisted; connection likely orphaned until reconnect",
+			"user_id", userID, "error", err)
+		tokenRefreshesTotal.WithLabelValues("persist_error").Inc()
 		return "", fmt.Errorf("whoopsync: persist rotated tokens: %w", err)
 	}
+	slog.InfoContext(ctx, "whoopsync: token refreshed", "user_id", userID)
+	tokenRefreshesTotal.WithLabelValues("ok").Inc()
 	return tokens.AccessToken, nil
 }
 

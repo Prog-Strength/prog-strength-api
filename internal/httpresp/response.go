@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
@@ -119,10 +120,13 @@ func ErrorWithCodeData(w http.ResponseWriter, status int, msg, code string, extr
 }
 
 // ServerError logs op and err for operators, then writes a generic 500
-// to avoid leaking internal details to callers. ctx is reserved for
-// structured logging (request ID, user ID) once log/slog is adopted.
+// to avoid leaking internal details to callers. Logging goes through the
+// default slog logger with ctx so the record carries the request_id (the
+// server installs the request-id-stamping JSON handler as the slog default
+// at startup) — a 500's envelope request_id is greppable straight to the
+// line that explains it.
 func ServerError(w http.ResponseWriter, ctx context.Context, op string, err error) {
-	log.Printf("%s: %v", op, err)
+	slog.ErrorContext(ctx, op, "error", err)
 	Error(w, http.StatusInternalServerError, "internal server error")
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -49,6 +50,17 @@ type Server struct {
 }
 
 func New(cfg config.Config) (*Server, error) {
+	// Install the request-id-stamping JSON handler as the process-wide slog
+	// default. Every slog.*Context call anywhere in the API (whoopsync,
+	// httpresp.ServerError, future adopters) then emits JSON to stdout with
+	// the request_id attached — no per-package logger plumbing. Packages that
+	// take an explicit *slog.Logger (vectormemory, planned workouts,
+	// nutritionlookup) keep working unchanged; this only changes the fallback.
+	// Side effect (deliberate): slog.SetDefault also bridges the stdlib log
+	// package, so legacy log.Printf lines become JSON records at info level —
+	// one uniform log stream for Logs Insights instead of two formats.
+	slog.SetDefault(logging.NewLogger(os.Stdout, cfg.LogLevel))
+
 	r := chi.NewRouter()
 
 	// requestid.Middleware replaces chi's middleware.RequestID so the id

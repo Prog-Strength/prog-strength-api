@@ -2,7 +2,7 @@ package whoopsync
 
 import (
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -215,12 +215,17 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "upsert whoop connection", err)
 		return
 	}
+	slog.InfoContext(r.Context(), "whoop: connected",
+		"user_id", userID, "whoop_user_id", profile.UserID, "scopes", tokens.Scopes)
 
 	// Kick off a historical backfill inline, best-effort: a failure here must
 	// NOT fail the callback — the connection is already usable, and the next
-	// scheduled/webhook sync will fill in any gap.
+	// scheduled/webhook sync will fill in any gap. Error (not warn): a failed
+	// backfill is exactly the "connected but dashboard empty" state users
+	// report, and this line is what explains it.
 	if err := h.svc.Backfill(r.Context(), userID); err != nil {
-		log.Printf("whoop connect: backfill for %s failed (non-fatal): %v", userID, err)
+		slog.ErrorContext(r.Context(), "whoop connect: backfill failed (non-fatal)",
+			"user_id", userID, "error", err)
 	}
 
 	if returnTo != "" {
@@ -287,9 +292,11 @@ func (h *Handler) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	// failures are logged and swallowed so the local revoke still proceeds.
 	if bundle, tokErr := h.conns.GetTokens(r.Context(), userID); tokErr == nil {
 		if token, decErr := h.cipher.Decrypt(bundle.AccessTokenEnc, bundle.AccessTokenNonce); decErr != nil {
-			log.Printf("whoop disconnect: decrypt access token for %s failed: %v", userID, decErr)
+			slog.WarnContext(r.Context(), "whoop disconnect: decrypt access token failed",
+				"user_id", userID, "error", decErr)
 		} else if revErr := Revoke(r.Context(), h.httpClient, string(token)); revErr != nil {
-			log.Printf("whoop disconnect: revoke at whoop for %s failed: %v", userID, revErr)
+			slog.WarnContext(r.Context(), "whoop disconnect: revoke at whoop failed",
+				"user_id", userID, "error", revErr)
 		}
 	}
 
@@ -301,6 +308,7 @@ func (h *Handler) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "revoke whoop connection", err)
 		return
 	}
+	slog.InfoContext(r.Context(), "whoop: disconnected", "user_id", userID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

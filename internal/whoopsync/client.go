@@ -11,9 +11,11 @@ import (
 	"time"
 )
 
-// whoopAPIBase is the WHOOP v2 REST base. It is a package var (not const) so
-// tests can repoint it at an httptest.Server without hitting WHOOP.
-var whoopAPIBase = "https://api.prod.whoop.com"
+// whoopAPIBase is the WHOOP v2 REST base. Unlike the OAuth endpoints (which
+// live at the host root under /oauth), every data endpoint is prefixed with
+// /developer — without it WHOOP 404s. It is a package var (not const) so tests
+// can repoint it at an httptest.Server without hitting WHOOP.
+var whoopAPIBase = "https://api.prod.whoop.com/developer"
 
 // maxPages caps how many pages a paginated list call will follow, bounding the
 // loop even if the API kept returning a next_token forever.

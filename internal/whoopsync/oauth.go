@@ -35,7 +35,7 @@ const (
 
 // whoopRevokeURL is WHOOP's access-revocation endpoint. It is a package var
 // (not const) so tests can repoint it at an httptest.Server; Revoke reads it.
-var whoopRevokeURL = "https://api.prod.whoop.com/v2/user/access"
+var whoopRevokeURL = "https://api.prod.whoop.com/developer/v2/user/access"
 
 // ErrNoRefreshToken is returned by Exchange when WHOOP's token response carries
 // no refresh token — meaning the "offline" scope was not granted. Surfacing it

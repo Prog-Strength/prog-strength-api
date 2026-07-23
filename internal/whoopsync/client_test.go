@@ -207,3 +207,21 @@ func TestClassifyStatus_TokenRejected(t *testing.T) {
 		t.Errorf("err = %v, want ErrTokenRejected", err)
 	}
 }
+
+// Captured at init, before any test mutates the package vars via withAPIBase.
+var (
+	defaultWhoopAPIBase   = whoopAPIBase
+	defaultWhoopRevokeURL = whoopRevokeURL
+)
+
+// WHOOP's data API lives under /developer (unlike its OAuth endpoints at the
+// host root). v0.79.0 shipped without the prefix and every data call 404'd —
+// this pins the production URLs so the prefix can't silently regress.
+func TestProductionURLsCarryDeveloperPrefix(t *testing.T) {
+	if defaultWhoopAPIBase != "https://api.prod.whoop.com/developer" {
+		t.Errorf("whoopAPIBase = %q, want https://api.prod.whoop.com/developer", defaultWhoopAPIBase)
+	}
+	if defaultWhoopRevokeURL != "https://api.prod.whoop.com/developer/v2/user/access" {
+		t.Errorf("whoopRevokeURL = %q, want https://api.prod.whoop.com/developer/v2/user/access", defaultWhoopRevokeURL)
+	}
+}

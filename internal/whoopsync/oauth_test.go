@@ -132,8 +132,13 @@ func TestAuthCodeURLParams(t *testing.T) {
 	if got := q.Get("client_id"); got != "client-id" {
 		t.Errorf("client_id = %q, want client-id", got)
 	}
-	if got := q.Get("scope"); !strings.Contains(got, "read:recovery") {
-		t.Errorf("scope = %q, want to contain read:recovery", got)
+	// read:cycles must ride along with read:recovery: syncWindow joins
+	// recoveries to /v2/cycle for date derivation, so a consent without
+	// read:cycles yields a connection that can never ingest (the v0.79.x bug).
+	for _, scope := range []string{"read:recovery", "read:cycles", "read:profile", "offline"} {
+		if got := q.Get("scope"); !strings.Contains(got, scope) {
+			t.Errorf("scope = %q, want to contain %s", got, scope)
+		}
 	}
 	if !strings.HasPrefix(raw, authorizeURL) {
 		t.Errorf("auth url = %q, want prefix %q", raw, authorizeURL)

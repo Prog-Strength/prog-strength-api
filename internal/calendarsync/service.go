@@ -8,6 +8,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -39,7 +40,7 @@ type tokenMinter interface {
 // the plan rather than losing it or 500ing the API call.
 type Service struct {
 	conns       calendarconn.Repository
-	cipher      *Cipher
+	cipher      *tokencrypt.Cipher
 	tokens      tokenMinter
 	client      CalendarClient
 	plans       plannedworkout.Repository
@@ -52,7 +53,7 @@ type Service struct {
 // nil.
 func NewService(
 	conns calendarconn.Repository,
-	cipher *Cipher,
+	cipher *tokencrypt.Cipher,
 	tokens *TokenSource,
 	client CalendarClient,
 	plans plannedworkout.Repository,

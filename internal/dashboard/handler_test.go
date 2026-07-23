@@ -21,6 +21,8 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
@@ -45,6 +47,8 @@ type repos struct {
 	nutrition  *nutrition.SQLiteRepository
 	bodyweight *bodyweight.SQLiteRepository
 	user       *user.SQLiteRepository
+	whoopConn  *whoopconn.SQLiteRepository
+	whoopRec   *whooprecovery.SQLiteRepository
 }
 
 // newTestEnv builds the shared-DB repositories, syncs the exercise catalog (so
@@ -61,6 +65,8 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 		nutrition:  nutrition.NewSQLiteRepository(db),
 		bodyweight: bodyweight.NewSQLiteRepository(db),
 		user:       user.NewSQLiteRepository(db),
+		whoopConn:  whoopconn.NewSQLiteRepository(db),
+		whoopRec:   whooprecovery.NewSQLiteRepository(db),
 	}
 	if err := rp.exercise.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
@@ -78,7 +84,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	}
 
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user, rp.whoopConn, rp.whoopRec)
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 	return r, rp, u.ID
@@ -365,6 +371,8 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 		nutrition:  nutrition.NewSQLiteRepository(db),
 		bodyweight: bodyweight.NewSQLiteRepository(db),
 		user:       user.NewSQLiteRepository(db),
+		whoopConn:  whoopconn.NewSQLiteRepository(db),
+		whoopRec:   whooprecovery.NewSQLiteRepository(db),
 	}
 	if err := rp.exercise.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
@@ -392,7 +400,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 
 	// Wire the handler with the failing bodyweight repo; all others are real.
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user, rp.whoopConn, rp.whoopRec)
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 

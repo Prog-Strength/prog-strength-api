@@ -9,6 +9,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
@@ -80,7 +81,7 @@ func newTestService(t *testing.T, client CalendarClient, tokens tokenMinter) (*S
 	plans := plannedworkout.NewSQLiteRepository(db)
 	users := user.NewSQLiteRepository(db)
 
-	cipher, err := NewCipher(make([]byte, 32))
+	cipher, err := tokencrypt.NewCipher(make([]byte, 32))
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}

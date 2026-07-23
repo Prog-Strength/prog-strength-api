@@ -52,6 +52,17 @@ calendar_redirect_url = "https://api.progstrength.fitness/auth/google/calendar/c
 # Secret → env. Empty disables Google Calendar sync.
 calendar_token_enc_key = "${CALENDAR_TOKEN_ENC_KEY}"
 
+[whoop]
+# OAuth client id: deployment-bound identifier (not a hard secret) → env.
+client_id = "${WHOOP_CLIENT_ID}"
+# OAuth client secret (also the webhook HMAC key) → secret → env.
+client_secret = "${WHOOP_CLIENT_SECRET}"
+# Public OAuth callback URL — NOT a secret. Prod literal; local dev via env.
+redirect_url = "https://api.progstrength.fitness/auth/whoop/callback"
+# base64 32-byte AES-256-GCM key encrypting stored Whoop tokens. Secret → env.
+# Empty disables the Whoop integration.
+token_enc_key = "${WHOOP_TOKEN_ENC_KEY}"
+
 [cors]
 # Browser origins permitted credentialed access. Public domains — NOT
 # secrets. Each entry may contain a SINGLE "*" wildcard (Vercel previews).

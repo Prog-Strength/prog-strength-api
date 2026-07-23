@@ -16,16 +16,17 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 )
 
 // testCipher builds a deterministic AES-256 cipher for tests.
-func testCipher(t *testing.T) *Cipher {
+func testCipher(t *testing.T) *tokencrypt.Cipher {
 	t.Helper()
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i + 1)
 	}
-	c, err := NewCipher(key)
+	c, err := tokencrypt.NewCipher(key)
 	if err != nil {
 		t.Fatalf("NewCipher: %v", err)
 	}

@@ -49,6 +49,8 @@ var configEnvVars = []string{
 	"CORS_ALLOWED_ORIGIN", "RETURN_TO_ALLOWED_ORIGINS",
 	"JWT_SIGNING_KEY", "ADMIN_EMAILS", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
 	"CALENDAR_TOKEN_ENC_KEY",
+	"WHOOP_CLIENT_ID", "WHOOP_CLIENT_SECRET", "WHOOP_REDIRECT_URL",
+	"WHOOP_TOKEN_ENC_KEY",
 	"AVATAR_BUCKET_NAME", "TCX_BUCKET_NAME", "AWS_REGION",
 	"FATSECRET_CLIENT_ID", "FATSECRET_CLIENT_SECRET", "USDA_FDC_API_KEY",
 	"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
@@ -145,6 +147,56 @@ aws_region = "${AWS_REGION}"
 	}
 	if cfg.AWSRegion != "us-east-2" {
 		t.Errorf("AWSRegion = %q, want us-east-2", cfg.AWSRegion)
+	}
+}
+
+func TestWhoopInterpolationFromEnv(t *testing.T) {
+	// The [whoop] secrets/ids interpolate from ${WHOOP_*}; redirect_url is a
+	// prod literal here, and gets an env override path (WHOOP_REDIRECT_URL) for
+	// local dev — mirroring the calendar redirect.
+	toml := `
+[auth]
+jwt_signing_key = "x"
+
+[whoop]
+client_id = "${WHOOP_CLIENT_ID}"
+client_secret = "${WHOOP_CLIENT_SECRET}"
+redirect_url = "https://api.progstrength.fitness/auth/whoop/callback"
+token_enc_key = "${WHOOP_TOKEN_ENC_KEY}"
+`
+	cfg := load(t, toml, map[string]string{
+		"WHOOP_CLIENT_ID":     "whoop-client-123",
+		"WHOOP_CLIENT_SECRET": "whoop-secret-456",
+		"WHOOP_TOKEN_ENC_KEY": "whoop-enc-key-789",
+	})
+
+	if cfg.WhoopClientID != "whoop-client-123" {
+		t.Errorf("WhoopClientID = %q, want whoop-client-123", cfg.WhoopClientID)
+	}
+	if cfg.WhoopClientSecret != "whoop-secret-456" {
+		t.Errorf("WhoopClientSecret = %q, want whoop-secret-456", cfg.WhoopClientSecret)
+	}
+	if cfg.WhoopTokenEncKey != "whoop-enc-key-789" {
+		t.Errorf("WhoopTokenEncKey = %q, want whoop-enc-key-789", cfg.WhoopTokenEncKey)
+	}
+	if cfg.WhoopRedirectURL != "https://api.progstrength.fitness/auth/whoop/callback" {
+		t.Errorf("WhoopRedirectURL = %q, want the prod literal", cfg.WhoopRedirectURL)
+	}
+}
+
+func TestWhoopRedirectURLEnvOverride(t *testing.T) {
+	toml := `
+[auth]
+jwt_signing_key = "x"
+
+[whoop]
+redirect_url = "https://api.progstrength.fitness/auth/whoop/callback"
+`
+	cfg := load(t, toml, map[string]string{
+		"WHOOP_REDIRECT_URL": "http://localhost:8080/auth/whoop/callback",
+	})
+	if cfg.WhoopRedirectURL != "http://localhost:8080/auth/whoop/callback" {
+		t.Errorf("WhoopRedirectURL = %q, want localhost override", cfg.WhoopRedirectURL)
 	}
 }
 
@@ -492,6 +544,10 @@ func TestGoldenManifest(t *testing.T) {
 		FatSecretClientSecret: "",
 		USDAFDCAPIKey:         "",
 		CalendarTokenEncKey:   "",
+		WhoopClientID:         "",
+		WhoopClientSecret:     "",
+		WhoopRedirectURL:      "https://api.progstrength.fitness/auth/whoop/callback",
+		WhoopTokenEncKey:      "",
 		LogLevel:              slog.LevelInfo,
 		VectorMemory: VectorMemoryConfig{
 			Enabled:              true,

@@ -1,8 +1,8 @@
-// Package calendarsync holds the cryptographic substrate for opt-in Google
-// Calendar sync: an AES-256-GCM cipher used to encrypt Google refresh tokens
-// at rest. OAuth handlers and Google API calls live in sibling packages /
-// later tasks — this package is storage-only.
-package calendarsync
+// Package tokencrypt provides an AES-256-GCM authenticated cipher for
+// encrypting OAuth token material (refresh/access tokens) at rest. It is
+// provider-agnostic: each caller supplies its own 32-byte key, so distinct
+// integrations (calendar sync, Whoop, ...) can hold independent keys.
+package tokencrypt
 
 import (
 	"crypto/aes"
@@ -27,15 +27,15 @@ type Cipher struct {
 // otherwise an error is returned.
 func NewCipher(key []byte) (*Cipher, error) {
 	if len(key) != keySize {
-		return nil, fmt.Errorf("calendarsync: key must be %d bytes, got %d", keySize, len(key))
+		return nil, fmt.Errorf("tokencrypt: key must be %d bytes, got %d", keySize, len(key))
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("calendarsync: new aes cipher: %w", err)
+		return nil, fmt.Errorf("tokencrypt: new aes cipher: %w", err)
 	}
 	aead, err := cipher.NewGCM(block)
 	if err != nil {
-		return nil, fmt.Errorf("calendarsync: new gcm: %w", err)
+		return nil, fmt.Errorf("tokencrypt: new gcm: %w", err)
 	}
 	return &Cipher{aead: aead}, nil
 }
@@ -46,7 +46,7 @@ func NewCipher(key []byte) (*Cipher, error) {
 func (c *Cipher) Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error) {
 	nonce = make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, nil, fmt.Errorf("calendarsync: read nonce: %w", err)
+		return nil, nil, fmt.Errorf("tokencrypt: read nonce: %w", err)
 	}
 	ciphertext = c.aead.Seal(nil, nonce, plaintext, nil)
 	return ciphertext, nonce, nil
@@ -57,30 +57,30 @@ func (c *Cipher) Encrypt(plaintext []byte) (ciphertext, nonce []byte, err error)
 // mismatch).
 func (c *Cipher) Decrypt(ciphertext, nonce []byte) (plaintext []byte, err error) {
 	if len(nonce) != c.aead.NonceSize() {
-		return nil, fmt.Errorf("calendarsync: nonce must be %d bytes, got %d", c.aead.NonceSize(), len(nonce))
+		return nil, fmt.Errorf("tokencrypt: nonce must be %d bytes, got %d", c.aead.NonceSize(), len(nonce))
 	}
 	plaintext, err = c.aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, fmt.Errorf("calendarsync: decrypt: %w", err)
+		return nil, fmt.Errorf("tokencrypt: decrypt: %w", err)
 	}
 	return plaintext, nil
 }
 
-// KeyFromEnv decodes the operator-supplied CALENDAR_TOKEN_ENC_KEY value into a
-// 32-byte AES-256 key. raw must be standard base64 encoding of exactly 32
-// random bytes — generate one with `openssl rand -base64 32`. A wrong decoded
-// length or invalid base64 yields a clear error so misconfiguration fails fast
-// at startup rather than at first encrypt.
+// KeyFromEnv decodes an operator-supplied value into a 32-byte AES-256 key. raw
+// must be standard base64 encoding of exactly 32 random bytes — generate one
+// with `openssl rand -base64 32`. A wrong decoded length or invalid base64
+// yields a clear error so misconfiguration fails fast at startup rather than at
+// first encrypt.
 func KeyFromEnv(raw string) ([]byte, error) {
 	if raw == "" {
-		return nil, errors.New("calendarsync: CALENDAR_TOKEN_ENC_KEY is empty")
+		return nil, errors.New("tokencrypt: token encryption key is empty")
 	}
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil {
-		return nil, fmt.Errorf("calendarsync: CALENDAR_TOKEN_ENC_KEY is not valid base64: %w", err)
+		return nil, fmt.Errorf("tokencrypt: token encryption key is not valid base64: %w", err)
 	}
 	if len(key) != keySize {
-		return nil, fmt.Errorf("calendarsync: CALENDAR_TOKEN_ENC_KEY must decode to %d bytes, got %d", keySize, len(key))
+		return nil, fmt.Errorf("tokencrypt: token encryption key must decode to %d bytes, got %d", keySize, len(key))
 	}
 	return key, nil
 }

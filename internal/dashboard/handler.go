@@ -19,6 +19,8 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
@@ -41,6 +43,8 @@ type Handler struct {
 	nutritionRepo  nutrition.Repository
 	bodyweightRepo bodyweight.Repository
 	userRepo       user.Repository
+	whoopConns     whoopconn.Repository
+	whoopRecovery  whooprecovery.Repository
 
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
@@ -57,6 +61,8 @@ func NewHandler(
 	nutritionRepo nutrition.Repository,
 	bodyweightRepo bodyweight.Repository,
 	userRepo user.Repository,
+	whoopConns whoopconn.Repository,
+	whoopRecovery whooprecovery.Repository,
 ) *Handler {
 	return &Handler{
 		activityRepo:   activityRepo,
@@ -66,6 +72,8 @@ func NewHandler(
 		nutritionRepo:  nutritionRepo,
 		bodyweightRepo: bodyweightRepo,
 		userRepo:       userRepo,
+		whoopConns:     whoopConns,
+		whoopRecovery:  whoopRecovery,
 		now:            time.Now,
 	}
 }
@@ -151,6 +159,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		Nutrition:  h.buildNutritionSection(ctx, r, userID, todayStr, loc),
 		Bodyweight: h.buildBodyweightSection(ctx, r, userID, since8w),
 		Streak:     buildStreak(streakDates(runs, workouts, stepEntries, stepGoal.Goal, loc), now, loc),
+		Recovery:   h.buildRecoverySection(ctx, r, userID, now, loc),
 	}
 
 	httpresp.OK(w, "dashboard summary", summary)
@@ -231,6 +240,33 @@ func (h *Handler) buildBodyweightSection(ctx context.Context, r *http.Request, u
 		return h.bodyweightRepo.GetBodyweightGoal(ctx, userID)
 	})
 	return buildBodyweight(entries, goal)
+}
+
+// buildRecoverySection assembles the Whoop recovery tile. It is present only
+// when the user has a CONNECTED Whoop connection: an absent/revoked/errored
+// connection (or a failed connection read) yields a nil section so the card
+// stays hidden. When connected, it fetches the trailing ~7 local days of
+// recovery and builds today's row + a 7-day resting-HR sparkline. A failed
+// recovery read degrades to nil (never a 500), like the other section reads.
+func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, userID string, now time.Time, loc *time.Location) *RecoverySection {
+	conn, err := h.whoopConns.Get(ctx, userID)
+	if err != nil {
+		if !errors.Is(err, whoopconn.ErrNotFound) {
+			log.Printf("dashboard: whoop connection for %s: %v", requestid.FromContext(r.Context()), err)
+		}
+		return nil
+	}
+	if conn.Status != whoopconn.StatusConnected {
+		return nil
+	}
+
+	// Trailing 7 local days (inclusive of today) as a YYYY-MM-DD window.
+	sinceStr := now.In(loc).AddDate(0, 0, -(recoverySparkDays - 1)).Format("2006-01-02")
+	untilStr := now.In(loc).Format("2006-01-02")
+	entries := defer1(ctx, r, "whoop recovery", func() ([]whooprecovery.Entry, error) {
+		return h.whoopRecovery.ListRange(ctx, userID, sinceStr, untilStr)
+	})
+	return buildWhoop(entries, now, loc)
 }
 
 // thisWeekWorkoutIDs returns the IDs of workouts performed in the current local

@@ -1,3 +1,10 @@
+## [0.80.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.80.0...v0.80.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **whoop:** date recoveries by scored-at instant, not cycle start ([#76](https://github.com/Prog-Strength/prog-strength-api/issues/76)) ([8c83f55](https://github.com/Prog-Strength/prog-strength-api/commit/8c83f5566c9a59f36b28e4a552bf0e815ed35e56))
+
 # [0.80.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.2...v0.80.0) (2026-07-23)
 
 

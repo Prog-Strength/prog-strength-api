@@ -1,13 +1,18 @@
 package httpresp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/logging"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 )
 
 // withRequestID writes the X-Request-ID header onto a fresh recorder.
@@ -108,5 +113,42 @@ func TestServerError_GenericMessage(t *testing.T) {
 	body := decodeBody(t, w)
 	if got := body["error"]; got != "internal server error" {
 		t.Fatalf("body error = %v, want generic message", got)
+	}
+}
+
+// TestServerErrorLogsRequestID proves the 500 path's log record carries the
+// request_id from context when the request-id-stamping slog handler is the
+// default (as the server installs at startup) — the join key between a user's
+// error envelope and the operator's log line. Regression pin for the
+// v0.79.x debugging session where 500s were logged without any request_id.
+func TestServerErrorLogsRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(logging.NewLogger(&buf, slog.LevelInfo))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	var envelopeRID string
+	h := requestid.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelopeRID = w.Header().Get(requestid.HeaderName)
+		httpresp.ServerError(w, r.Context(), "exchange whoop oauth code", errors.New("boom"))
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	if envelopeRID == "" {
+		t.Fatal("middleware minted no request id")
+	}
+	var record map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &record); err != nil {
+		t.Fatalf("log line is not JSON: %v (%q)", err, buf.String())
+	}
+	if got := record["request_id"]; got != envelopeRID {
+		t.Errorf("log request_id = %v, want %v", got, envelopeRID)
+	}
+	if got := record["msg"]; got != "exchange whoop oauth code" {
+		t.Errorf("log msg = %v, want the op string", got)
+	}
+	if got := record["error"]; got != "boom" {
+		t.Errorf("log error = %v, want boom", got)
 	}
 }

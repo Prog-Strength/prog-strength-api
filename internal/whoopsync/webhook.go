@@ -107,6 +107,7 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 
 	if !h.verify(r.Header.Get(sigHeader), r.Header.Get(tsHeader), body) {
 		slog.WarnContext(ctx, "whoop webhook: signature verification failed")
+		webhooksTotal.WithLabelValues("invalid", "bad_signature").Inc()
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -115,6 +116,7 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 	if err = json.Unmarshal(body, &event); err != nil {
 		// Signature already verified, so this is a malformed-but-authentic body.
 		slog.WarnContext(ctx, "whoop webhook: bad json after valid signature", "error", err)
+		webhooksTotal.WithLabelValues("invalid", "bad_json").Inc()
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
@@ -122,17 +124,26 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.conns.GetByWhoopUserID(ctx, event.UserID)
 	if err != nil {
 		if errors.Is(err, whoopconn.ErrNotFound) {
-			// No local user for this WHOOP account — drop silently. Returning a
-			// non-2xx would make WHOOP retry an event we never want.
+			// No local user for this WHOOP account — drop. Returning a non-2xx
+			// would make WHOOP retry an event we never want. Logged (not
+			// silent): a steady stream of these means a connection row was
+			// lost while the WHOOP-side registration lives on.
+			slog.InfoContext(ctx, "whoop webhook: dropped, no local user",
+				"type", event.Type, "whoop_user_id", event.UserID)
+			webhooksTotal.WithLabelValues(event.Type, "unknown_user").Inc()
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		slog.ErrorContext(ctx, "whoop webhook: route by whoop user id", "error", err)
+		webhooksTotal.WithLabelValues(event.Type, "route_error").Inc()
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 	if conn.Status != whoopconn.StatusConnected {
 		// Revoked / error connection: drop, don't retry.
+		slog.InfoContext(ctx, "whoop webhook: dropped, connection not active",
+			"type", event.Type, "user_id", conn.UserID, "status", conn.Status)
+		webhooksTotal.WithLabelValues(event.Type, "not_connected").Inc()
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -143,17 +154,31 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 			// Transient sync failure: return 500 so WHOOP's retry gets another
 			// shot. SyncWindow is idempotent, so a later retry is safe.
 			slog.ErrorContext(ctx, "whoop webhook: sync window", "user_id", conn.UserID, "error", err)
+			webhooksTotal.WithLabelValues(event.Type, "sync_error").Inc()
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		// The sync itself logged its row counts; this line is the delivery's
+		// outcome, so one Logs Insights filter shows the webhook lifecycle.
+		slog.InfoContext(ctx, "whoop webhook: handled",
+			"type", event.Type, "user_id", conn.UserID)
+		webhooksTotal.WithLabelValues(event.Type, "synced").Inc()
 	case "recovery.deleted":
 		if err := h.rec.DeleteBySleepID(ctx, conn.UserID, event.ID); err != nil {
 			slog.ErrorContext(ctx, "whoop webhook: delete recovery", "user_id", conn.UserID, "sleep_id", event.ID, "error", err)
+			webhooksTotal.WithLabelValues(event.Type, "delete_error").Inc()
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		slog.InfoContext(ctx, "whoop webhook: handled",
+			"type", event.Type, "user_id", conn.UserID, "sleep_id", event.ID)
+		webhooksTotal.WithLabelValues(event.Type, "deleted").Inc()
 	default:
-		// Event type we don't handle — accept and drop.
+		// Event type we don't handle — accept and drop. Debug (not info): a
+		// broad WHOOP-side subscription would make this line very chatty.
+		slog.DebugContext(ctx, "whoop webhook: ignored event type",
+			"type", event.Type, "user_id", conn.UserID)
+		webhooksTotal.WithLabelValues(event.Type, "ignored").Inc()
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

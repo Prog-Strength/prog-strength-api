@@ -1,3 +1,10 @@
+## [0.79.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.0...v0.79.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* **whoop:** add missing /developer prefix to WHOOP data API URLs ([#73](https://github.com/Prog-Strength/prog-strength-api/issues/73)) ([854a8ce](https://github.com/Prog-Strength/prog-strength-api/commit/854a8ce842902bc760b99c0b58ce64f08196fb27))
+
 # [0.79.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.78.0...v0.79.0) (2026-07-23)
 
 

@@ -1,3 +1,10 @@
+# [0.79.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.78.0...v0.79.0) (2026-07-23)
+
+
+### Features
+
+* **whoop:** recovery integration — oauth, webhook ingestion, reads ([#72](https://github.com/Prog-Strength/prog-strength-api/issues/72)) ([ed5c3cb](https://github.com/Prog-Strength/prog-strength-api/commit/ed5c3cbf0fab26852bc872b6598a96ebab21ee8f))
+
 # [0.78.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.77.0...v0.78.0) (2026-07-17)
 
 

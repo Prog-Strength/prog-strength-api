@@ -28,9 +28,14 @@ const (
 	exchangeURL = "https://api.prod.whoop.com/oauth/oauth2/token"
 
 	// ScopeString is the space-separated set of WHOOP scopes we request:
-	// recovery data, basic profile, and offline access (the last is what makes
+	// recovery data, physiological cycles (syncWindow joins recoveries to
+	// cycles to derive the local calendar date, so every sync reads
+	// /v2/cycle), basic profile, and offline access (the last is what makes
 	// WHOOP return a refresh token so we can sync without the user present).
-	ScopeString = "read:recovery read:profile offline"
+	// Scopes are granted at consent: adding one here requires connected users
+	// to reconnect before it takes effect, and the WHOOP app's dashboard
+	// config must have the scope enabled or consent fails.
+	ScopeString = "read:recovery read:cycles read:profile offline"
 )
 
 // whoopRevokeURL is WHOOP's access-revocation endpoint. It is a package var

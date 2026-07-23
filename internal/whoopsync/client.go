@@ -64,6 +64,7 @@ type RecoveryScore struct {
 type Recovery struct {
 	CycleID    int64          `json:"cycle_id"`
 	SleepID    string         `json:"sleep_id"`
+	CreatedAt  string         `json:"created_at"`  // RFC3339; when WHOOP scored it (~wake + phone sync)
 	ScoreState string         `json:"score_state"` // SCORED | PENDING | UNSCORABLE
 	Score      *RecoveryScore `json:"score"`       // absent when not SCORED
 }

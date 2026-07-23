@@ -168,10 +168,10 @@ func TestSyncWindow_UpsertsOnlyScoredSkipsMissingCycle(t *testing.T) {
 			{ID: 3, Start: "2026-01-17T12:00:00Z", TimezoneOffset: "-08:00"}, // -> 2026-01-17
 		},
 		recoveries: []Recovery{
-			{CycleID: 1, SleepID: "s1", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72), RestingHeartRate: fptr(55), HRVRmssdMilli: fptr(40)}},
+			{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72), RestingHeartRate: fptr(55), HRVRmssdMilli: fptr(40)}},
 			{CycleID: 2, SleepID: "s2", ScoreState: "PENDING"},
 			{CycleID: 3, SleepID: "s3", ScoreState: "UNSCORABLE"},
-			{CycleID: 99, SleepID: "s4", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}}, // cycle absent → skip
+			{CycleID: 99, SleepID: "s4", CreatedAt: "2026-01-18T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}}, // cycle absent → skip
 		},
 	}
 	refr := &fakeRefresher{}
@@ -216,7 +216,7 @@ func TestSyncWindow_Idempotent(t *testing.T) {
 
 	api := &fakeAPI{
 		cycles:     []Cycle{{ID: 1, Start: "2026-01-15T12:00:00Z", TimezoneOffset: "-08:00"}},
-		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}}},
+		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}}},
 	}
 	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
 
@@ -253,7 +253,7 @@ func TestSyncWindow_RefreshPersistsNewTokensBeforeUse(t *testing.T) {
 	}
 	api := &fakeAPI{
 		cycles:     []Cycle{{ID: 1, Start: "2026-01-15T12:00:00Z", TimezoneOffset: "-08:00"}},
-		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(90)}}},
+		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(90)}}},
 		orderTick:  &tick,
 	}
 
@@ -371,7 +371,7 @@ func TestBackfill_SyncsWiderWindow(t *testing.T) {
 
 	api := &fakeAPI{
 		cycles:     []Cycle{{ID: 1, Start: "2026-01-02T12:00:00Z", TimezoneOffset: "+00:00"}},
-		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(65)}}},
+		recoveries: []Recovery{{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-02T07:10:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(65)}}},
 	}
 	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
 
@@ -384,5 +384,41 @@ func TestBackfill_SyncsWiderWindow(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Date != "2026-01-02" {
 		t.Fatalf("backfill did not upsert expected row: %+v", got)
+	}
+}
+
+// TestSyncWindow_DatesByScoredAtNotCycleStart pins the wake-day semantics:
+// WHOOP cycles run sleep-onset → sleep-onset, so a recovery's cycle STARTS at
+// the previous evening's bedtime. Dating by cycle.start pinned every recovery
+// to the day before the user woke up with it — "today" never had data (the
+// v0.79.x dashboard bug). The recovery scored on the morning of Jan 16 (cycle
+// began 22:45 local Jan 15) must land on Jan 16.
+func TestSyncWindow_DatesByScoredAtNotCycleStart(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	now := time.Date(2026, 1, 16, 20, 0, 0, 0, time.UTC)
+	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", now.Add(time.Hour), now)
+
+	api := &fakeAPI{
+		// Bedtime 22:45 local Jan 15 (-08:00) = 06:45Z Jan 16.
+		cycles: []Cycle{{ID: 7, Start: "2026-01-16T06:45:00Z", TimezoneOffset: "-08:00"}},
+		// Scored 07:05 local Jan 16 = 15:05Z.
+		recoveries: []Recovery{{CycleID: 7, SleepID: "s7", CreatedAt: "2026-01-16T15:05:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RestingHeartRate: fptr(52)}}},
+	}
+	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
+
+	if err := svc.SyncWindow(ctx, "u1", 10); err != nil {
+		t.Fatalf("SyncWindow: %v", err)
+	}
+	got, err := rec.ListRange(ctx, "u1", "", "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(got))
+	}
+	if got[0].Date != "2026-01-16" {
+		t.Fatalf("date = %q (cycle-start day?), want 2026-01-16 (the day the user woke up with this recovery)", got[0].Date)
 	}
 }

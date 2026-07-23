@@ -155,9 +155,15 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 			skippedNoCycle++
 			continue
 		}
-		date, err := deriveDate(cycle.Start, cycle.TimezoneOffset)
+		// Date the recovery by WHEN IT WAS SCORED (created_at ≈ wake + phone
+		// sync), localized by the cycle's timezone_offset — NOT by the cycle's
+		// start. WHOOP cycles run sleep-onset → sleep-onset, so cycle.start is
+		// the previous evening's bedtime and dating by it pins every recovery
+		// to the day BEFORE the user woke up with it ("today" never has data).
+		// The cycle fetch stays: it is the only source of timezone_offset.
+		date, err := deriveDate(r.CreatedAt, cycle.TimezoneOffset)
 		if err != nil {
-			slog.WarnContext(ctx, "whoopsync: cannot derive date for cycle; skipping",
+			slog.WarnContext(ctx, "whoopsync: cannot derive date for recovery; skipping",
 				"user_id", userID, "cycle_id", r.CycleID, "error", err)
 			skippedBadDate++
 			continue
@@ -301,14 +307,15 @@ func (s *Service) refresh(ctx context.Context, userID string, bundle *whoopconn.
 	return tokens.AccessToken, nil
 }
 
-// deriveDate maps a WHOOP cycle's UTC start instant to the local calendar date
-// (YYYY-MM-DD) implied by its timezone_offset. The offset is authoritative — no
-// IANA lookup — so DST-adjacent days format correctly from the raw offset. It is
+// deriveDate maps a UTC RFC3339 instant (in practice the recovery's created_at)
+// to the local calendar date (YYYY-MM-DD) implied by tzOffset (the cycle's
+// timezone_offset). The offset is authoritative — no IANA lookup — so
+// DST-adjacent days format correctly from the raw offset. It is
 // exported-for-test as a pure helper.
-func deriveDate(cycleStart, tzOffset string) (string, error) {
-	instant, err := time.Parse(time.RFC3339, cycleStart)
+func deriveDate(instantRFC3339, tzOffset string) (string, error) {
+	instant, err := time.Parse(time.RFC3339, instantRFC3339)
 	if err != nil {
-		return "", fmt.Errorf("whoopsync: parse cycle start %q: %w", cycleStart, err)
+		return "", fmt.Errorf("whoopsync: parse instant %q: %w", instantRFC3339, err)
 	}
 	offset, err := parseOffset(tzOffset)
 	if err != nil {

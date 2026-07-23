@@ -1,0 +1,14 @@
+-- Wipe user_whoop_recovery so rows re-ingest under corrected dates.
+--
+-- Rows written before this migration derived `date` from the WHOOP cycle's
+-- start. WHOOP cycles run sleep-onset -> sleep-onset, so cycle.start is the
+-- previous evening's bedtime and every recovery landed one day early ("today"
+-- never had data). The sync now dates recoveries by their created_at (when
+-- WHOOP scored them, ~wake time) localized by the cycle's timezone_offset.
+--
+-- Upserts key on (user_id, date), so re-syncing under the new derivation would
+-- ADD correctly-dated rows while leaving the old mis-dated ones behind as
+-- stale duplicates — hence the wipe. This data is disposable and rebuildable:
+-- reconnecting from Settings -> Integrations re-backfills 30 days, and each
+-- morning's webhook repairs the recent window regardless.
+DELETE FROM user_whoop_recovery;

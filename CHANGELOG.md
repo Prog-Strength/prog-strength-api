@@ -1,3 +1,10 @@
+## [0.79.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.1...v0.79.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **whoop:** request read:cycles scope so syncs can derive dates ([#74](https://github.com/Prog-Strength/prog-strength-api/issues/74)) ([4f6541e](https://github.com/Prog-Strength/prog-strength-api/commit/4f6541e2269fa67a0e4d10bbf0f494e112d9dbec))
+
 ## [0.79.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.0...v0.79.1) (2026-07-23)
 
 

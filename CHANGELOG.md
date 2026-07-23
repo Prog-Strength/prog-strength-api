@@ -1,3 +1,10 @@
+# [0.80.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.2...v0.80.0) (2026-07-23)
+
+
+### Features
+
+* **whoop:** structured observability for ingestion, webhooks, and token lifecycle ([#75](https://github.com/Prog-Strength/prog-strength-api/issues/75)) ([9612a8a](https://github.com/Prog-Strength/prog-strength-api/commit/9612a8a27143c851dd42dcb90e25535e47abb2ac))
+
 ## [0.79.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.79.1...v0.79.2) (2026-07-23)
 
 

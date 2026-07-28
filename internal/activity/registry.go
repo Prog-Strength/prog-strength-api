@@ -20,7 +20,8 @@ type Descriptor struct {
 	// ValidateCreate checks the type-specific rules of a create/update
 	// payload before any write (e.g. "runs require distance"). Base-field
 	// validation (start time present, known type) is the unified handler's
-	// job, not the descriptor's.
+	// job, not the descriptor's. Optional: nil means the type has no rules
+	// of its own and the handler skips the check.
 	ValidateCreate func(req CreateRequest) error
 
 	// Details loads/saves the type's detail representation. Nil for
@@ -33,6 +34,8 @@ type Descriptor struct {
 	// base-only types or when the caller only has the base row). There is
 	// no error return: a nil or mistyped details value deliberately
 	// degrades to a base-row-only render rather than failing the page.
+	// Optional: nil means the type has no card — callers omit the item's
+	// summary instead of invoking it (see RenderSummary).
 	Summarize func(a Activity, details any) Summary
 
 	// DecodeDetails parses a (ValidateCreate-approved) Details blob into the

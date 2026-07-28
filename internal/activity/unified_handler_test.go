@@ -247,6 +247,64 @@ func TestUnifiedRun_CreatePutDeleteRoundTrip(t *testing.T) {
 	}
 }
 
+// TestUnifiedPut_PreservesVitalsWhenAbsent: a PUT that omits the vitals
+// keys must not strip a session's TCX-derived HR/calories (the trackpoints
+// would remain — inconsistent state); explicit values still replace them.
+func TestUnifiedPut_PreservesVitalsWhenAbsent(t *testing.T) {
+	srv, repo := newUnifiedServer(t)
+	ctx := t.Context()
+
+	run := newActivity("u1", IngestManualTCX, "run-vitals", mustTime(t, "2026-07-01T07:00:00Z"), 8046.7, 2472)
+	run.AvgHeartRateBpm = ptrInt(152)
+	run.MaxHeartRateBpm = ptrInt(181)
+	run.TotalCalories = ptrInt(610)
+	if err := repo.Create(ctx, run, []byte("run")); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	// Rename-style PUT without vitals keys: vitals survive.
+	w := doJSON(t, srv, "PUT", "/activities/"+run.ID,
+		`{"activity_type":"running","start_time":"2026-07-01T07:00:00Z","duration_seconds":2472,"name":"Renamed",
+		  "details":{"distance_meters":8046.7}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put status = %d; body=%s", w.Code, w.Body.String())
+	}
+	w = doJSON(t, srv, "GET", "/activities/"+run.ID, "")
+	got := decodeActivity(t, w)
+	if got.Name == nil || *got.Name != "Renamed" {
+		t.Errorf("name = %v, want Renamed", got.Name)
+	}
+	if got.AvgHeartRateBpm == nil || *got.AvgHeartRateBpm != 152 {
+		t.Errorf("avg hr = %v, want preserved 152", got.AvgHeartRateBpm)
+	}
+	if got.MaxHeartRateBpm == nil || *got.MaxHeartRateBpm != 181 {
+		t.Errorf("max hr = %v, want preserved 181", got.MaxHeartRateBpm)
+	}
+	if got.TotalCalories == nil || *got.TotalCalories != 610 {
+		t.Errorf("calories = %v, want preserved 610", got.TotalCalories)
+	}
+
+	// Explicit vitals replace.
+	w = doJSON(t, srv, "PUT", "/activities/"+run.ID,
+		`{"activity_type":"running","start_time":"2026-07-01T07:00:00Z","duration_seconds":2472,"name":"Renamed",
+		  "avg_heart_rate_bpm":140,"max_heart_rate_bpm":170,"total_calories":500,
+		  "details":{"distance_meters":8046.7}}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("put with vitals status = %d; body=%s", w.Code, w.Body.String())
+	}
+	w = doJSON(t, srv, "GET", "/activities/"+run.ID, "")
+	got = decodeActivity(t, w)
+	if got.AvgHeartRateBpm == nil || *got.AvgHeartRateBpm != 140 {
+		t.Errorf("avg hr = %v, want replaced 140", got.AvgHeartRateBpm)
+	}
+	if got.MaxHeartRateBpm == nil || *got.MaxHeartRateBpm != 170 {
+		t.Errorf("max hr = %v, want replaced 170", got.MaxHeartRateBpm)
+	}
+	if got.TotalCalories == nil || *got.TotalCalories != 500 {
+		t.Errorf("calories = %v, want replaced 500", got.TotalCalories)
+	}
+}
+
 // TestUnifiedCreate_BaseOnlyOther covers scenario (g): a base-only shaped
 // manual log (the future-kickboxing path) — type `other`, no details — is a
 // legitimate create, appears in the list with a summary, and its GET omits

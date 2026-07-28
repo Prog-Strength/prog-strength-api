@@ -1,7 +1,9 @@
 package activity
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -15,6 +17,64 @@ type Summary struct {
 	Title    string   `json:"title"`
 	Subtitle string   `json:"subtitle"`
 	Metrics  []string `json:"metrics"`
+}
+
+// RenderSummary renders one activity's card through its registered
+// descriptor. details is the already-loaded typed detail value (nil is fine
+// — every Summarize degrades to a base-row card). ok=false when reg is nil,
+// the type is unregistered, or the descriptor has no Summarize.
+func RenderSummary(reg *Registry, a Activity, details any) (Summary, bool) {
+	if reg == nil {
+		return Summary{}, false
+	}
+	d, err := reg.Lookup(a.ActivityType)
+	if err != nil || d.Summarize == nil {
+		return Summary{}, false
+	}
+	return d.Summarize(a, details), true
+}
+
+// RenderSummaries renders the card Summary for a batch of one user's
+// activities, keyed by activity id. Detail loads are batched per type
+// through the optional BulkDetailLoader capability (strength needs its
+// exercises to count sets/volume; the endurance types summarize from the
+// joined base row, so their stores skip the extra read entirely). Rendering
+// is best-effort: types without a descriptor or Summarize are absent from
+// the map, and a failed bulk load degrades that type to base-row cards — a
+// summary problem never fails the caller's page. Shared by the unified
+// /activities list and the timeline hydrator (aggregate-surfaces task).
+func RenderSummaries(ctx context.Context, reg *Registry, userID string, activities []Activity) map[string]Summary {
+	out := make(map[string]Summary, len(activities))
+	if reg == nil {
+		return out
+	}
+	idsByType := make(map[ActivityType][]string)
+	for _, a := range activities {
+		idsByType[a.ActivityType] = append(idsByType[a.ActivityType], a.ID)
+	}
+	details := make(map[string]any)
+	for t, ids := range idsByType {
+		d, err := reg.Lookup(t)
+		if err != nil {
+			continue
+		}
+		if bulk, ok := d.Details.(BulkDetailLoader); ok {
+			loaded, err := bulk.LoadMany(ctx, userID, ids)
+			if err != nil {
+				log.Printf("activity summaries: bulk detail load for type %s failed: %v", t, err)
+				continue
+			}
+			for id, v := range loaded {
+				details[id] = v
+			}
+		}
+	}
+	for _, a := range activities {
+		if s, ok := RenderSummary(reg, a, details[a.ID]); ok {
+			out[a.ID] = s
+		}
+	}
+	return out
 }
 
 // The formatting helpers below are the card-chip vocabulary

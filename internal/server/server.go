@@ -230,6 +230,22 @@ func New(cfg config.Config) (*Server, error) {
 	whoopConnRepo := whoopconn.NewSQLiteRepository(database)
 	whoopRecoveryRepo := whooprecovery.NewSQLiteRepository(database)
 
+	// Activity type registry: the closed set of session types the unified
+	// activity domain can validate, load details for, and summarize. This is
+	// the ONE place descriptors register — internal/activity (the parent)
+	// never imports internal/activity/strength (the child), so the strength
+	// descriptor is passed in from here. Built at boot so a duplicate
+	// registration panics immediately instead of shadowing silently. The
+	// unified /activities surface consumes it next; today the activity
+	// handler only holds it.
+	activityRegistry := activity.NewRegistry(
+		activity.NewEnduranceDescriptor(activity.ActivityRunning, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityRunning)),
+		activity.NewEnduranceDescriptor(activity.ActivityWalking, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityWalking)),
+		activity.NewEnduranceDescriptor(activity.ActivityCycling, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityCycling)),
+		activity.NewEnduranceDescriptor(activity.ActivityOther, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityOther)),
+		strength.NewDescriptor(workoutRepo),
+	)
+
 	// Sync exercise catalog: catalog.go is the source of truth; this
 	// upserts new entries and updates non-key fields on existing ones.
 	if err := exerciseRepo.(*exercise.SQLiteRepository).SyncCatalog(context.Background(), exercise.Catalog); err != nil {
@@ -521,6 +537,7 @@ func New(cfg config.Config) (*Server, error) {
 		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
+		activityHandler.SetRegistry(activityRegistry)
 		// Heart-rate-zone engine: tunables come from the [hr_zones] config
 		// section; the recency window for the reference-max-HR estimate is
 		// derived from recency_window_days.

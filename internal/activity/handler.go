@@ -73,6 +73,11 @@ type Handler struct {
 	// demographicsLoader supplies profile fields for max-effort estimation.
 	// Optional and nil-safe.
 	demographicsLoader DemographicsLoader
+	// registry resolves per-type behavior (create validation, detail
+	// stores, card summaries) for the unified /activities surface. Injected
+	// post-construction via SetRegistry from server wiring; no route reads
+	// it yet — the unified surface layers on next.
+	registry *Registry
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -102,6 +107,11 @@ func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 func (h *Handler) SetDemographicsLoader(l DemographicsLoader) {
 	h.demographicsLoader = l
 }
+
+// SetRegistry wires the activity type registry in. Called from server wiring
+// after construction, mirroring the other setters so NewHandler's signature
+// (and the tests that call it) stay untouched. Nothing consumes it yet.
+func (h *Handler) SetRegistry(reg *Registry) { h.registry = reg }
 
 // matchSession best-effort-notifies the plan matcher that ref was logged. It
 // NEVER affects the HTTP response: a nil matcher is a no-op.

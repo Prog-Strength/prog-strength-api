@@ -155,37 +155,22 @@ func TestValidate_CalendarDetail(t *testing.T) {
 	}
 }
 
+// TestValidate_CompletionLink proves the completion link — now just
+// completed_session_id, with no session-kind discriminator (dropped in
+// migration 043) — validates cleanly whether set or unset.
 func TestValidate_CompletionLink(t *testing.T) {
-	t.Run("id without kind", func(t *testing.T) {
-		pw := validPlan()
-		pw.CompletedSessionID = ptrStr("s1")
-		if err := pw.Validate(); !errors.Is(err, ErrInvalidCompletionLink) {
-			t.Errorf("want ErrInvalidCompletionLink, got %v", err)
-		}
-	})
-	t.Run("kind without id", func(t *testing.T) {
-		pw := validPlan()
-		pw.CompletedSessionKind = ptrKind(SessionKindWorkout)
-		if err := pw.Validate(); !errors.Is(err, ErrInvalidCompletionLink) {
-			t.Errorf("want ErrInvalidCompletionLink, got %v", err)
-		}
-	})
-	t.Run("bad kind", func(t *testing.T) {
-		pw := validPlan()
-		pw.CompletedSessionID = ptrStr("s1")
-		bad := SessionKind("nap")
-		pw.CompletedSessionKind = &bad
-		if err := pw.Validate(); !errors.Is(err, ErrInvalidCompletionLink) {
-			t.Errorf("want ErrInvalidCompletionLink, got %v", err)
-		}
-	})
-	t.Run("both set valid", func(t *testing.T) {
+	t.Run("session id set validates", func(t *testing.T) {
 		pw := validPlan()
 		pw.Status = StatusCompleted
 		pw.CompletedSessionID = ptrStr("s1")
-		pw.CompletedSessionKind = ptrKind(SessionKindActivity)
 		if err := pw.Validate(); err != nil {
-			t.Errorf("valid completion link rejected: %v", err)
+			t.Errorf("completion link rejected: %v", err)
+		}
+	})
+	t.Run("no completion link validates", func(t *testing.T) {
+		pw := validPlan()
+		if err := pw.Validate(); err != nil {
+			t.Errorf("uncompleted plan rejected: %v", err)
 		}
 	})
 }

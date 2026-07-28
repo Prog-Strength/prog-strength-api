@@ -17,7 +17,7 @@ var _ Repository = (*SQLiteRepository)(nil)
 // place so the scan order can't drift between Get and List.
 const planColumns = `
 	id, user_id, name, activity_kind, scheduled_start_utc, scheduled_end_utc,
-	timezone, status, notes, completed_session_id, completed_session_kind,
+	timezone, status, notes, completed_session_id,
 	calendar_detail, google_event_id, google_sync_status, last_sync_error,
 	run_type, run_details, created_at, updated_at, deleted_at`
 
@@ -56,14 +56,14 @@ func (r *SQLiteRepository) Create(ctx context.Context, pw *PlannedWorkout) error
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO planned_workouts (
 			id, user_id, name, activity_kind, scheduled_start_utc, scheduled_end_utc,
-			timezone, status, notes, completed_session_id, completed_session_kind,
+			timezone, status, notes, completed_session_id,
 			calendar_detail, google_event_id, google_sync_status, last_sync_error,
 			run_type, run_details, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		pw.ID, pw.UserID, pw.Name, string(pw.ActivityKind),
 		pw.ScheduledStartUTC, pw.ScheduledEndUTC, pw.Timezone, string(pw.Status),
-		pw.Notes, pw.CompletedSessionID, kindStr(pw.CompletedSessionKind),
+		pw.Notes, pw.CompletedSessionID,
 		detailStr(pw.CalendarDetail), pw.GoogleEventID, syncStr(pw.GoogleSyncStatus),
 		pw.LastSyncError, runTypeStr(pw.RunType), pw.RunDetails, pw.CreatedAt, pw.UpdatedAt,
 	); err != nil {
@@ -161,14 +161,14 @@ func (r *SQLiteRepository) Update(ctx context.Context, pw *PlannedWorkout) error
 		UPDATE planned_workouts SET
 			name = ?, activity_kind = ?, scheduled_start_utc = ?, scheduled_end_utc = ?,
 			timezone = ?, status = ?, notes = ?, completed_session_id = ?,
-			completed_session_kind = ?, calendar_detail = ?, google_event_id = ?,
+			calendar_detail = ?, google_event_id = ?,
 			google_sync_status = ?, last_sync_error = ?, run_type = ?, run_details = ?,
 			updated_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`,
 		pw.Name, string(pw.ActivityKind), pw.ScheduledStartUTC, pw.ScheduledEndUTC,
 		pw.Timezone, string(pw.Status), pw.Notes, pw.CompletedSessionID,
-		kindStr(pw.CompletedSessionKind), detailStr(pw.CalendarDetail), pw.GoogleEventID,
+		detailStr(pw.CalendarDetail), pw.GoogleEventID,
 		syncStr(pw.GoogleSyncStatus), pw.LastSyncError, runTypeStr(pw.RunType), pw.RunDetails,
 		now,
 		pw.ID, pw.UserID,
@@ -220,13 +220,13 @@ func (r *SQLiteRepository) SetStatus(ctx context.Context, userID, planID string,
 	return affectedOrNotFound(res, err)
 }
 
-func (r *SQLiteRepository) SetCompletion(ctx context.Context, userID, planID, sessionID string, kind SessionKind) error {
+func (r *SQLiteRepository) SetCompletion(ctx context.Context, userID, planID, sessionID string) error {
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE planned_workouts SET
-			status = ?, completed_session_id = ?, completed_session_kind = ?, updated_at = ?
+			status = ?, completed_session_id = ?, updated_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, string(StatusCompleted), sessionID, string(kind), now, planID, userID)
+	`, string(StatusCompleted), sessionID, now, planID, userID)
 	return affectedOrNotFound(res, err)
 }
 
@@ -234,15 +234,14 @@ func (r *SQLiteRepository) ClearCompletion(ctx context.Context, userID, planID s
 	now := r.now().UTC()
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE planned_workouts SET
-			status = ?, completed_session_id = NULL, completed_session_kind = NULL, updated_at = ?
+			status = ?, completed_session_id = NULL, updated_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
 	`, string(StatusPlanned), now, planID, userID)
 	return affectedOrNotFound(res, err)
 }
 
-// GetByCompletedSession matches on completed_session_id alone — kind-agnostic
-// during the unified-model shim period (see the Repository interface doc for
-// why, and the stage-5 completed_session_kind cleanup TODO).
+// GetByCompletedSession matches on completed_session_id alone — session ids
+// are globally unique in the unified activities base table.
 func (r *SQLiteRepository) GetByCompletedSession(ctx context.Context, userID, sessionID string) (*PlannedWorkout, error) {
 	var id string
 	err := r.db.QueryRowContext(ctx, `
@@ -414,7 +413,6 @@ func scanPlan(s scanner) (*PlannedWorkout, error) {
 		name         sql.NullString
 		notes        sql.NullString
 		completedID  sql.NullString
-		completedK   sql.NullString
 		detail       sql.NullString
 		eventID      sql.NullString
 		syncStatus   sql.NullString
@@ -425,7 +423,7 @@ func scanPlan(s scanner) (*PlannedWorkout, error) {
 	)
 	if err := s.Scan(
 		&pw.ID, &pw.UserID, &name, &activityKind, &pw.ScheduledStartUTC, &pw.ScheduledEndUTC,
-		&pw.Timezone, &status, &notes, &completedID, &completedK,
+		&pw.Timezone, &status, &notes, &completedID,
 		&detail, &eventID, &syncStatus, &lastErr,
 		&runType, &runDetails,
 		&pw.CreatedAt, &pw.UpdatedAt, &deletedAt,
@@ -442,10 +440,6 @@ func scanPlan(s scanner) (*PlannedWorkout, error) {
 	}
 	if completedID.Valid {
 		pw.CompletedSessionID = &completedID.String
-	}
-	if completedK.Valid {
-		k := SessionKind(completedK.String)
-		pw.CompletedSessionKind = &k
 	}
 	if detail.Valid {
 		d := CalendarDetail(detail.String)
@@ -491,15 +485,8 @@ func affectedOrNotFound(res sql.Result, err error) error {
 	return nil
 }
 
-// kindStr / detailStr / syncStr render nullable enum pointers as nil for a
-// NULL column when the pointer is nil, else the string value.
-func kindStr(k *SessionKind) any {
-	if k == nil {
-		return nil
-	}
-	return string(*k)
-}
-
+// detailStr / syncStr render nullable enum pointers as nil for a NULL column
+// when the pointer is nil, else the string value.
 func detailStr(d *CalendarDetail) any {
 	if d == nil {
 		return nil

@@ -10,7 +10,6 @@ import (
 func ptrStr(s string) *string                    { return &s }
 func ptrInt(i int) *int                          { return &i }
 func ptrF(f float64) *float64                    { return &f }
-func ptrKind(k SessionKind) *SessionKind         { return &k }
 func ptrDetail(d CalendarDetail) *CalendarDetail { return &d }
 
 // newPlan builds a minimal valid bare time-block plan (no agenda) for the
@@ -381,7 +380,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.Create(ctx, pw); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123"); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
 		got, err := repo.Get(ctx, "u1", pw.ID)
@@ -394,10 +393,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if got.CompletedSessionID == nil || *got.CompletedSessionID != "sess-123" {
 			t.Errorf("session id not linked: %+v", got.CompletedSessionID)
 		}
-		if got.CompletedSessionKind == nil || *got.CompletedSessionKind != SessionKindWorkout {
-			t.Errorf("session kind not linked: %+v", got.CompletedSessionKind)
-		}
-		if err := repo.SetCompletion(ctx, "u2", pw.ID, "x", SessionKindWorkout); !errors.Is(err, ErrNotFound) {
+		if err := repo.SetCompletion(ctx, "u2", pw.ID, "x"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("cross-user SetCompletion: want ErrNotFound, got %v", err)
 		}
 	})
@@ -410,7 +406,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.Create(ctx, pw); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123"); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
 		if err := repo.ClearCompletion(ctx, "u1", pw.ID); err != nil {
@@ -425,9 +421,6 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 		if got.CompletedSessionID != nil {
 			t.Errorf("session id should be cleared, got %v", *got.CompletedSessionID)
-		}
-		if got.CompletedSessionKind != nil {
-			t.Errorf("session kind should be cleared, got %v", *got.CompletedSessionKind)
 		}
 	})
 
@@ -452,7 +445,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.Create(ctx, pw); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123"); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
 		got, err := repo.GetByCompletedSession(ctx, "u1", "sess-123")
@@ -464,33 +457,6 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
-	t.Run("GetByCompletedSession_KindAgnostic", func(t *testing.T) {
-		// The lookup keys on session id alone: a completion recorded with
-		// either completed_session_kind value resolves, since the same
-		// strength session carries 'activity' when migrated by 042 and
-		// 'workout' when written live during the shim period.
-		repo := newRepo(t)
-		ctx := context.Background()
-
-		for _, kind := range []SessionKind{SessionKindWorkout, SessionKindActivity} {
-			pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
-			if err := repo.Create(ctx, pw); err != nil {
-				t.Fatalf("Create: %v", err)
-			}
-			sessionID := "sess-" + string(kind)
-			if err := repo.SetCompletion(ctx, "u1", pw.ID, sessionID, kind); err != nil {
-				t.Fatalf("SetCompletion(%s): %v", kind, err)
-			}
-			got, err := repo.GetByCompletedSession(ctx, "u1", sessionID)
-			if err != nil {
-				t.Fatalf("GetByCompletedSession(recorded kind %s): %v", kind, err)
-			}
-			if got.ID != pw.ID {
-				t.Errorf("recorded kind %s: got plan %q, want %q", kind, got.ID, pw.ID)
-			}
-		}
-	})
-
 	t.Run("GetByCompletedSession_NoMatch", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()
@@ -499,7 +465,7 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.Create(ctx, pw); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
+		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123"); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
 		// Wrong session id → no match.

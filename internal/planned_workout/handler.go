@@ -134,8 +134,7 @@ type planDTO struct {
 	Status string  `json:"status"`
 	Notes  *string `json:"notes"`
 
-	CompletedSessionID   *string `json:"completed_session_id"`
-	CompletedSessionKind *string `json:"completed_session_kind"`
+	CompletedSessionID *string `json:"completed_session_id"`
 
 	CalendarDetail *string `json:"calendar_detail"`
 
@@ -210,10 +209,6 @@ func toDTOInLocation(pw *PlannedWorkout, loc *time.Location) planDTO {
 	if pw.RunType != nil {
 		rt := string(*pw.RunType)
 		dto.RunType = &rt
-	}
-	if pw.CompletedSessionKind != nil {
-		k := string(*pw.CompletedSessionKind)
-		dto.CompletedSessionKind = &k
 	}
 	if pw.CalendarDetail != nil {
 		d := string(*pw.CalendarDetail)
@@ -676,17 +671,21 @@ func (h *Handler) skip(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "planned workout skipped", nil)
 }
 
-// completeRequest is the body for POST /{id}/complete: the polymorphic link to
-// the session that fulfilled the plan. Both fields are required.
+// completeRequest is the body for POST /{id}/complete: the link to the activity
+// that fulfilled the plan. session_kind is still accepted for backward compat
+// with deployed clients and MCP (which send it), but it is ignored — every
+// session is one row in the unified activities base table, so session_id alone
+// identifies it. Only session_id is required.
 type completeRequest struct {
-	SessionID   string `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// SessionKind is accepted-and-ignored (see the type doc). Decoded so a
+	// present value doesn't error, never read.
 	SessionKind string `json:"session_kind"`
 }
 
-// complete (POST /{id}/complete) flips a plan to "completed", stores the
-// polymorphic link to the logged session (a workout or an activity), and — when
-// the plan is Google-synced — best-effort rewrites its calendar event to show
-// the actuals plus a completed marker.
+// complete (POST /{id}/complete) flips a plan to "completed", stores the link to
+// the logged session, and — when the plan is Google-synced — best-effort
+// rewrites its calendar event to show the actuals plus a completed marker.
 func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -704,22 +703,15 @@ func (h *Handler) complete(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.SessionID == "" || req.SessionKind == "" {
-		httpresp.Error(w, http.StatusBadRequest, "session_id and session_kind are required")
-		return
-	}
-	// Validate the kind here for a clean message; SetCompletion → Validate would
-	// otherwise surface the same as ErrInvalidCompletionLink.
-	kind := SessionKind(req.SessionKind)
-	if kind != SessionKindWorkout && kind != SessionKindActivity {
-		httpresp.Error(w, http.StatusBadRequest, "session_kind must be 'workout' or 'activity'")
+	if req.SessionID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
 
 	// The service owns the completion path: confirm ownership (404 guard), mark
 	// completed, and — when the plan is Google-synced — best-effort rewrite the
 	// event. It re-reads so the response reflects status, link, and sync state.
-	updated, err := h.svc.LinkCompletion(r.Context(), userID, id, req.SessionID, kind)
+	updated, err := h.svc.LinkCompletion(r.Context(), userID, id, req.SessionID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "planned workout not found")
@@ -761,12 +753,11 @@ func (h *Handler) unlink(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "planned workout unlinked", toDTO(updated))
 }
 
-// bySession (GET /by-session?session_id=&session_kind=) is the reverse lookup:
-// given a logged session, return the plan it completed, or 404 when none does.
-// session_kind stays a required, validated param (contract unchanged for
-// existing clients) but no longer narrows the lookup — the id is the key,
-// kind-agnostic during the unified-model shim period (see
-// Repository.GetByCompletedSession).
+// bySession (GET /by-session?session_id=) is the reverse lookup: given a logged
+// session, return the plan it completed, or 404 when none does. session_kind is
+// still accepted for backward compat with deployed clients but is ignored — the
+// id is the key (session ids are globally unique in the unified activities base
+// table; see Repository.GetByCompletedSession). Only session_id is required.
 func (h *Handler) bySession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -774,14 +765,8 @@ func (h *Handler) bySession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := r.URL.Query().Get("session_id")
-	kindStr := r.URL.Query().Get("session_kind")
-	if sessionID == "" || kindStr == "" {
-		httpresp.Error(w, http.StatusBadRequest, "session_id and session_kind are required")
-		return
-	}
-	kind := SessionKind(kindStr)
-	if kind != SessionKindWorkout && kind != SessionKindActivity {
-		httpresp.Error(w, http.StatusBadRequest, "session_kind must be 'workout' or 'activity'")
+	if sessionID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "session_id is required")
 		return
 	}
 	plan, err := h.repo.GetByCompletedSession(r.Context(), userID, sessionID)

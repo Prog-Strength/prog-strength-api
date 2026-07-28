@@ -23,12 +23,6 @@ type Repository interface {
 	// Soft-deleted workouts are excluded.
 	ListByUser(ctx context.Context, userID string, opts ListOptions) ([]Workout, error)
 
-	// CountByUser returns the total number of non-soft-deleted workouts
-	// for the user, honoring only the Since/Until filters on opts —
-	// Limit and Offset are ignored. Used to power pagination metadata
-	// on the list endpoint ("showing N–M of TOTAL").
-	CountByUser(ctx context.Context, userID string, opts ListOptions) (int, error)
-
 	// Update replaces an existing workout. Returns ErrNotFound if the
 	// workout doesn't exist or is soft-deleted.
 	Update(ctx context.Context, w *Workout) error

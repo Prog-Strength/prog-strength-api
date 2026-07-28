@@ -85,7 +85,7 @@ see [`AGENTS.md`](./AGENTS.md).
 - **SQLite + Litestream** for storage. The DB file is bind-mounted into the
   container and continuously replicated to S3 with a 24-hour PITR window.
 - **JWT (HS256) auth** with Google OAuth as the only identity provider.
-  `/exercises` is public; `/workouts` and other user-scoped routes require
+  `/exercises` is public; `/activities` and other user-scoped routes require
   a valid user JWT.
 - **Single EC2 host** (Graviton `t4g.small`) fronted by Caddy.
   Infrastructure is provisioned by Terraform in
@@ -161,32 +161,39 @@ Tests live next to the code they exercise (`foo.go` / `foo_test.go`).
 | GET    | `/exercises`                 | none          | Full catalog. No pagination by design.      |
 | GET    | `/exercises/{id}`            | none          | Slug-keyed (e.g. `barbell-high-bar-back-squat`). |
 | GET    | `/me`                        | user JWT      | The authed user.                            |
-| GET    | `/workouts`, `/workouts/{id}`| user JWT      | User-scoped workout log.                    |
-| POST   | `/workouts`                  | user JWT      | Log a workout (see below).                  |
+| GET    | `/activities`, `/activities/{id}`| user JWT  | Unified session log — every type incl. strength. |
+| POST / PUT / DELETE | `/activities*`  | user JWT      | Typed create/update/delete (see below).     |
 | GET / POST / PUT | `/bodyweight*`     | user JWT      | Bodyweight history + goals.                 |
 | GET / POST | `/nutrition*`            | user JWT      | Timezone-aware daily macro log + goals.     |
+
+The legacy `/workouts*` surface was removed once web, mobile, and MCP migrated
+to `/activities` (unified-activity-model SOW, stage 5). A lift is now an
+`activity_type: "strength_training"` session posted to `/activities`.
 
 Example — log a workout:
 
 ```bash
-curl -X POST http://localhost:8080/workouts \
+curl -X POST http://localhost:8080/activities \
   -H "Authorization: Bearer $JWT" \
   -H "Content-Type: application/json" \
   -d '{
+    "activity_type": "strength_training",
     "name": "Leg Day",
-    "performed_at": "2026-05-05T14:00:00Z",
+    "start_time": "2026-05-05T14:00:00Z",
     "notes": "Felt strong today",
-    "exercises": [
-      {
-        "exercise_id": "barbell-high-bar-back-squat",
-        "notes": "Good depth",
-        "sets": [
-          {"reps": 5, "weight": 135, "unit": "lb"},
-          {"reps": 5, "weight": 185, "unit": "lb"},
-          {"reps": 5, "weight": 225, "unit": "lb"}
-        ]
-      }
-    ]
+    "details": {
+      "exercises": [
+        {
+          "exercise_id": "barbell-high-bar-back-squat",
+          "notes": "Good depth",
+          "sets": [
+            {"reps": 5, "weight": 135, "unit": "lb"},
+            {"reps": 5, "weight": 185, "unit": "lb"},
+            {"reps": 5, "weight": 225, "unit": "lb"}
+          ]
+        }
+      ]
+    }
   }'
 ```
 

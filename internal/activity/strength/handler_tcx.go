@@ -140,7 +140,7 @@ func (h *Handler) detailDTO(ctx context.Context, w *Workout) (workoutWithEvents,
 
 // --- handlers ----------------------------------------------------------
 
-// importFromTCX handles POST /workouts/imports — the "Log from TCX" path. It
+// importFromTCX handles POST /activities/imports — the "Log from TCX" path. It
 // mints an EMPTY workout from a Garmin strength TCX: a zero-exercise workout
 // is created with performed_at = the TCX start and ended_at = start +
 // duration, and the file's HR/effort layer is folded onto that workout's own
@@ -215,7 +215,7 @@ func (h *Handler) importFromTCX(w http.ResponseWriter, r *http.Request) {
 	httpresp.Created(w, "imported workout from tcx", dto)
 }
 
-// attachTCX handles POST /workouts/{id}/tcx — the retroactive attach. It
+// attachTCX handles POST /activities/{id}/tcx — the retroactive attach. It
 // loads the workout, rejects a second file (409 workout_tcx_exists), then
 // folds the TCX's HR/effort layer onto the workout's own base row.
 // performed_at is left untouched (the user logged it); an end-less workout
@@ -279,7 +279,7 @@ func (h *Handler) attachTCX(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "attached tcx", dto)
 }
 
-// detachTCX handles DELETE /workouts/{id}/tcx. It clears the workout's
+// detachTCX handles DELETE /activities/{id}/tcx. It clears the workout's
 // enrichment columns and deletes its HR trackpoints (retaining the archived
 // file in S3). Idempotent: a workout with no TCX attached returns 204 without
 // touching anything. It never fires either plan matcher — the workout itself

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -88,15 +89,22 @@ type detailStore struct {
 
 var _ activity.DetailStore = (*detailStore)(nil)
 
-// owned fetches the workout and enforces ownership: a wrong user reads as
-// ErrNotFound, indistinguishable from a missing row (house rule).
+// owned fetches the workout and enforces ownership. Missing/deleted rows and
+// wrong owners are indistinguishable (house rule) and surface as the BASE
+// package's activity.ErrNotFound — the DetailStore contract promises one
+// sentinel across every implementation so the unified handler's error
+// mapping never branches per type. The repository's own strength.ErrNotFound
+// is translated at this seam.
 func (s *detailStore) owned(ctx context.Context, userID, activityID string) (*Workout, error) {
 	w, err := s.repo.GetByID(ctx, activityID)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, activity.ErrNotFound
+		}
 		return nil, err
 	}
 	if w.UserID != userID {
-		return nil, ErrNotFound
+		return nil, activity.ErrNotFound
 	}
 	return w, nil
 }

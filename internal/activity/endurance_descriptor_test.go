@@ -68,31 +68,34 @@ func TestEnduranceDescriptor_ValidateCreate(t *testing.T) {
 		name    string
 		typ     ActivityType
 		details json.RawMessage
-		wantErr bool
+		wantErr error // nil = expect success; otherwise errors.Is sentinel match
 	}{
-		{"running with distance ok", ActivityRunning, details(`{"distance_meters": 5000}`), false},
-		{"running missing details", ActivityRunning, nil, true},
-		{"running null details", ActivityRunning, details(`null`), true},
-		{"running zero distance", ActivityRunning, details(`{"distance_meters": 0}`), true},
-		{"walking negative distance", ActivityWalking, details(`{"distance_meters": -1}`), true},
-		{"cycling missing distance", ActivityCycling, details(`{}`), true},
-		{"other without details ok", ActivityOther, nil, false},
-		{"other with distance ok", ActivityOther, details(`{"distance_meters": 100}`), false},
-		{"other negative distance", ActivityOther, details(`{"distance_meters": -5}`), true},
-		{"malformed json", ActivityRunning, details(`{`), true},
-		{"unknown field rejected", ActivityRunning, details(`{"distance_meters": 5000, "distancee": 1}`), true},
-		{"bad environment", ActivityRunning, details(`{"distance_meters": 5000, "environment": "underwater"}`), true},
-		{"indoor environment ok", ActivityRunning, details(`{"distance_meters": 5000, "environment": "indoor"}`), false},
+		{"running with distance ok", ActivityRunning, details(`{"distance_meters": 5000}`), nil},
+		{"running missing details", ActivityRunning, nil, ErrDistanceRequired},
+		{"running null details", ActivityRunning, details(`null`), ErrDistanceRequired},
+		{"running zero distance", ActivityRunning, details(`{"distance_meters": 0}`), ErrDistanceRequired},
+		{"walking negative distance", ActivityWalking, details(`{"distance_meters": -1}`), ErrDistanceRequired},
+		{"cycling missing distance", ActivityCycling, details(`{}`), ErrDistanceRequired},
+		{"other without details ok", ActivityOther, nil, nil},
+		{"other with distance ok", ActivityOther, details(`{"distance_meters": 100}`), nil},
+		{"other negative distance", ActivityOther, details(`{"distance_meters": -5}`), ErrInvalidDetails},
+		{"malformed json", ActivityRunning, details(`{`), ErrInvalidDetails},
+		{"unknown field rejected", ActivityRunning, details(`{"distance_meters": 5000, "distancee": 1}`), ErrInvalidDetails},
+		{"bad environment", ActivityRunning, details(`{"distance_meters": 5000, "environment": "underwater"}`), ErrInvalidDetails},
+		{"indoor environment ok", ActivityRunning, details(`{"distance_meters": 5000, "environment": "indoor"}`), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := NewEnduranceDescriptor(tc.typ, nil)
 			err := d.ValidateCreate(CreateRequest{Type: tc.typ, StartTime: time.Now(), Details: tc.details})
-			if tc.wantErr && err == nil {
-				t.Fatal("ValidateCreate = nil, want error")
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("ValidateCreate = %v, want nil", err)
+				}
+				return
 			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("ValidateCreate = %v, want nil", err)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("ValidateCreate = %v, want errors.Is %v", err, tc.wantErr)
 			}
 		})
 	}

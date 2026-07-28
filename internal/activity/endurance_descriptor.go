@@ -56,7 +56,10 @@ func NewEnduranceDescriptor(t ActivityType, store DetailStore) *Descriptor {
 // The one structural rule (per the SOW: "runs require distance") is a
 // positive distance for the distance-first sports; ActivityOther tolerates
 // absent details — a zero-distance session is a legitimate "other" entry
-// (the detail row's distance column defaults to 0).
+// (the detail row's distance column defaults to 0). Failures wrap the
+// package sentinels (ErrDistanceRequired / ErrInvalidDetails) so the
+// handler's error mapping is errors.Is-testable, matching the strength
+// descriptor's sentinel style.
 func enduranceValidateCreate(t ActivityType) func(req CreateRequest) error {
 	requireDistance := t != ActivityOther
 	return func(req CreateRequest) error {
@@ -66,18 +69,18 @@ func enduranceValidateCreate(t ActivityType) func(req CreateRequest) error {
 		}
 		if d == nil {
 			if requireDistance {
-				return fmt.Errorf("%s details with distance_meters are required", t)
+				return fmt.Errorf("%w: %s details need a positive distance_meters", ErrDistanceRequired, t)
 			}
 			return nil
 		}
 		if requireDistance && d.DistanceMeters <= 0 {
-			return fmt.Errorf("%s details require a positive distance_meters", t)
+			return fmt.Errorf("%w: %s details need a positive distance_meters", ErrDistanceRequired, t)
 		}
 		if d.DistanceMeters < 0 {
-			return fmt.Errorf("distance_meters must not be negative")
+			return fmt.Errorf("%w: distance_meters must not be negative", ErrInvalidDetails)
 		}
 		if d.Environment != "" && !d.Environment.Valid() {
-			return fmt.Errorf("invalid environment %q (valid: outdoor, indoor)", d.Environment)
+			return fmt.Errorf("%w: invalid environment %q (valid: outdoor, indoor)", ErrInvalidDetails, d.Environment)
 		}
 		return nil
 	}
@@ -85,7 +88,7 @@ func enduranceValidateCreate(t ActivityType) func(req CreateRequest) error {
 
 // parseEnduranceDetails decodes a Details blob, treating absent/JSON-null as
 // no details. Unknown fields are rejected so a typoed metric fails loudly
-// instead of silently dropping data.
+// instead of silently dropping data. Decode failures wrap ErrInvalidDetails.
 func parseEnduranceDetails(raw json.RawMessage) (*EnduranceDetails, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -94,7 +97,7 @@ func parseEnduranceDetails(raw json.RawMessage) (*EnduranceDetails, error) {
 	dec.DisallowUnknownFields()
 	var d EnduranceDetails
 	if err := dec.Decode(&d); err != nil {
-		return nil, fmt.Errorf("invalid endurance details: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidDetails, err)
 	}
 	return &d, nil
 }

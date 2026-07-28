@@ -173,14 +173,21 @@ func TestDescriptor_DetailStoreEnforcesOwnership(t *testing.T) {
 	}
 	mustCreate(t, repo, w)
 
-	if _, err := d.Details.Load(ctx, "intruder", w.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Load as wrong user err = %v, want ErrNotFound", err)
+	// The DetailStore contract sentinel is the BASE package's
+	// activity.ErrNotFound for every implementation, so the unified
+	// handler's error mapping never branches per type.
+	if _, err := d.Details.Load(ctx, "intruder", w.ID); !errors.Is(err, activity.ErrNotFound) {
+		t.Fatalf("Load as wrong user err = %v, want activity.ErrNotFound", err)
 	}
-	if err := d.Details.Save(ctx, "intruder", w.ID, []WorkoutExercise{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Save as wrong user err = %v, want ErrNotFound", err)
+	if err := d.Details.Save(ctx, "intruder", w.ID, []WorkoutExercise{}); !errors.Is(err, activity.ErrNotFound) {
+		t.Fatalf("Save as wrong user err = %v, want activity.ErrNotFound", err)
 	}
-	if err := d.Details.Delete(ctx, "intruder", w.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("Delete as wrong user err = %v, want ErrNotFound", err)
+	if err := d.Details.Delete(ctx, "intruder", w.ID); !errors.Is(err, activity.ErrNotFound) {
+		t.Fatalf("Delete as wrong user err = %v, want activity.ErrNotFound", err)
+	}
+	// A missing activity id reads the same way.
+	if _, err := d.Details.Load(ctx, "u1", "no-such-activity"); !errors.Is(err, activity.ErrNotFound) {
+		t.Fatalf("Load of missing id err = %v, want activity.ErrNotFound", err)
 	}
 	// Owner's exercises untouched by the intruder's attempts.
 	loaded, err := d.Details.Load(ctx, "u1", w.ID)

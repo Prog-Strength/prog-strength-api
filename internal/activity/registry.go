@@ -30,7 +30,9 @@ type Descriptor struct {
 
 	// Summarize renders the list/card summary for feeds and unified lists.
 	// details is whatever the type's DetailStore.Load returned (nil for
-	// base-only types or when the caller only has the base row).
+	// base-only types or when the caller only has the base row). There is
+	// no error return: a nil or mistyped details value deliberately
+	// degrades to a base-row-only render rather than failing the page.
 	Summarize func(a Activity, details any) Summary
 
 	// MountRoutes registers type-specific endpoints (nil when none).
@@ -39,9 +41,12 @@ type Descriptor struct {
 
 // DetailStore persists one type's detail representation, keyed by the base
 // activity id. Load/Save/Delete enforce ownership like every repository in
-// this codebase: a wrong userID reads as ErrNotFound, never as someone
-// else's row. The `any` payload is the type's own detail struct — the base
-// domain never inspects it, only routes it between the store and Summarize.
+// this codebase: a missing/soft-deleted activity and a wrong userID both
+// read as this package's ErrNotFound — one uniform sentinel across ALL
+// implementations, so stores backed by another package's repository must
+// translate their own not-found at the seam. The `any` payload is the
+// type's own detail struct — the base domain never inspects it, only routes
+// it between the store and Summarize.
 type DetailStore interface {
 	Load(ctx context.Context, userID, activityID string) (any, error)
 	Save(ctx context.Context, userID, activityID string, details any) error

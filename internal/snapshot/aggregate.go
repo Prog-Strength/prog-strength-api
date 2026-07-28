@@ -243,7 +243,10 @@ func aggregateNutrition(days []nutrition.DailyMacros, goals nutrition.MacroGoals
 // sessionDates collects the distinct local calendar dates of the given
 // sessions. Every activity type counts — any logged session is an active
 // day — so a new registry type feeds the consistency section automatically,
-// with no per-type code here (mirroring the dashboard streak's contract).
+// with no per-type code here. This matches the dashboard streak's contract
+// for endurance/base-only types; strength_training's completion nuance (the
+// dashboard's workoutCompleted gate) doesn't apply here — any strength row
+// already counted via strength.Sessions, pre-existing and unaffected.
 func sessionDates(sessions []activity.Activity, loc *time.Location) map[string]bool {
 	days := make(map[string]bool, len(sessions))
 	for i := range sessions {

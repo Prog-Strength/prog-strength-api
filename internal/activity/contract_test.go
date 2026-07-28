@@ -166,7 +166,6 @@ type contractItem struct {
 	ID              string            `json:"id"`
 	ActivityType    string            `json:"activity_type"`
 	Name            *string           `json:"name"`
-	Notes           *string           `json:"notes"`
 	DurationSeconds int               `json:"duration_seconds"`
 	Summary         *activity.Summary `json:"summary"`
 }
@@ -384,8 +383,12 @@ func TestContract_BaseOnlyType_RendersTimelineCard(t *testing.T) {
 
 // TestContract_BaseOnlyType_CountsAsSnapshotActiveDay: the training
 // snapshot's consistency section counts a day with ANY logged session as
-// active — same contract as the dashboard streak — so a new base-only type
-// feeds snapshot active-days with no code outside its descriptor.
+// active, so a new base-only type feeds snapshot active-days with no code
+// outside its descriptor. This matches the dashboard streak's contract for
+// endurance/base-only types; strength_training's completion nuance (the
+// dashboard's workoutCompleted gate) doesn't apply to the snapshot — any
+// strength row already counted via strength.Sessions, pre-existing and
+// unaffected.
 func TestContract_BaseOnlyType_CountsAsSnapshotActiveDay(t *testing.T) {
 	env := newContractEnv(t)
 

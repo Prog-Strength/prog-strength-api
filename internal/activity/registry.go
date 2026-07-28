@@ -84,12 +84,15 @@ type DetailStore interface {
 
 // BulkDetailLoader is an optional DetailStore capability: load details for
 // many of one user's activities in a single round trip. The unified list
-// uses it to render Summaries without a per-row query fan-out; stores that
-// don't implement it are summarized from the base row alone (which is
-// enough for the endurance types — their list distance is joined onto the
-// base read). ids must already be user-scoped: they come from the same
-// user's base list read, so implementations may skip per-id ownership
-// checks. Ids that don't resolve are simply absent from the map.
+// uses it both to render Summaries without a per-row query fan-out AND to
+// populate the wire-visible per-item Details payload (stage-3 /workouts
+// parity), so LoadMany must return the full detail payload, not a
+// summary-only projection. Stores that don't implement it are summarized
+// from the base row alone (which is enough for the endurance types — their
+// list distance is joined onto the base read). ids must already be
+// user-scoped: they come from the same user's base list read, so
+// implementations may skip per-id ownership checks. Ids that don't resolve
+// are simply absent from the map.
 type BulkDetailLoader interface {
 	LoadMany(ctx context.Context, userID string, ids []string) (map[string]any, error)
 }

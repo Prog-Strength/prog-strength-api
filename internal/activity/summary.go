@@ -41,8 +41,10 @@ func RenderSummary(reg *Registry, a Activity, details any) (Summary, bool) {
 // joined base row, so their stores skip the extra read entirely). Rendering
 // is best-effort: types without a descriptor or Summarize are absent from
 // the map, and a failed bulk load degrades that type to base-row cards — a
-// summary problem never fails the caller's page. Shared by the unified
-// /activities list and the timeline hydrator (aggregate-surfaces task).
+// summary problem never fails the caller's page. Used by the timeline
+// hydrator (aggregate-surfaces task); the unified /activities list
+// composes LoadDetailsBulk + RenderSummary itself instead, so it can also
+// attach the loaded details to its item DTOs.
 func RenderSummaries(ctx context.Context, reg *Registry, userID string, activities []Activity) map[string]Summary {
 	out := make(map[string]Summary, len(activities))
 	if reg == nil {
@@ -65,7 +67,9 @@ func RenderSummaries(ctx context.Context, reg *Registry, userID string, activiti
 // degrades that type to no details rather than failing the caller's page.
 // Shared by RenderSummaries and the unified list, which attaches the loaded
 // payloads to its item DTOs (stage-3 /workouts parity) — one bulk read
-// serves both, never a per-row fan-out.
+// serves both, never a per-row fan-out. The payload is whatever the store's
+// LoadMany returns in full: summary-only consumers (the timeline hydrator)
+// also pay for the strength PR-event embed they then discard.
 func LoadDetailsBulk(ctx context.Context, reg *Registry, userID string, activities []Activity) map[string]any {
 	details := make(map[string]any)
 	if reg == nil {

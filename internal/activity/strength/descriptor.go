@@ -141,6 +141,10 @@ func (s *detailStore) owned(ctx context.Context, userID, activityID string) (*Wo
 	return w, nil
 }
 
+// Load returns the full strength detail payload for one owned session:
+// the exercises off the hydrated workout plus its PR break events (stage-3
+// /workouts parity) — so a detail read costs the ownership read plus one
+// PR-event query, exactly like the legacy GET /workouts/{id}.
 func (s *detailStore) Load(ctx context.Context, userID, activityID string) (any, error) {
 	w, err := s.owned(ctx, userID, activityID)
 	if err != nil {

@@ -111,12 +111,7 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 	})
 
 	snap.Running = sectionOrNil(ctx, "running", func() (*RunningSection, error) {
-		// One read over the unified base covers every session type; the
-		// running section keeps only running rows (aggregateRunning filters
-		// by type) and the strength section is built separately above from
-		// the workout repo, which reads the same base table. countActiveDays
-		// then unions both sections' days.
-		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{})
+		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{Only: activity.ActivityRunning})
 		if err != nil {
 			return nil, err
 		}

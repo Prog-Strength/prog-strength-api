@@ -253,3 +253,55 @@ func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 		t.Errorf("GetPersonalRecordEventsByIDs called %d times, want 1 (batched)", wRepo.getPREventCalls)
 	}
 }
+
+// TestHydrate_SessionsBatchedPerAuthor pins hydrateSessions' fetch counts on a
+// multi-author feed page: SummariesByIDs is user-scoped, so it runs exactly
+// once per distinct author (the idsByUser grouping), while the strength detail
+// load batches per TYPE across the whole merged page — one
+// ListExercisesByWorkoutIDs total, even with strength posts from several
+// authors. No per-post N+1 anywhere, and every post still renders.
+func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	sets := []strength.Set{{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds}}
+	wRepo := &fakeWorkoutRepo{
+		exercises: map[string][]strength.WorkoutExercise{
+			"w1": {{ExerciseID: "bench", Sets: sets}},
+			"w2": {{ExerciseID: "squat", Sets: sets}},
+		},
+		prEvents: map[string]strength.PersonalRecordEvent{},
+	}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"w1": {ID: "w1", UserID: "u1", ActivityType: activity.ActivityStrengthTraining, Name: strptr("U1 lift")},
+			"a1": {ID: "a1", UserID: "u1", ActivityType: activity.ActivityRunning, Name: strptr("U1 run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
+			"w2": {ID: "w2", UserID: "u2", ActivityType: activity.ActivityStrengthTraining, Name: strptr("U2 lift")},
+			"a2": {ID: "a2", UserID: "u2", ActivityType: activity.ActivityRunning, Name: strptr("U2 run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
+		},
+	}
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+
+	refs := []timeline.PostRef{
+		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "a1", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceWorkout, SourceID: "w2", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceRun, SourceID: "a2", OccurredAt: now},
+	}
+	got, err := h.Hydrate(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d contents, want 4", len(got))
+	}
+	for i, want := range []string{"U1 lift", "U1 run", "U2 lift", "U2 run"} {
+		if got[refs[i]].Title != want {
+			t.Errorf("refs[%d] title = %q, want %q", i, got[refs[i]].Title, want)
+		}
+	}
+	if aRepo.summCalls != 2 {
+		t.Errorf("SummariesByIDs called %d times, want 2 (one per author)", aRepo.summCalls)
+	}
+	if wRepo.listExCalls != 1 {
+		t.Errorf("ListExercisesByWorkoutIDs called %d times, want 1 (one per type across the page)", wRepo.listExCalls)
+	}
+}

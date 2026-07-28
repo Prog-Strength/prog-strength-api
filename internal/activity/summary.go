@@ -77,9 +77,8 @@ func RenderSummaries(ctx context.Context, reg *Registry, userID string, activiti
 	return out
 }
 
-// The formatting helpers below are the card-chip vocabulary
-// (server/timeline_hydrator.go currently carries private copies; the
-// hydrator converges on these when it adopts Summarize). Display-only —
+// The formatting helpers below are the card-chip vocabulary shared by the
+// descriptors' Summarize renderers and the timeline hydrator. Display-only —
 // the API itself stays metric.
 
 // FormatMiles renders meters as a one-decimal mile string, e.g. "5.0 mi".

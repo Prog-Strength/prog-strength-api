@@ -312,9 +312,13 @@ func enduranceOnly(sessions []activity.Activity) []activity.Activity {
 // hydrateStrengthWorkouts reconstructs the strength.Workout values the lifting
 // tile and streak completion check need from the unified list's strength rows.
 // The base row supplies id, start (performed_at), and duration; the exercises
-// come from one batched detail read on the workout repo. EndedAt is derived to
-// match the workout repository's own read: nil when the base duration is NULL
-// (loaded as 0 — an end-less/in-progress lift), else start+duration.
+// come from one batched detail read on the workout repo. EndedAt derives from
+// duration > 0 (start+duration), else nil. Known edge: the base Activity model
+// loads duration_seconds through COALESCE(…, 0), so NULL (an in-progress,
+// end-less lift) and an explicit 0 are indistinguishable here — a completed
+// 0-second workout would derive as in-progress. Accepted rather than
+// re-plumbing a nullable duration: a real finished workout always has a
+// positive duration, so the case is practically unreachable.
 func (h *Handler) hydrateStrengthWorkouts(ctx context.Context, sessions []activity.Activity) ([]strength.Workout, error) {
 	var ids []string
 	for i := range sessions {
@@ -369,6 +373,11 @@ func (h *Handler) hydrateStrengthWorkouts(ctx context.Context, sessions []activi
 func streakDates(runs []activity.Activity, workouts []strength.Workout, stepEntries []steps.Entry, stepGoal int, loc *time.Location) map[string]bool {
 	active := make(map[string]bool)
 	for i := range runs {
+		// The summary handler already passes enduranceOnly output, so this
+		// guard is redundant on that path — it stays because streakDates'
+		// own contract (unit-tested directly with mixed input) is that a
+		// strength row never lights a day here; only the completion-checked
+		// workout path below may.
 		if runs[i].ActivityType == activity.ActivityStrengthTraining {
 			continue
 		}

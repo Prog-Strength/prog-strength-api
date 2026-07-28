@@ -1,3 +1,10 @@
+# [0.81.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.80.1...v0.81.0) (2026-07-28)
+
+
+### Features
+
+* unified activity model (stage 1 — API) ([#79](https://github.com/Prog-Strength/prog-strength-api/issues/79)) ([fc74298](https://github.com/Prog-Strength/prog-strength-api/commit/fc74298415323799e5622782904eeda858f9b534))
+
 ## [0.80.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.80.0...v0.80.1) (2026-07-23)
 
 

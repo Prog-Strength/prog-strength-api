@@ -14,8 +14,11 @@ import (
 // analysis. See prog-strength-docs/sows/estimated-one-rep-max-time-
 // series-table.md for the full design rationale.
 type OneRepMaxEntry struct {
-	ID              string
-	UserID          string
+	ID     string
+	UserID string
+	// WorkoutID keeps its name (and the `workout_id` wire field in handler
+	// DTOs) for API compat; since migration 042 it scans from the renamed
+	// activity_id column — a workout's id IS its activity id.
 	WorkoutID       string
 	ExerciseID      string
 	PerformedAt     time.Time

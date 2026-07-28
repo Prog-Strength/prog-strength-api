@@ -282,6 +282,17 @@ func TestMigrate042_UnifiedActivityModel(t *testing.T) {
 		if got := queryInt(t, db, `SELECT id FROM activity_exercises WHERE activity_id = 'w1' AND exercise_id = 'bench'`); got != 11 {
 			t.Errorf("bench activity_exercise id = %d, want preserved 11", got)
 		}
+		var weNotes sql.NullString
+		var weSuperset sql.NullInt64
+		if err := db.QueryRow(`SELECT notes, superset_group FROM activity_exercises WHERE id = 11`).Scan(&weNotes, &weSuperset); err != nil {
+			t.Fatalf("read activity_exercise 11: %v", err)
+		}
+		if !weNotes.Valid || weNotes.String != "we note" {
+			t.Errorf("activity_exercise 11 notes = %v, want 'we note'", weNotes)
+		}
+		if !weSuperset.Valid || weSuperset.Int64 != 1 {
+			t.Errorf("activity_exercise 11 superset_group = %v, want 1", weSuperset)
+		}
 		if got := queryInt(t, db, `SELECT COUNT(*) FROM sets`); got != 4 {
 			t.Fatalf("sets rows = %d, want 4", got)
 		}

@@ -30,20 +30,34 @@ const activityJoins = `
 	LEFT JOIN activity_cycle_details cd ON cd.activity_id = a.id
 	LEFT JOIN activity_other_details od ON od.activity_id = a.id`
 
+// detailCoalesce projects one endurance column across the four detail tables
+// joined by activityJoins: at most one detail row exists per activity, so the
+// COALESCE picks the only non-NULL branch. fallback (a SQL literal; "" for
+// none) covers base-only rows so NOT NULL struct fields scan cleanly. EVERY
+// detail-column projection must go through this builder — a future fifth
+// detail table then only needs its alias added here and in activityJoins.
+func detailCoalesce(col, fallback string) string {
+	expr := "rd." + col + ", wd." + col + ", cd." + col + ", od." + col
+	if fallback != "" {
+		expr += ", " + fallback
+	}
+	return "COALESCE(" + expr + ")"
+}
+
 // activityColumns is the canonical select list, kept in one place so the
 // scan order can't drift between queries. Must be paired with activityJoins.
-const activityColumns = `
+var activityColumns = `
 	a.id, a.user_id, a.activity_type, a.ingest_source, COALESCE(a.source_activity_id, ''),
 	a.start_time, a.name,
-	COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+	` + detailCoalesce("distance_meters", "0") + `,
 	COALESCE(a.duration_seconds, 0),
-	COALESCE(rd.avg_pace_sec_per_km, wd.avg_pace_sec_per_km, cd.avg_pace_sec_per_km, od.avg_pace_sec_per_km),
-	COALESCE(rd.best_pace_sec_per_km, wd.best_pace_sec_per_km, cd.best_pace_sec_per_km, od.best_pace_sec_per_km),
+	` + detailCoalesce("avg_pace_sec_per_km", "") + `,
+	` + detailCoalesce("best_pace_sec_per_km", "") + `,
 	a.avg_heart_rate_bpm, a.max_heart_rate_bpm, a.total_calories,
-	COALESCE(rd.elevation_gain_meters, wd.elevation_gain_meters, cd.elevation_gain_meters, od.elevation_gain_meters),
+	` + detailCoalesce("elevation_gain_meters", "") + `,
 	COALESCE(a.tcx_s3_key, ''), a.created_at, a.deleted_at,
-	COALESCE(rd.environment, wd.environment, cd.environment, od.environment, 'outdoor'),
-	COALESCE(rd.raw_distance_meters, wd.raw_distance_meters, cd.raw_distance_meters, od.raw_distance_meters, 0)`
+	` + detailCoalesce("environment", "'outdoor'") + `,
+	` + detailCoalesce("raw_distance_meters", "0")
 
 // detailTable maps an activity type to its detail table, or "" for base-only
 // types (strength_training keeps its details in activity_exercises/sets,
@@ -618,7 +632,7 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 	)
 	row := tx.QueryRowContext(ctx, `
 		SELECT a.activity_type,
-		       COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+		       `+detailCoalesce("distance_meters", "0")+`,
 		       COALESCE(a.duration_seconds, 0)
 		`+activityJoins+`
 		WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL
@@ -714,9 +728,9 @@ func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activi
 		actType     ActivityType
 	)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT COALESCE(rd.environment, wd.environment, cd.environment, od.environment, 'outdoor'),
-		       COALESCE(rd.raw_distance_meters, wd.raw_distance_meters, cd.raw_distance_meters, od.raw_distance_meters, 0),
-		       COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+		SELECT `+detailCoalesce("environment", "'outdoor'")+`,
+		       `+detailCoalesce("raw_distance_meters", "0")+`,
+		       `+detailCoalesce("distance_meters", "0")+`,
 		       COALESCE(a.tcx_s3_key, ''), a.activity_type
 		`+activityJoins+`
 		WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL

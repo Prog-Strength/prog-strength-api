@@ -15,6 +15,9 @@ type PersonalRecord struct {
 	ID         string
 	UserID     string
 	ExerciseID string
+	// WorkoutID keeps its name (and the `workout_id` wire field in handler
+	// DTOs) for API compat; since migration 042 it scans from the renamed
+	// activity_id column — a workout's id IS its activity id.
 	WorkoutID  string
 	Weight     float64
 	Reps       int
@@ -33,9 +36,12 @@ type PersonalRecord struct {
 // very first logged set on an exercise produces an event with no
 // previous record to compare against.
 type PersonalRecordEvent struct {
-	ID             string
-	UserID         string
-	ExerciseID     string
+	ID         string
+	UserID     string
+	ExerciseID string
+	// WorkoutID keeps its name (and the `workout_id` wire field in handler
+	// DTOs) for API compat; since migration 042 it scans from the renamed
+	// activity_id column — a workout's id IS its activity id.
 	WorkoutID      string
 	Weight         float64
 	Reps           int

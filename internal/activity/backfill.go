@@ -245,9 +245,9 @@ func (r *SQLiteRepository) BackfillActivityRoutes(ctx context.Context) error {
 			SELECT a.id, a.tcx_s3_key, a.user_id, a.activity_type
 			`+activityJoins+`
 			WHERE a.deleted_at IS NULL
-			  AND COALESCE(rd.environment, wd.environment, cd.environment, od.environment) = ?
+			  AND `+detailCoalesce("environment", "")+` = ?
 			  AND a.activity_type != ?
-			  AND COALESCE(rd.route_geojson, wd.route_geojson, cd.route_geojson, od.route_geojson) IS NULL
+			  AND `+detailCoalesce("route_geojson", "")+` IS NULL
 			  AND a.tcx_s3_key IS NOT NULL
 			  AND a.tcx_s3_key != ''
 		`, EnvironmentOutdoor, ActivityStrengthTraining)

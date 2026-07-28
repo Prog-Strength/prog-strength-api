@@ -21,10 +21,10 @@ import (
 // inserting — never inserting inside an open read cursor.
 //
 // Column/table names were verified against the migrations:
-//   - 001_initial_schema.sql:    workouts(id, user_id, performed_at, deleted_at)
-//   - 015_activities_generalize: activities(id, user_id, activity_type, start_time, deleted_at)
-//   - 004_personal_records.sql:  personal_record_events(id, user_id, achieved_at)
-//   - 016_activity_best_efforts: activity_best_efforts(activity_id, distance_key)
+//   - 042_unified_activity_model: activities(id, user_id, activity_type, start_time, deleted_at)
+//     — one base table for both lifts (activity_type='strength_training') and runs
+//   - 004/042:                    personal_record_events(id, user_id, achieved_at)
+//   - 016/042:                    activity_best_efforts(activity_id, distance_key)
 func backfillTimeline(ctx context.Context, db *sql.DB, repo timeline.Repository) error {
 	var existing int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timeline_post`).Scan(&existing); err != nil {
@@ -62,9 +62,9 @@ func backfillTimeline(ctx context.Context, db *sql.DB, repo timeline.Repository)
 func collectTimelineBackfillRefs(ctx context.Context, db *sql.DB) ([]timeline.PostRef, error) {
 	var refs []timeline.PostRef
 
-	// Workouts → `workout`, occurred_at = performed_at.
+	// Workouts → `workout`, occurred_at = start_time (the old performed_at).
 	if err := scanRefs(ctx, db,
-		`SELECT id, user_id, performed_at FROM workouts WHERE deleted_at IS NULL`,
+		`SELECT id, user_id, start_time FROM activities WHERE activity_type = 'strength_training' AND deleted_at IS NULL`,
 		func(id, userID string) timeline.PostRef {
 			return timeline.PostRef{UserID: userID, SourceType: timeline.SourceWorkout, SourceID: id}
 		}, &refs); err != nil {

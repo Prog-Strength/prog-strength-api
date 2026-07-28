@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // sess builds a workout with one exercise carrying the given sets, performed
 // at start and ending durSec later (durSec < 0 means no EndedAt).
-func sess(start time.Time, durSec int, sets ...workout.Set) workout.Workout {
-	w := workout.Workout{
+func sess(start time.Time, durSec int, sets ...strength.Set) strength.Workout {
+	w := strength.Workout{
 		PerformedAt: start,
-		Exercises:   []workout.WorkoutExercise{{Sets: sets}},
+		Exercises:   []strength.WorkoutExercise{{Sets: sets}},
 	}
 	if durSec >= 0 {
 		end := start.Add(time.Duration(durSec) * time.Second)
@@ -23,8 +23,8 @@ func sess(start time.Time, durSec int, sets ...workout.Set) workout.Workout {
 	return w
 }
 
-func set(weight float64, reps int) workout.Set {
-	return workout.Set{Weight: weight, Reps: reps, Unit: user.WeightUnitPounds}
+func set(weight float64, reps int) strength.Set {
+	return strength.Set{Weight: weight, Reps: reps, Unit: user.WeightUnitPounds}
 }
 
 func TestBuildLifting_EmptyReturnsNil(t *testing.T) {
@@ -40,7 +40,7 @@ func TestBuildLifting_CurrentWeek(t *testing.T) {
 	now := time.Date(2026, 6, 17, 13, 0, 0, 0, denver) // current week Mon = 06-15
 
 	headline := &Headline1RM{ExerciseName: "Barbell Bench Press", Value: 326.9, Unit: "lb"}
-	workouts := []workout.Workout{
+	workouts := []strength.Workout{
 		// In current week: 3 sets + 2 sets, 3600s.
 		sess(time.Date(2026, 6, 15, 17, 0, 0, 0, denver), 3600, set(100, 5), set(100, 5), set(100, 5)),
 		sess(time.Date(2026, 6, 16, 17, 0, 0, 0, denver), 1800, set(50, 8), set(50, 8)),
@@ -79,7 +79,7 @@ func TestBuildLifting_NilHeadline(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	now := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
 	w := sess(time.Date(2026, 6, 16, 17, 0, 0, 0, denver), 600, set(100, 5))
-	got := buildLifting([]workout.Workout{w}, 0, nil, "kg", now, denver)
+	got := buildLifting([]strength.Workout{w}, 0, nil, "kg", now, denver)
 	if got.HeadlineEstimated1RM != nil {
 		t.Errorf("nil headline should pass through, got %+v", got.HeadlineEstimated1RM)
 	}
@@ -90,7 +90,7 @@ func TestBuildLifting_WeeklyVolumeSparkZeroFilledAndLocalBucketing(t *testing.T)
 	now := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
 	// Buckets (Mondays): 04-27,05-04,05-11,05-18,05-25,06-01,06-08,06-15
 
-	workouts := []workout.Workout{
+	workouts := []strength.Workout{
 		// 06-15 week: 100*5 + 100*5 = 1000; plus 50*8=400 -> 1400.
 		sess(time.Date(2026, 6, 15, 17, 0, 0, 0, denver), 600, set(100, 5), set(100, 5)),
 		sess(time.Date(2026, 6, 17, 6, 0, 0, 0, denver), 600, set(50, 8)),

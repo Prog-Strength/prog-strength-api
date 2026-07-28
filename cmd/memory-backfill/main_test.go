@@ -144,8 +144,8 @@ func seedWorkout(t *testing.T, database *sql.DB, id, userID string) {
 	t.Helper()
 	now := time.Now().UTC()
 	if _, err := database.Exec(`
-		INSERT INTO workouts (id, user_id, name, performed_at, notes, created_at, updated_at)
-		VALUES (?, ?, 'leg day', ?, 'felt strong', ?, ?)
+		INSERT INTO activities (id, user_id, activity_type, ingest_source, name, start_time, notes, created_at, updated_at)
+		VALUES (?, ?, 'strength_training', 'manual', 'leg day', ?, 'felt strong', ?, ?)
 	`, id, userID, now, now, now); err != nil {
 		t.Fatalf("seed workout %s: %v", id, err)
 	}

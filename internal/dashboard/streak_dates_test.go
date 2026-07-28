@@ -5,19 +5,19 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // completedWorkout builds a workout that is finished (EndedAt set) and has at
 // least one logged set — the shape that should count toward the streak.
-func completedWorkout(start time.Time) workout.Workout {
+func completedWorkout(start time.Time) strength.Workout {
 	end := start.Add(time.Hour)
-	return workout.Workout{
+	return strength.Workout{
 		PerformedAt: start,
 		EndedAt:     &end,
-		Exercises: []workout.WorkoutExercise{
-			{ExerciseID: "ex1", Sets: []workout.Set{{Reps: 5, Weight: 100}}},
+		Exercises: []strength.WorkoutExercise{
+			{ExerciseID: "ex1", Sets: []strength.Set{{Reps: 5, Weight: 100}}},
 		},
 	}
 }
@@ -25,7 +25,7 @@ func completedWorkout(start time.Time) workout.Workout {
 func TestStreakDates_CompletedWorkoutCounts(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	day := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
-	got := streakDates(nil, []workout.Workout{completedWorkout(day)}, nil, 0, denver)
+	got := streakDates(nil, []strength.Workout{completedWorkout(day)}, nil, 0, denver)
 	if !got["2026-06-17"] {
 		t.Errorf("completed workout should mark its day active, got %v", got)
 	}
@@ -35,8 +35,8 @@ func TestStreakDates_AbandonedWorkoutDoesNotCount(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	day := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
 	// No EndedAt, no exercises — a started-then-abandoned session.
-	w := workout.Workout{PerformedAt: day}
-	got := streakDates(nil, []workout.Workout{w}, nil, 0, denver)
+	w := strength.Workout{PerformedAt: day}
+	got := streakDates(nil, []strength.Workout{w}, nil, 0, denver)
 	if got["2026-06-17"] {
 		t.Errorf("abandoned workout (no end, no sets) should not count, got %v", got)
 	}
@@ -47,8 +47,8 @@ func TestStreakDates_FinishedButEmptyWorkoutDoesNotCount(t *testing.T) {
 	day := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
 	end := day.Add(time.Hour)
 	// EndedAt set but zero exercises — finished without logging anything.
-	w := workout.Workout{PerformedAt: day, EndedAt: &end}
-	got := streakDates(nil, []workout.Workout{w}, nil, 0, denver)
+	w := strength.Workout{PerformedAt: day, EndedAt: &end}
+	got := streakDates(nil, []strength.Workout{w}, nil, 0, denver)
 	if got["2026-06-17"] {
 		t.Errorf("finished-but-empty workout should not count, got %v", got)
 	}
@@ -58,13 +58,13 @@ func TestStreakDates_WorkoutWithSetsButNoEndDoesNotCount(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	day := time.Date(2026, 6, 17, 13, 0, 0, 0, denver)
 	// Has a logged set but the user never finished the session.
-	w := workout.Workout{
+	w := strength.Workout{
 		PerformedAt: day,
-		Exercises: []workout.WorkoutExercise{
-			{ExerciseID: "ex1", Sets: []workout.Set{{Reps: 5, Weight: 100}}},
+		Exercises: []strength.WorkoutExercise{
+			{ExerciseID: "ex1", Sets: []strength.Set{{Reps: 5, Weight: 100}}},
 		},
 	}
-	got := streakDates(nil, []workout.Workout{w}, nil, 0, denver)
+	got := streakDates(nil, []strength.Workout{w}, nil, 0, denver)
 	if got["2026-06-17"] {
 		t.Errorf("unfinished workout (no EndedAt) should not count, got %v", got)
 	}

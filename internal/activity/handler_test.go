@@ -388,7 +388,7 @@ func TestImportStorageFailure(t *testing.T) {
 	if env.Code != "storage_failed" {
 		t.Errorf("code = %q, want storage_failed", env.Code)
 	}
-	got, err := repo.List(context.Background(), testUserID, 10, nil)
+	got, err := repo.List(context.Background(), testUserID, 10, nil, TypeFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

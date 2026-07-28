@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 const maxTopSetsPerSession = 3
@@ -30,8 +30,8 @@ type bodyweightReading struct {
 // section. Always returns a non-nil section (empty input → zeroed
 // section) so an empty-but-healthy domain renders, not nulls.
 func aggregateStrength(
-	workouts []workout.Workout,
-	prEvents []workout.PersonalRecordEvent,
+	workouts []strength.Workout,
+	prEvents []strength.PersonalRecordEvent,
 	exercises []exercise.Exercise,
 	unit string,
 	loc *time.Location,
@@ -42,7 +42,7 @@ func aggregateStrength(
 		muscleByExercise[e.ID] = e.MuscleGroups
 		nameByExercise[e.ID] = e.Name
 	}
-	prsByWorkout := map[string][]workout.PersonalRecordEvent{}
+	prsByWorkout := map[string][]strength.PersonalRecordEvent{}
 	for _, ev := range prEvents {
 		prsByWorkout[ev.WorkoutID] = append(prsByWorkout[ev.WorkoutID], ev)
 	}
@@ -71,7 +71,7 @@ func aggregateStrength(
 			for _, s := range we.Sets {
 				exVol += s.Weight * float64(s.Reps)
 				sec.TotalVolume += s.Weight * float64(s.Reps)
-				est := workout.EpleyOneRM(s.Weight, s.Reps)
+				est := strength.EpleyOneRM(s.Weight, s.Reps)
 				if !haveBest || est > best.Est1RM {
 					best = TopSet{Exercise: we.ExerciseID, Weight: s.Weight, Reps: s.Reps, Est1RM: roundTo(est, 0)}
 					haveBest = true
@@ -240,20 +240,36 @@ func aggregateNutrition(days []nutrition.DailyMacros, goals nutrition.MacroGoals
 	return sec
 }
 
+// sessionDates collects the distinct local calendar dates of the given
+// sessions. Every activity type counts — any logged session is an active
+// day — so a new registry type feeds the consistency section automatically,
+// with no per-type code here. This matches the dashboard streak's contract
+// for endurance/base-only types; strength_training's completion nuance (the
+// dashboard's workoutCompleted gate) doesn't apply here — any strength row
+// already counted via strength.Sessions, pre-existing and unaffected.
+func sessionDates(sessions []activity.Activity, loc *time.Location) map[string]bool {
+	days := make(map[string]bool, len(sessions))
+	for i := range sessions {
+		days[sessions[i].StartTime.In(loc).Format("2006-01-02")] = true
+	}
+	return days
+}
+
 // countActiveDays is the number of distinct local days on which the user
-// did anything: a logged workout, a run, or a non-zero step day. Nil
-// sections (a failed domain) contribute nothing rather than panicking.
-func countActiveDays(strength *StrengthSection, running *RunningSection, stepsSec *StepsSection) int {
+// did anything: a logged session of any type, a workout, or a non-zero step
+// day. sessionDays already covers the strength base rows, but the strength
+// section stays a separate input so a failed activity read degrades to
+// workout-repo days rather than losing them. Nil inputs (a failed domain)
+// contribute nothing rather than panicking.
+func countActiveDays(strength *StrengthSection, sessionDays map[string]bool, stepsSec *StepsSection) int {
 	active := map[string]bool{}
 	if strength != nil {
 		for _, s := range strength.Sessions {
 			active[s.Date] = true
 		}
 	}
-	if running != nil {
-		for _, r := range running.Runs {
-			active[r.Date] = true
-		}
+	for d := range sessionDays {
+		active[d] = true
 	}
 	if stepsSec != nil {
 		for _, d := range stepsSec.ByDay {

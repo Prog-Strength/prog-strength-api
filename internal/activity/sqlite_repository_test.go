@@ -255,7 +255,7 @@ func TestList_NewestFirstBeforeAndSoftDelete(t *testing.T) {
 		t.Fatalf("SoftDelete: %v", err)
 	}
 
-	got, err := repo.List(ctx, "u1", 10, nil)
+	got, err := repo.List(ctx, "u1", 10, nil, TypeFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestList_NewestFirstBeforeAndSoftDelete(t *testing.T) {
 	}
 
 	before := mustTime(t, "2026-06-02T00:00:00Z")
-	got, err = repo.List(ctx, "u1", 10, &before)
+	got, err = repo.List(ctx, "u1", 10, &before, TypeFilter{})
 	if err != nil {
 		t.Fatalf("List before: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestList_NewestFirstBeforeAndSoftDelete(t *testing.T) {
 		t.Fatalf("before cursor wrong: %+v", got)
 	}
 
-	got, err = repo.List(ctx, "u1", 1, nil)
+	got, err = repo.List(ctx, "u1", 1, nil, TypeFilter{})
 	if err != nil {
 		t.Fatalf("List limit: %v", err)
 	}

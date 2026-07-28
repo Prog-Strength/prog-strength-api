@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 func mustLoc(t *testing.T) *time.Location {
@@ -27,12 +27,12 @@ func TestAggregateStrength_VolumeMuscleGroupsTopSetsPRs(t *testing.T) {
 	at := time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)
 	bench := exercise.Exercise{ID: "barbell-bench-press", Name: "barbell bench press",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest, exercise.MuscleTriceps}}
-	w := workout.Workout{ID: "w1", Name: "Chest & Back", PerformedAt: at,
-		Exercises: []workout.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []workout.Set{
+	w := strength.Workout{ID: "w1", Name: "Chest & Back", PerformedAt: at,
+		Exercises: []strength.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []strength.Set{
 			{Reps: 8, Weight: 225}, {Reps: 8, Weight: 265},
 		}}}}
-	prs := []workout.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
-	got := aggregateStrength([]workout.Workout{w}, prs, []exercise.Exercise{bench}, "lb", loc)
+	prs := []strength.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
+	got := aggregateStrength([]strength.Workout{w}, prs, []exercise.Exercise{bench}, "lb", loc)
 
 	if got.SessionCount != 1 {
 		t.Fatalf("session_count = %d, want 1", got.SessionCount)
@@ -83,13 +83,13 @@ func TestAggregateStrength_ByMuscleGroupTieOrderingDeterministic(t *testing.T) {
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleShoulders}}
 	bicepEx := exercise.Exercise{ID: "barbell-curl", Name: "barbell curl",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleBiceps}}
-	w := workout.Workout{ID: "w1", Name: "Push & Pull", PerformedAt: at,
-		Exercises: []workout.WorkoutExercise{
-			{ExerciseID: "shoulder-press", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
-			{ExerciseID: "barbell-curl", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
+	w := strength.Workout{ID: "w1", Name: "Push & Pull", PerformedAt: at,
+		Exercises: []strength.WorkoutExercise{
+			{ExerciseID: "shoulder-press", Sets: []strength.Set{{Reps: 10, Weight: 100}}},
+			{ExerciseID: "barbell-curl", Sets: []strength.Set{{Reps: 10, Weight: 100}}},
 		}}
 	exs := []exercise.Exercise{shoulderEx, bicepEx}
-	got := aggregateStrength([]workout.Workout{w}, nil, exs, "lb", loc)
+	got := aggregateStrength([]strength.Workout{w}, nil, exs, "lb", loc)
 	if len(got.ByMuscleGroup) != 2 {
 		t.Fatalf("by_muscle_group = %+v", got.ByMuscleGroup)
 	}
@@ -110,14 +110,14 @@ func TestAggregateStrength_TopSetsRankedAndCapped(t *testing.T) {
 		return exercise.Exercise{ID: id, Name: id, MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest}}
 	}
 	exs := []exercise.Exercise{ex("a"), ex("b"), ex("c"), ex("d")}
-	we := func(id string, weight float64) workout.WorkoutExercise {
-		return workout.WorkoutExercise{ExerciseID: id, Sets: []workout.Set{{Reps: 1, Weight: weight}}}
+	we := func(id string, weight float64) strength.WorkoutExercise {
+		return strength.WorkoutExercise{ExerciseID: id, Sets: []strength.Set{{Reps: 1, Weight: weight}}}
 	}
 	// Est-1RM for a single rep equals weight, so ordering is by weight.
-	w := workout.Workout{ID: "w1", PerformedAt: at, Exercises: []workout.WorkoutExercise{
+	w := strength.Workout{ID: "w1", PerformedAt: at, Exercises: []strength.WorkoutExercise{
 		we("a", 100), we("b", 400), we("c", 200), we("d", 300),
 	}}
-	got := aggregateStrength([]workout.Workout{w}, nil, exs, "lb", loc)
+	got := aggregateStrength([]strength.Workout{w}, nil, exs, "lb", loc)
 	top := got.Sessions[0].TopSets
 	if len(top) != maxTopSetsPerSession {
 		t.Fatalf("top sets len = %d, want %d", len(top), maxTopSetsPerSession)
@@ -285,18 +285,43 @@ func TestCountActiveDays_UnionOfDomains(t *testing.T) {
 	strength := &StrengthSection{Sessions: []StrengthSession{
 		{Date: "2026-06-15"}, {Date: "2026-06-17"},
 	}}
-	running := &RunningSection{Runs: []RunSummary{
-		{Date: "2026-06-17"}, // overlaps strength → counted once
-		{Date: "2026-06-18"},
-	}}
+	// Sessions of EVERY activity type count — any logged session is an
+	// active day (matching the dashboard streak): a walk-only day and a
+	// day of a type this codebase has never heard of both light up.
+	sessions := []activity.Activity{
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)}, // overlaps strength → counted once
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)},
+		{ActivityType: activity.ActivityWalking,
+			StartTime: time.Date(2026, 6, 21, 13, 0, 0, 0, time.UTC)}, // walk-only day
+		{ActivityType: activity.ActivityType("shadowboxing"),
+			StartTime: time.Date(2026, 6, 22, 13, 0, 0, 0, time.UTC)}, // future registry type
+	}
 	stepsSec := &StepsSection{ByDay: []StepsDay{
 		{Date: "2026-06-15", Steps: 9000}, // overlaps strength
 		{Date: "2026-06-19", Steps: 5000},
 		{Date: "2026-06-20", Steps: 0}, // zero steps → not active
 	}}
-	// Union: 15, 17, 18, 19 = 4 distinct days.
-	if got := countActiveDays(strength, running, stepsSec); got != 4 {
-		t.Fatalf("active days = %d, want 4", got)
+	// Union: 15, 17, 18, 19, 21, 22 = 6 distinct days.
+	if got := countActiveDays(strength, sessionDates(sessions, time.UTC), stepsSec); got != 6 {
+		t.Fatalf("active days = %d, want 6", got)
+	}
+}
+
+func TestSessionDates_LocalizesAndDedupes(t *testing.T) {
+	loc := mustLoc(t) // America/Denver, UTC-6 in June
+	sessions := []activity.Activity{
+		// 04:30 UTC = 22:30 the previous local day.
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 18, 4, 30, 0, 0, time.UTC)},
+		// Same local day as above, different type.
+		{ActivityType: activity.ActivityCycling,
+			StartTime: time.Date(2026, 6, 17, 23, 0, 0, 0, time.UTC)},
+	}
+	days := sessionDates(sessions, loc)
+	if len(days) != 1 || !days["2026-06-17"] {
+		t.Fatalf("session dates = %v, want exactly {2026-06-17}", days)
 	}
 }
 

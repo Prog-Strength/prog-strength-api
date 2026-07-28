@@ -6,36 +6,40 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // --- fakes -------------------------------------------------------------
 
-// fakeWorkoutRepo embeds workout.Repository (so unused methods panic) and
-// implements only the reads the hydrator touches. It counts calls so the
-// test can assert PR hydration is a single batch query (no N+1).
+// fakeWorkoutRepo embeds strength.Repository (so unused methods panic) and
+// implements only the reads the hydrator touches through the registry: the
+// batched exercise hydration behind the strength descriptor's Summarize, and
+// the batched PR-event read. It counts calls so the test can assert PR
+// hydration is a single batch query (no N+1).
 type fakeWorkoutRepo struct {
-	workout.Repository
-	workouts        map[string]*workout.Workout
-	prEvents        map[string]workout.PersonalRecordEvent
-	getByIDCalls    int
+	strength.Repository
+	exercises       map[string][]strength.WorkoutExercise
+	prEvents        map[string]strength.PersonalRecordEvent
+	listExCalls     int
 	getPREventCalls int
 }
 
-func (f *fakeWorkoutRepo) GetByID(_ context.Context, id string) (*workout.Workout, error) {
-	f.getByIDCalls++
-	w, ok := f.workouts[id]
-	if !ok {
-		return nil, workout.ErrNotFound
+func (f *fakeWorkoutRepo) ListExercisesByWorkoutIDs(_ context.Context, ids []string) (map[string][]strength.WorkoutExercise, error) {
+	f.listExCalls++
+	out := make(map[string][]strength.WorkoutExercise, len(ids))
+	for _, id := range ids {
+		if ex, ok := f.exercises[id]; ok {
+			out[id] = ex
+		}
 	}
-	return w, nil
+	return out, nil
 }
 
-func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []string) ([]workout.PersonalRecordEvent, error) {
+func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []string) ([]strength.PersonalRecordEvent, error) {
 	f.getPREventCalls++
-	var out []workout.PersonalRecordEvent
+	var out []strength.PersonalRecordEvent
 	for _, id := range ids {
 		if e, ok := f.prEvents[id]; ok {
 			out = append(out, e)
@@ -44,11 +48,27 @@ func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []
 	return out, nil
 }
 
-// fakeActivityRepo embeds activity.Repository and implements only Get.
+// fakeActivityRepo embeds activity.Repository and implements the two reads the
+// session/best-effort hydration needs: SummariesByIDs (the batched base read
+// for session cards, user-scoped) and Get (the single-id load carrying the
+// best-effort list SummariesByIDs omits).
 type fakeActivityRepo struct {
 	activity.Repository
 	activities map[string]*activity.Activity
 	getCalls   int
+	summCalls  int
+}
+
+func (f *fakeActivityRepo) SummariesByIDs(_ context.Context, userID string, ids []string) (map[string]activity.Activity, error) {
+	f.summCalls++
+	out := make(map[string]activity.Activity, len(ids))
+	for _, id := range ids {
+		a, ok := f.activities[id]
+		if ok && a.UserID == userID {
+			out[id] = *a
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeActivityRepo) Get(_ context.Context, userID, id string) (*activity.Activity, error) {
@@ -62,33 +82,47 @@ func (f *fakeActivityRepo) Get(_ context.Context, userID, id string) (*activity.
 
 func strptr(s string) *string { return &s }
 
+// testRegistry builds a registry with the running + strength descriptors the
+// session hydration renders through. Endurance summarizes off the base row so
+// its detail store can be nil; strength's descriptor wraps the fake repo whose
+// batched exercise read backs its Summarize.
+func testRegistry(wRepo strength.Repository) *activity.Registry {
+	return activity.NewRegistry(
+		activity.NewEnduranceDescriptor(activity.ActivityRunning, nil),
+		strength.NewDescriptor(wRepo),
+	)
+}
+
 // --- tests -------------------------------------------------------------
 
 func TestHydrate_PerSourceContent(t *testing.T) {
 	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*workout.Workout{
+		exercises: map[string][]strength.WorkoutExercise{
 			"w1": {
-				ID:     "w1",
-				UserID: "u1",
-				Name:   "Push day",
-				Exercises: []workout.WorkoutExercise{
-					{ExerciseID: "bench", Sets: []workout.Set{
-						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
-						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
-					}},
-					{ExerciseID: "ohp", Sets: []workout.Set{
-						{Reps: 8, Weight: 50, Unit: user.WeightUnitPounds},
-					}},
-				},
+				{ExerciseID: "bench", Sets: []strength.Set{
+					{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
+					{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
+				}},
+				{ExerciseID: "ohp", Sets: []strength.Set{
+					{Reps: 8, Weight: 50, Unit: user.WeightUnitPounds},
+				}},
 			},
 		},
-		prEvents: map[string]workout.PersonalRecordEvent{
+		prEvents: map[string]strength.PersonalRecordEvent{
 			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 305, Reps: 3, Unit: user.WeightUnitPounds, AchievedAt: now},
 		},
 	}
 	aRepo := &fakeActivityRepo{
 		activities: map[string]*activity.Activity{
+			// The lift's base row: type + name drive the card title; the
+			// exercises/sets that produce its chips come from wRepo.
+			"w1": {
+				ID:           "w1",
+				UserID:       "u1",
+				ActivityType: activity.ActivityStrengthTraining,
+				Name:         strptr("Push day"),
+			},
 			"a1": {
 				ID:              "a1",
 				UserID:          "u1",
@@ -103,7 +137,7 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 		},
 	}
 
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
@@ -171,9 +205,9 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 
 func TestHydrate_OmitsMissingSources(t *testing.T) {
 	now := time.Now().UTC()
-	wRepo := &fakeWorkoutRepo{workouts: map[string]*workout.Workout{}, prEvents: map[string]workout.PersonalRecordEvent{}}
+	wRepo := &fakeWorkoutRepo{exercises: map[string][]strength.WorkoutExercise{}, prEvents: map[string]strength.PersonalRecordEvent{}}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "gone", OccurredAt: now},
@@ -193,15 +227,15 @@ func TestHydrate_OmitsMissingSources(t *testing.T) {
 func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 	now := time.Now().UTC()
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*workout.Workout{},
-		prEvents: map[string]workout.PersonalRecordEvent{
+		exercises: map[string][]strength.WorkoutExercise{},
+		prEvents: map[string]strength.PersonalRecordEvent{
 			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 100, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 			"pr2": {ID: "pr2", UserID: "u1", ExerciseID: "squat", Weight: 200, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 			"pr3": {ID: "pr3", UserID: "u1", ExerciseID: "dead", Weight: 300, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 		},
 	}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "pr1", OccurredAt: now},
@@ -217,5 +251,57 @@ func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 	}
 	if wRepo.getPREventCalls != 1 {
 		t.Errorf("GetPersonalRecordEventsByIDs called %d times, want 1 (batched)", wRepo.getPREventCalls)
+	}
+}
+
+// TestHydrate_SessionsBatchedPerAuthor pins hydrateSessions' fetch counts on a
+// multi-author feed page: SummariesByIDs is user-scoped, so it runs exactly
+// once per distinct author (the idsByUser grouping), while the strength detail
+// load batches per TYPE across the whole merged page — one
+// ListExercisesByWorkoutIDs total, even with strength posts from several
+// authors. No per-post N+1 anywhere, and every post still renders.
+func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	sets := []strength.Set{{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds}}
+	wRepo := &fakeWorkoutRepo{
+		exercises: map[string][]strength.WorkoutExercise{
+			"w1": {{ExerciseID: "bench", Sets: sets}},
+			"w2": {{ExerciseID: "squat", Sets: sets}},
+		},
+		prEvents: map[string]strength.PersonalRecordEvent{},
+	}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"w1": {ID: "w1", UserID: "u1", ActivityType: activity.ActivityStrengthTraining, Name: strptr("U1 lift")},
+			"a1": {ID: "a1", UserID: "u1", ActivityType: activity.ActivityRunning, Name: strptr("U1 run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
+			"w2": {ID: "w2", UserID: "u2", ActivityType: activity.ActivityStrengthTraining, Name: strptr("U2 lift")},
+			"a2": {ID: "a2", UserID: "u2", ActivityType: activity.ActivityRunning, Name: strptr("U2 run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
+		},
+	}
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+
+	refs := []timeline.PostRef{
+		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "a1", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceWorkout, SourceID: "w2", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceRun, SourceID: "a2", OccurredAt: now},
+	}
+	got, err := h.Hydrate(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d contents, want 4", len(got))
+	}
+	for i, want := range []string{"U1 lift", "U1 run", "U2 lift", "U2 run"} {
+		if got[refs[i]].Title != want {
+			t.Errorf("refs[%d] title = %q, want %q", i, got[refs[i]].Title, want)
+		}
+	}
+	if aRepo.summCalls != 2 {
+		t.Errorf("SummariesByIDs called %d times, want 2 (one per author)", aRepo.summCalls)
+	}
+	if wRepo.listExCalls != 1 {
+		t.Errorf("ListExercisesByWorkoutIDs called %d times, want 1 (one per type across the page)", wRepo.listExCalls)
 	}
 }

@@ -9,10 +9,11 @@ import "time"
 // view.
 //
 // Activity is the sport-agnostic generalization of the prior running-only
-// Session type. Running-specific summary fields (avg/best pace, HR, etc.)
-// are kept here as nullable fields rather than split into a per-sport
-// detail table; they're populated only when ActivityType is Running.
-// Walks, rides, and other sports leave them nil.
+// Session type. Since migration 042 the storage is split: session-generic
+// columns live on the activities base table, and the endurance summary
+// fields (distance, paces, elevation, environment, route) live in per-type
+// detail tables (activity_run_details etc.). The struct keeps them flat —
+// the repository joins them back together on read.
 //
 // Pointer fields are nil when either the source did not carry that signal
 // (e.g. a watch without a chest strap omits heart rate) or the metric
@@ -33,7 +34,11 @@ type Activity struct {
 	SourceActivityID string
 	StartTime        time.Time
 	Name             *string
-	DistanceMeters   float64
+	// Notes is the base-row notes column, written by the unified manual
+	// create/update surface (and by workouts through their own repository).
+	// nil when the session carries none.
+	Notes          *string
+	DistanceMeters float64
 	// RawDistanceMeters is the distance as originally ingested. Set equal to
 	// DistanceMeters at ingest and never touched by calibration, so
 	// "calibrated" is derivable as RawDistanceMeters != DistanceMeters and a

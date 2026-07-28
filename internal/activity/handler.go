@@ -73,6 +73,11 @@ type Handler struct {
 	// demographicsLoader supplies profile fields for max-effort estimation.
 	// Optional and nil-safe.
 	demographicsLoader DemographicsLoader
+	// registry resolves per-type behavior (create validation, detail
+	// stores, card summaries) for the unified /activities surface. Injected
+	// post-construction via SetRegistry from server wiring; no route reads
+	// it yet — the unified surface layers on next.
+	registry *Registry
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -102,6 +107,11 @@ func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 func (h *Handler) SetDemographicsLoader(l DemographicsLoader) {
 	h.demographicsLoader = l
 }
+
+// SetRegistry wires the activity type registry in. Called from server wiring
+// after construction, mirroring the other setters so NewHandler's signature
+// (and the tests that call it) stay untouched. Nothing consumes it yet.
+func (h *Handler) SetRegistry(reg *Registry) { h.registry = reg }
 
 // matchSession best-effort-notifies the plan matcher that ref was logged. It
 // NEVER affects the HTTP response: a nil matcher is a no-op.
@@ -142,13 +152,29 @@ func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
 // a new HTTP route.
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/activities", func(r chi.Router) {
+		// /tcx stays on the base handler: the upload is cross-type endurance
+		// ingest (the TCX <Sport> tag decides running/walking/cycling), so no
+		// single descriptor owns it.
 		r.Post("/tcx", h.uploadTCX)
 		r.Get("/", h.list)
 		r.Get("/running-metrics", h.runningMetrics)
+		r.Post("/", h.createUnified)
 		r.Get("/{id}", h.get)
+		// PATCH stays on the base handler too: rename is genuinely
+		// cross-type, and the environment toggle shares the route.
 		r.Patch("/{id}", h.patch)
-		r.Post("/{id}/calibrate", h.calibrate)
+		r.Put("/{id}", h.updateUnified)
 		r.Delete("/{id}", h.delete)
+		// Type-specific routes (running calibrate, strength TCX enrichment
+		// and progression) mount through the registered descriptors, wired
+		// in server.go.
+		if h.registry != nil {
+			for _, d := range h.registry.Descriptors() {
+				if d.MountRoutes != nil {
+					d.MountRoutes(r)
+				}
+			}
+		}
 	})
 
 	// Running best efforts (running PRs). The data lives in the activity
@@ -160,6 +186,14 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Get("/max-effort", h.runningMaxEffort)
 		r.Get("/max-effort/{distance_key}", h.runningMaxEffortDetail)
 	})
+}
+
+// MountRunningRoutes is the running descriptor's MountRoutes: the routes
+// only a run can answer, mounted on the /activities subrouter. Assigned to
+// the descriptor in server.go (same package as the handler, so the method
+// can stay bound to the unexported handler internals).
+func (h *Handler) MountRunningRoutes(r chi.Router) {
+	r.Post("/{id}/calibrate", h.calibrate)
 }
 
 // standardDistanceByKey returns the StandardDistance for a key and whether
@@ -203,6 +237,7 @@ type activityDTO struct {
 	IngestSource        IngestSource    `json:"ingest_source"`
 	SourceActivityID    string          `json:"source_activity_id"`
 	Name                *string         `json:"name"`
+	Notes               *string         `json:"notes"`
 	StartTime           time.Time       `json:"start_time"`
 	DistanceMeters      float64         `json:"distance_meters"`
 	RawDistanceMeters   float64         `json:"raw_distance_meters"`
@@ -234,6 +269,16 @@ type activityDTO struct {
 	// (key absent) when the activity has no route. The map consumes this; the
 	// per-trackpoint DTO deliberately stays coordinate-free.
 	Route json.RawMessage `json:"route,omitempty"`
+	// Summary is the type's rendered card (registry Summarize): title,
+	// subtitle, metric chips. Present on unified list items and detail
+	// reads; omitted when no registry is wired or the row's type is
+	// unregistered (degrade, don't fail).
+	Summary *Summary `json:"summary,omitempty"`
+	// Details is the type-keyed detail payload (registry DetailStore.Load):
+	// exercises/sets for strength, the detail-table fields for endurance.
+	// Detail reads only; omitted on lists, for base-only shaped sessions
+	// (no detail row), and when no registry is wired.
+	Details any `json:"details,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -306,6 +351,7 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		IngestSource:        a.IngestSource,
 		SourceActivityID:    a.SourceActivityID,
 		Name:                a.Name,
+		Notes:               a.Notes,
 		StartTime:           a.StartTime,
 		DistanceMeters:      a.DistanceMeters,
 		RawDistanceMeters:   a.RawDistanceMeters,
@@ -477,6 +523,21 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?type= narrows the unified list to one registered type. Absent means
+	// every type — strength_training included, per the unified-activity-model
+	// SOW (the pre-042 exclusion is gone).
+	var filter TypeFilter
+	if raw := r.URL.Query().Get("type"); raw != "" {
+		t := ActivityType(raw)
+		if h.registry != nil {
+			if _, err := h.registry.Lookup(t); err != nil {
+				httpresp.Error(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		filter.Only = t
+	}
+
 	if hasSince || hasUntil {
 		since, err := parseOptionalTimeParam(r, "since")
 		if err != nil {
@@ -488,16 +549,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httpresp.Error(w, http.StatusBadRequest, "until must be an RFC3339 timestamp")
 			return
 		}
-		activities, err := h.repo.ListInRange(r.Context(), userID, since, until)
+		activities, err := h.repo.ListInRange(r.Context(), userID, since, until, filter)
 		if err != nil {
 			httpresp.ServerError(w, r.Context(), "list activities in range", err)
 			return
 		}
-		out := make([]activityDTO, 0, len(activities))
-		for _, a := range activities {
-			out = append(out, toActivityDTO(a, false))
-		}
-		httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nil})
+		httpresp.OK(w, "listed activities", listResponse{Activities: h.toListDTOs(r.Context(), userID, activities), NextBefore: nil})
 		return
 	}
 
@@ -524,15 +581,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		before = &t
 	}
 
-	activities, err := h.repo.List(r.Context(), userID, limit, before)
+	activities, err := h.repo.List(r.Context(), userID, limit, before, filter)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list activities", err)
 		return
-	}
-
-	out := make([]activityDTO, 0, len(activities))
-	for _, a := range activities {
-		out = append(out, toActivityDTO(a, false))
 	}
 
 	var nextBefore *string
@@ -541,7 +593,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		nextBefore = &cursor
 	}
 
-	httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nextBefore})
+	httpresp.OK(w, "listed activities", listResponse{Activities: h.toListDTOs(r.Context(), userID, activities), NextBefore: nextBefore})
 }
 
 func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
@@ -599,78 +651,6 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.OK(w, "fetched activity", dto)
-}
-
-// buildDetailDTO renders the full single-activity detail shape: the base DTO
-// with trackpoints plus, for running activities, the read-time derived blocks
-// (splits, strip summary, best pace, intervals) and — when the engine is
-// wired and HR is usable — the heart_rate_zones block. Shared by the detail
-// GET and the calibrate response so both return an identical shape.
-func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity, unit DistanceUnit) (activityDTO, error) {
-	dto := toActivityDTO(a, true)
-	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
-		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
-		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
-		for _, tp := range a.Trackpoints {
-			tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
-			if tp.HeartRateBpm != nil {
-				currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
-			}
-		}
-		stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
-		if err != nil {
-			return activityDTO{}, err
-		}
-		stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
-		ref := h.hrEngine.EstimateReference(stats)
-		if res, ok := h.hrEngine.Compute(ref, tps); ok {
-			zones := make([]heartRateZoneDTO, 0, len(res.Zones))
-			for _, z := range res.Zones {
-				zones = append(zones, heartRateZoneDTO{
-					Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
-					MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
-				})
-			}
-			dto.HeartRateZones = &heartRateZonesDTO{
-				Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
-				ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
-				Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
-			}
-		}
-	}
-	// Read-time derivation + invariant gate (running only). Violations are
-	// ERROR-logged but the response is still served: a read never 500s over
-	// an accounting mismatch — CI fixtures assert the gate stays quiet.
-	if a.ActivityType == ActivityRunning && len(a.Trackpoints) >= 2 {
-		der := deriveRunning(a.Trackpoints, unit)
-		dto.Unit = string(unit)
-		dto.Splits = make([]splitDTO, 0, len(der.Splits))
-		for _, s := range der.Splits {
-			dto.Splits = append(dto.Splits, splitDTO{
-				Index: s.Index, Partial: s.Partial,
-				DistanceMeters: s.DistanceMeters, DurationSeconds: s.DurationSeconds,
-				PaceSecPerUnit: s.PaceSecPerUnit, AvgHRBpm: s.AvgHRBpm,
-				ElevationDeltaMeters: s.ElevDeltaMeters,
-				Fastest:              s.Fastest, Slowest: s.Slowest,
-			})
-		}
-		dto.StripSummary = &stripSummaryDTO{
-			FastestSecPerUnit: der.StripSummary.FastestSecPerUnit,
-			SlowestSecPerUnit: der.StripSummary.SlowestSecPerUnit,
-			DropoutCount:      der.StripSummary.DropoutCount,
-		}
-		dto.BestPaceSecPerUnit = der.BestPaceSecPerUnit
-		if len(der.Intervals) > 0 {
-			dto.Intervals = make([]intervalSegmentDTO, 0, len(der.Intervals))
-			for _, seg := range der.Intervals {
-				dto.Intervals = append(dto.Intervals, intervalSegmentDTO(seg))
-			}
-		}
-		for _, violation := range checkDetailInvariants(a, der, unit, dto.HeartRateZones) {
-			log.Printf("ERROR activity detail invariant violation: activity_id=%s %s", a.ID, violation)
-		}
-	}
-	return dto, nil
 }
 
 func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {

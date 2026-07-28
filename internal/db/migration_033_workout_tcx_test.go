@@ -6,11 +6,14 @@ import (
 	"testing"
 )
 
-// applyMigrationsThrough applies every migration in version order. Just before
-// the migration whose version == pauseAt, it calls before(t, db) so a test can
-// seed the pre-state a rebuild migration must preserve. pauseAt == 0 (or no
-// matching version) applies everything without pausing.
-func applyMigrationsThrough(t *testing.T, db *sql.DB, pauseAt int, before func(t *testing.T, db *sql.DB)) {
+// applyMigrationsThrough applies migrations in version order up to and
+// including upTo (0 = all). Just before the migration whose version ==
+// pauseAt, it calls before(t, db) so a test can seed the pre-state a rebuild
+// migration must preserve. pauseAt == 0 (or no matching version) applies
+// everything without pausing. Historical-schema tests (033/035) bound upTo at
+// 41 because migration 042 replaces the workouts/activities tables they
+// assert against.
+func applyMigrationsThrough(t *testing.T, db *sql.DB, upTo, pauseAt int, before func(t *testing.T, db *sql.DB)) {
 	t.Helper()
 	ctx := context.Background()
 	if err := ensureMigrationsTable(ctx, db); err != nil {
@@ -21,6 +24,9 @@ func applyMigrationsThrough(t *testing.T, db *sql.DB, pauseAt int, before func(t
 		t.Fatalf("collect migrations: %v", err)
 	}
 	for _, m := range migs {
+		if upTo > 0 && m.Version > upTo {
+			break
+		}
 		if m.Version == pauseAt && before != nil {
 			before(t, db)
 		}
@@ -53,7 +59,7 @@ func indexExists(t *testing.T, db *sql.DB, name string) bool {
 func TestMigrate033_EmptyDB(t *testing.T) {
 	t.Parallel()
 	db := newEmptyDB(t)
-	applyMigrationsThrough(t, db, 0, nil)
+	applyMigrationsThrough(t, db, 41, 0, nil)
 
 	seedUser(t, db, "u1")
 	if _, err := db.Exec(`
@@ -94,9 +100,9 @@ func TestMigrate033_EmptyDB(t *testing.T) {
 func TestMigrate033_PreservesPopulatedActivities(t *testing.T) {
 	t.Parallel()
 	db := newEmptyDB(t)
-	applyMigrationsThrough(t, db, 33, func(t *testing.T, db *sql.DB) {
+	applyMigrationsThrough(t, db, 41, 33, func(t *testing.T, db *sql.DB) {
 		seedUser(t, db, "u1")
-		seedActivity(t, db, "act1", "u1", "src1")
+		seedActivityPre042(t, db, "act1", "u1", "src1")
 		if _, err := db.Exec(`
 			INSERT INTO activity_trackpoints (
 				activity_id, sequence, elapsed_seconds, distance_meters,
@@ -148,7 +154,7 @@ func TestMigrate033_PreservesPopulatedActivities(t *testing.T) {
 func TestMigrate033_WorkoutActivityUniqueIndex(t *testing.T) {
 	t.Parallel()
 	db := newEmptyDB(t)
-	applyMigrationsThrough(t, db, 0, nil)
+	applyMigrationsThrough(t, db, 41, 0, nil)
 	seedUser(t, db, "u1")
 
 	insertWorkout := func(id string, activityID *string, deleted bool) error {

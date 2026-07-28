@@ -56,7 +56,7 @@ func TestPlanMatcher_RunningUploadFiresOnSessionLogged(t *testing.T) {
 
 	// Recover the persisted activity to compare id + start time against the
 	// ref the matcher received.
-	got, err := repo.List(context.Background(), testUserID, 10, nil)
+	got, err := repo.List(context.Background(), testUserID, 10, nil, TypeFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestPlanMatcher_NilIsNoOp(t *testing.T) {
 		t.Fatalf("upload status = %d, want 201; body=%s", w.Code, w.Body.String())
 	}
 
-	got, err := repo.List(context.Background(), testUserID, 10, nil)
+	got, err := repo.List(context.Background(), testUserID, 10, nil, TypeFilter{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

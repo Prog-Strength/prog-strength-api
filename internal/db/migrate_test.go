@@ -216,10 +216,32 @@ func seedUser(t *testing.T, db *sql.DB, id string) {
 	}
 }
 
-// seedActivity inserts an activities row with the NOT NULL fields set.
-// Pinned to manual_tcx + running so the post-015 schema is exercised on
-// the path the running domain still produces.
+// seedActivity inserts a running activity under the post-042 unified schema:
+// a base row plus its activity_run_details row. Pinned to manual_tcx +
+// running so the current schema is exercised on the path the running domain
+// still produces.
 func seedActivity(t *testing.T, db *sql.DB, id, userID, sourceActivityID string) {
+	t.Helper()
+	if _, err := db.Exec(`
+		INSERT INTO activities (
+			id, user_id, activity_type, ingest_source, source_activity_id,
+			start_time, duration_seconds, tcx_s3_key, created_at, updated_at
+		) VALUES (?, ?, 'running', 'manual_tcx', ?, '2026-06-06T07:00:00Z', 3000, ?, '2026-06-06T07:30:00Z', '2026-06-06T07:30:00Z')
+	`, id, userID, sourceActivityID, "user_id="+userID+"/activity_type=running/year=2026/month=06/day=06/"+id+".tcx"); err != nil {
+		t.Fatalf("seed activity %s: %v", id, err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO activity_run_details (activity_id, distance_meters, raw_distance_meters, avg_pace_sec_per_km)
+		VALUES (?, 10000, 10000, 300)
+	`, id); err != nil {
+		t.Fatalf("seed activity details %s: %v", id, err)
+	}
+}
+
+// seedActivityPre042 inserts an activities row under the PRE-042 wide schema
+// (endurance columns on the base table). Only usable in migration tests that
+// bound applyMigrationsThrough / migrateUpTo at version 41 or earlier.
+func seedActivityPre042(t *testing.T, db *sql.DB, id, userID, sourceActivityID string) {
 	t.Helper()
 	if _, err := db.Exec(`
 		INSERT INTO activities (
@@ -286,10 +308,9 @@ func TestActivities_UniqueSourceActivity(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO activities (
 			id, user_id, activity_type, ingest_source, source_activity_id,
-			start_time, distance_meters, duration_seconds, avg_pace_sec_per_km,
-			tcx_s3_key, created_at
+			start_time, duration_seconds, tcx_s3_key, created_at, updated_at
 		) VALUES ('s2', 'u1', 'running', 'manual_tcx', 'src-dup',
-		          '2026-06-06T07:00:00Z', 10000, 3000, 300, 'k', '2026-06-06T07:30:00Z')
+		          '2026-06-06T07:00:00Z', 3000, 'k', '2026-06-06T07:30:00Z', '2026-06-06T07:30:00Z')
 	`); err == nil {
 		t.Fatal("duplicate (user_id, ingest_source, source_activity_id) insert should fail UNIQUE, got nil error")
 	}
@@ -304,10 +325,9 @@ func TestActivities_UniqueSourceActivity(t *testing.T) {
 	if _, err := db.Exec(`
 		INSERT INTO activities (
 			id, user_id, activity_type, ingest_source, source_activity_id,
-			start_time, distance_meters, duration_seconds, avg_pace_sec_per_km,
-			tcx_s3_key, created_at
+			start_time, duration_seconds, tcx_s3_key, created_at, updated_at
 		) VALUES ('s4', 'u1', 'running', 'garmin_api', 'src-dup',
-		          '2026-06-06T08:00:00Z', 10000, 3000, 300, 'k4', '2026-06-06T08:30:00Z')
+		          '2026-06-06T08:00:00Z', 3000, 'k4', '2026-06-06T08:30:00Z', '2026-06-06T08:30:00Z')
 	`); err != nil {
 		t.Fatalf("cross-source same activity id should succeed: %v", err)
 	}

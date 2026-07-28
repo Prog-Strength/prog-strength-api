@@ -40,7 +40,7 @@ func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
 func TestMigrate034_AgentMemory(t *testing.T) {
 	t.Parallel()
 	conn := newEmptyDB(t)
-	applyMigrationsThrough(t, conn, 0, nil)
+	applyMigrationsThrough(t, conn, 0, 0, nil)
 
 	// agent_memories exists as a base table.
 	var memTable string

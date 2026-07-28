@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
@@ -42,7 +43,6 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 type Server struct {
@@ -158,7 +158,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	// Initialize repositories based on config.
 	var exerciseRepo exercise.Repository
-	var workoutRepo workout.Repository
+	var workoutRepo strength.Repository
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
@@ -209,7 +209,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	// Create SQLite repositories.
 	exerciseRepo = exercise.NewSQLiteRepository(database)
-	sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
+	sqliteWorkoutRepo := strength.NewSQLiteRepository(database)
 	workoutRepo = sqliteWorkoutRepo
 	userRepo = user.NewSQLiteRepository(database)
 	nutritionRepo = nutrition.NewSQLiteRepository(database)
@@ -465,19 +465,22 @@ func New(cfg config.Config) (*Server, error) {
 	// /exercises public. The progression endpoint needs the exercise
 	// catalog to resolve a muscle_group filter to its member exercises.
 	// Timeline wiring: a publisher (best-effort feed-index writes injected
-	// into the workout/activity handlers) and a hydrator (renders post
-	// content from the live workout/activity repos at read time). Both adapt
-	// the cross-domain repos so the timeline package stays import-clean.
+	// into the workout/activity handlers) adapts the cross-domain repos so the
+	// timeline package stays import-clean. The hydrator is built inside the
+	// group below, once the activity type registry it renders through exists.
 	timelinePublisher := newTimelinePublisher(timelineRepo)
-	timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo)
 
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser(jwtSecret))
 		// Capture the workout + activity handlers so the timeline publisher
 		// can be injected before mounting — best-effort publishing of
 		// workouts/PRs (workout) and runs/best efforts (activity).
-		workoutHandler := workout.NewHandler(workoutRepo, exerciseRepo, activityRepo)
+		workoutHandler := strength.NewHandler(workoutRepo, exerciseRepo, activityRepo)
 		workoutHandler.SetPublisher(timelinePublisher)
+		// Deprecated: stage-5 cleanup removes these /workouts shims once MCP,
+		// web, and mobile are on /activities; see the unified-activity-model
+		// SOW. They are thin mounts over the same unified store, kept for
+		// rollout sequencing only.
 		workoutHandler.Mount(r)
 		// Nutrition + pantry routes share the JWT-gated group with
 		// workouts. Phase 1 mounts pantry items and the nutrition
@@ -521,6 +524,33 @@ func New(cfg config.Config) (*Server, error) {
 		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
+		// Activity type registry: the closed set of session types the unified
+		// /activities surface can validate, persist, and summarize. This is
+		// the ONE place descriptors register — internal/activity (the parent)
+		// never imports internal/activity/strength (the child), so the
+		// strength descriptor is built here and bound to the workout handler's
+		// create/update/route machinery (PR detection, 1RM history, timeline
+		// posts all ride the same path as POST /workouts). Built at boot so a
+		// duplicate registration panics immediately instead of shadowing
+		// silently.
+		runDesc := activity.NewEnduranceDescriptor(activity.ActivityRunning, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityRunning))
+		runDesc.MountRoutes = activityHandler.MountRunningRoutes
+		strengthDesc := strength.NewDescriptor(workoutRepo)
+		strengthDesc.Create = workoutHandler.CreateSession
+		strengthDesc.Update = workoutHandler.UpdateSession
+		strengthDesc.MountRoutes = workoutHandler.MountActivityRoutes
+		activityRegistry := activity.NewRegistry(
+			runDesc,
+			activity.NewEnduranceDescriptor(activity.ActivityWalking, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityWalking)),
+			activity.NewEnduranceDescriptor(activity.ActivityCycling, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityCycling)),
+			activity.NewEnduranceDescriptor(activity.ActivityOther, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityOther)),
+			strengthDesc,
+		)
+		activityHandler.SetRegistry(activityRegistry)
+		// The timeline hydrator renders session posts (`workout`/`run`)
+		// through the same registry's Summarize, so build it here now that the
+		// registry exists — it's used by the timeline handler mounted below.
+		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry)
 		// Heart-rate-zone engine: tunables come from the [hr_zones] config
 		// section; the recency window for the reference-max-HR estimate is
 		// derived from recency_window_days.

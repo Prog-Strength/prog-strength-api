@@ -18,4 +18,15 @@ var (
 	// storage fails. The DB transaction is rolled back so an activity
 	// is never persisted without its backing file.
 	ErrStorage = errors.New("activity: tcx storage failed")
+
+	// ErrInvalidDetails is returned by a descriptor's ValidateCreate when
+	// the Details blob is structurally bad: malformed JSON, an unknown
+	// field, or a field value outside its domain. Always wrapped with the
+	// specific reason; the unified handler maps it to a 400.
+	ErrInvalidDetails = errors.New("activity: invalid details")
+
+	// ErrDistanceRequired is returned by the endurance ValidateCreate when
+	// a distance-first sport (running/walking/cycling) is created without
+	// a positive distance_meters.
+	ErrDistanceRequired = errors.New("activity: distance_meters required")
 )

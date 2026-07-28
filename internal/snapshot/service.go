@@ -6,21 +6,21 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // Narrow consumer interfaces: only the methods the snapshot needs, so
 // tests can supply tiny fakes. The concrete domain repositories satisfy
 // these. (Idiomatic Go: accept the interface you use.)
 type workoutReader interface {
-	ListByUser(ctx context.Context, userID string, opts workout.ListOptions) ([]workout.Workout, error)
-	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]workout.PersonalRecordEvent, error)
+	ListByUser(ctx context.Context, userID string, opts strength.ListOptions) ([]strength.Workout, error)
+	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]strength.PersonalRecordEvent, error)
 }
 
 type exerciseReader interface {
@@ -28,7 +28,7 @@ type exerciseReader interface {
 }
 
 type activityReader interface {
-	ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]activity.Activity, error)
+	ListInRange(ctx context.Context, userID string, since, until *time.Time, filter activity.TypeFilter) ([]activity.Activity, error)
 	GetUserRunningBestEfforts(ctx context.Context, userID string) ([]activity.RunningBestEffort, error)
 }
 
@@ -91,7 +91,7 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 	}
 
 	snap.Strength = sectionOrNil(ctx, "strength", func() (*StrengthSection, error) {
-		ws, err := s.workoutRepo.ListByUser(ctx, userID, workout.ListOptions{Since: &start, Until: &end})
+		ws, err := s.workoutRepo.ListByUser(ctx, userID, strength.ListOptions{Since: &start, Until: &end})
 		if err != nil {
 			return nil, err
 		}
@@ -110,16 +110,23 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 		return aggregateStrength(ws, prs, exs, unit, loc), nil
 	})
 
+	// One all-types session read serves two consumers: the running section
+	// (aggregateRunning narrows to running itself) and the consistency
+	// section's active-day set — any logged session of ANY type is an
+	// active day, matching the dashboard streak and automatically including
+	// future registry types. On error, sessions stays nil: the running
+	// section degrades to null (logged below) and the day set to empty.
+	sessions, sessErr := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{})
+
 	snap.Running = sectionOrNil(ctx, "running", func() (*RunningSection, error) {
-		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end)
-		if err != nil {
-			return nil, err
+		if sessErr != nil {
+			return nil, sessErr
 		}
 		bests, err := s.activityRepo.GetUserRunningBestEfforts(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
-		return aggregateRunning(acts, bests, start, end, loc), nil
+		return aggregateRunning(sessions, bests, start, end, loc), nil
 	})
 
 	snap.Steps = sectionOrNil(ctx, "steps", func() (*StepsSection, error) {
@@ -160,7 +167,7 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 		return aggregateNutrition(days, goals), nil
 	})
 
-	snap.Consistency.ActiveDays = countActiveDays(snap.Strength, snap.Running, snap.Steps)
+	snap.Consistency.ActiveDays = countActiveDays(snap.Strength, sessionDates(sessions, loc), snap.Steps)
 	return snap
 }
 

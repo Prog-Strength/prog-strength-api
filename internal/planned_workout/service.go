@@ -60,9 +60,12 @@ func (s *Service) OnSessionLogged(ctx context.Context, userID, sessionID string,
 
 // OnSessionDeleted reverts the plan (if any) whose completion link points at the
 // deleted session back to planned, clearing the link and re-rendering the Google
-// event. Best-effort; a no-link session is a clean no-op.
-func (s *Service) OnSessionDeleted(ctx context.Context, userID, sessionID string, kind SessionKind) {
-	plan, err := s.repo.GetByCompletedSession(ctx, userID, sessionID, kind)
+// event. Best-effort; a no-link session is a clean no-op. The lookup is keyed
+// by session id alone (kind-agnostic; see Repository.GetByCompletedSession) so
+// a strength session deleted via either /workouts or /activities reverts its
+// plan regardless of which completed_session_kind value was recorded.
+func (s *Service) OnSessionDeleted(ctx context.Context, userID, sessionID string) {
+	plan, err := s.repo.GetByCompletedSession(ctx, userID, sessionID)
 	if errors.Is(err, ErrNotFound) {
 		return
 	}

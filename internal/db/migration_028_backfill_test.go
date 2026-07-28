@@ -62,6 +62,18 @@ func planRow(t *testing.T, db *sql.DB, id string) (status, sessionID, sessionKin
 	return status, sid.String, skind.String
 }
 
+// newDBAt041 opens a fresh DB migrated up to schema 041 — the last version
+// where the workouts table and wide activities columns the frozen 028
+// migration body reads still exist (042 unifies them away).
+func newDBAt041(t *testing.T) *sql.DB {
+	t.Helper()
+	db := newEmptyDB(t)
+	if err := migrateUpTo(db, 41); err != nil {
+		t.Fatalf("migrate up to 041: %v", err)
+	}
+	return db
+}
+
 // runBackfill drives backfillPlannedWorkoutLinks inside a manual transaction,
 // the same way migration 028 runs it, and commits.
 func runBackfill(t *testing.T, db *sql.DB) {
@@ -84,7 +96,7 @@ func runBackfill(t *testing.T, db *sql.DB) {
 // then re-runs the backfill to prove it leaves exactly one completed link.
 func TestBackfill028_LinksAndIsIdempotent(t *testing.T) {
 	t.Parallel()
-	db := newMigratedDB(t)
+	db := newDBAt041(t)
 
 	seedUser(t, db, "u1")
 	// Plan 17:30 NY-local-day; activity 18:00 UTC -> 14:00 NY, same NY day.
@@ -120,7 +132,7 @@ func TestBackfill028_LinksAndIsIdempotent(t *testing.T) {
 // re-runs the body directly to confirm the empty-data path errors-free.
 func TestBackfill028_FreshDBNoOp(t *testing.T) {
 	t.Parallel()
-	db := newMigratedDB(t)
+	db := newDBAt041(t)
 	runBackfill(t, db)
 }
 
@@ -129,7 +141,7 @@ func TestBackfill028_FreshDBNoOp(t *testing.T) {
 // other planned. A workout on that day does not complete a run plan.
 func TestBackfill028_WrongKindAndTwoADay(t *testing.T) {
 	t.Parallel()
-	db := newMigratedDB(t)
+	db := newDBAt041(t)
 
 	seedUser(t, db, "u1")
 	// All three plan starts and the activity are on the same NY calendar day.
@@ -156,7 +168,7 @@ func TestBackfill028_WrongKindAndTwoADay(t *testing.T) {
 // with kind 'workout'.
 func TestBackfill028_LiftLinks(t *testing.T) {
 	t.Parallel()
-	db := newMigratedDB(t)
+	db := newDBAt041(t)
 
 	seedUser(t, db, "u1")
 	seedPlan(t, db, "lp", "u1", "lift",
@@ -176,7 +188,7 @@ func TestBackfill028_LiftLinks(t *testing.T) {
 // the same UTC calendar day.
 func TestBackfill028_TimezoneBoundary(t *testing.T) {
 	t.Parallel()
-	db := newMigratedDB(t)
+	db := newDBAt041(t)
 
 	seedUser(t, db, "u1")
 	// 2026-06-16T03:00:00Z is 2026-06-15 23:00 in NY (previous local day).

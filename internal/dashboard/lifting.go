@@ -3,14 +3,14 @@ package dashboard
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 )
 
 // buildLifting assembles the lifting tile from already-fetched workouts plus
 // the precomputed PR count and headline 1RM (both supplied by the caller,
 // since they come from other queries). Pure: now and loc drive the local-week
 // bucketing deterministically. Returns nil when there are no workouts.
-func buildLifting(workouts []workout.Workout, prCount int, headline *Headline1RM, unit string, now time.Time, loc *time.Location) *LiftingSection {
+func buildLifting(workouts []strength.Workout, prCount int, headline *Headline1RM, unit string, now time.Time, loc *time.Location) *LiftingSection {
 	if len(workouts) == 0 {
 		return nil
 	}
@@ -30,7 +30,7 @@ func buildLifting(workouts []workout.Workout, prCount int, headline *Headline1RM
 // liftingCurrentWeek rolls up the workouts performed this local week. Duration
 // only counts sessions with an EndedAt (skip nil); sets is the total across
 // all exercises; prs is the caller-supplied count.
-func liftingCurrentWeek(workouts []workout.Workout, prCount int, now time.Time, loc *time.Location) LiftingCurrentWeek {
+func liftingCurrentWeek(workouts []strength.Workout, prCount int, now time.Time, loc *time.Location) LiftingCurrentWeek {
 	current := localWeekStart(now, loc)
 	cw := LiftingCurrentWeek{PRs: prCount}
 	for i := range workouts {
@@ -48,7 +48,7 @@ func liftingCurrentWeek(workouts []workout.Workout, prCount int, now time.Time, 
 
 // weeklyVolumeSpark sums lifting volume (Σ weight×reps) into each of the last
 // sparkWeeks local weeks, oldest→newest, zero-filling empty weeks.
-func weeklyVolumeSpark(workouts []workout.Workout, now time.Time, loc *time.Location) []float64 {
+func weeklyVolumeSpark(workouts []strength.Workout, now time.Time, loc *time.Location) []float64 {
 	starts := weeklyBucketStarts(now, loc, sparkWeeks)
 	spark := make([]float64, len(starts))
 	oldest := starts[0]
@@ -64,7 +64,7 @@ func weeklyVolumeSpark(workouts []workout.Workout, now time.Time, loc *time.Loca
 	return spark
 }
 
-func totalSets(w workout.Workout) int {
+func totalSets(w strength.Workout) int {
 	n := 0
 	for i := range w.Exercises {
 		n += len(w.Exercises[i].Sets)
@@ -72,7 +72,7 @@ func totalSets(w workout.Workout) int {
 	return n
 }
 
-func workoutVolume(w workout.Workout) float64 {
+func workoutVolume(w strength.Workout) float64 {
 	var vol float64
 	for i := range w.Exercises {
 		for _, s := range w.Exercises[i].Sets {

@@ -248,9 +248,9 @@ authoritative reference is [`AGENTS.md`](./AGENTS.md) (with
 [`CONTRIBUTING.md`](./CONTRIBUTING.md) covering the contribution
 workflow itself); the highlights:
 
-- **Domain packages own their stack.** A package like `internal/workout/`
-  contains its types, repository, handler, validation, and errors. New
-  surfaces follow the same shape.
+- **Domain packages own their stack.** A package like
+  `internal/activity/strength/` contains its types, repository, handler,
+  validation, and errors. New surfaces follow the same shape.
 - **`Mount(chi.Router)` per domain.** Handlers mount themselves onto the
   router. `internal/server/` owns router construction, graceful shutdown,
   and the health check — and nothing else.
@@ -293,7 +293,8 @@ Please ask before adding any of them.
 │   ├── auth/                # Google OAuth + JWT issue/verify, middleware.
 │   ├── user/                # User domain (owns WeightUnit).
 │   ├── exercise/            # Admin-curated, slug-keyed catalog (read-only).
-│   ├── workout/             # User-generated workouts: session → exercises → sets.
+│   ├── activity/            # Unified activity domain: runs/walks/rides, TCX ingest.
+│   │   └── strength/        # Lifting workouts: session → exercises → sets.
 │   ├── bodyweight/          # Bodyweight history + goals.
 │   ├── nutrition/           # Timezone-aware daily macro log + goals.
 │   ├── chat/                # Agent intent classification persistence.

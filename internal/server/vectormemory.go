@@ -90,7 +90,7 @@ func (s *chatMemorySource) assembleUnit(ctx context.Context, sessionID, userID s
 // iteration order of the job and backfill: chat first, workout-note second.
 // Lives here so the adapters (which import chat/workout schema) stay out of the
 // vectormemory package. The workout source reads app.db directly (db), since a
-// workout unit spans workouts, workout_exercises, and exercises.
+// workout unit spans activities, activity_exercises, and exercises.
 func BuildMemorySources(db *sql.DB, chatRepo *chat.SQLiteRepository, cfg config.VectorMemoryConfig) []vectormemory.MemorySource {
 	return []vectormemory.MemorySource{
 		&chatMemorySource{chat: chatRepo, idleWindow: time.Duration(cfg.SessionIdleMinutes) * time.Minute},

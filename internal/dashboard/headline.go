@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // headlineOneRM picks the user's flagship estimated one-rep max for the lifting
@@ -20,13 +20,13 @@ import (
 // exercise rather than failing the whole tile — the headline is best-effort.
 func headlineOneRM(
 	ctx context.Context,
-	repo workout.Repository,
+	repo strength.Repository,
 	exerciseRepo exercise.Repository,
 	userID string,
-	prs []workout.PersonalRecord,
+	prs []strength.PersonalRecord,
 	now time.Time,
 ) *Headline1RM {
-	since := now.Add(-workout.DefaultBaselineWindow)
+	since := now.Add(-strength.DefaultBaselineWindow)
 	until := now
 
 	var best *Headline1RM
@@ -37,7 +37,7 @@ func headlineOneRM(
 			// drop the whole headline; just skip it.
 			continue
 		}
-		baseline, ok := workout.RecencyWeightedBaseline(entries, now, workout.DefaultBaselineWindow, workout.DefaultBaselineTau)
+		baseline, ok := strength.RecencyWeightedBaseline(entries, now, strength.DefaultBaselineWindow, strength.DefaultBaselineTau)
 		if !ok {
 			continue
 		}

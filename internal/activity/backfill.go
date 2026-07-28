@@ -42,7 +42,7 @@ func (r *SQLiteRepository) BackfillActivityBestEfforts(ctx context.Context) erro
 	var targets []target
 	if err := func() error {
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT id, tcx_s3_key, user_id
+			SELECT id, COALESCE(tcx_s3_key, ''), user_id
 			FROM activities
 			WHERE activity_type = ? AND deleted_at IS NULL
 		`, ActivityRunning)
@@ -104,7 +104,7 @@ func (r *SQLiteRepository) BackfillActivityBestEfforts(ctx context.Context) erro
 // window bounds. Re-parses archived TCX at full resolution.
 func (r *SQLiteRepository) BackfillBestEffortWindowBounds(ctx context.Context) error {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.activity_id, a.tcx_s3_key, a.user_id
+		SELECT e.activity_id, COALESCE(a.tcx_s3_key, ''), a.user_id
 		FROM activity_best_efforts e
 		JOIN activities a ON a.id = e.activity_id
 		WHERE e.window_start_elapsed_seconds IS NULL
@@ -233,23 +233,23 @@ func (r *SQLiteRepository) BackfillActivityRoutes(ctx context.Context) error {
 	}
 	var targets []target
 	if err := func() error {
-		// strength_training rows also default to environment='outdoor' and
-		// carry a NULL route (they're stationary — summarizeStrength never
-		// builds one). Excluding them keeps this from re-fetching every
-		// strength TCX from S3 on every boot — the same waste the outdoor-only
-		// filter avoids for treadmill runs — and stops a misattached
-		// GPS-bearing strength TCX from being handed the run route pipeline.
-		// Running/walking/cycling/other all flow through summarize + buildRoute,
-		// so they stay in scope.
+		// strength_training rows are base-only (no detail row, no route —
+		// they're stationary; summarizeStrength never builds one). Excluding
+		// them keeps this from re-fetching every strength TCX from S3 on
+		// every boot — the same waste the outdoor-only filter avoids for
+		// treadmill runs — and stops a misattached GPS-bearing strength TCX
+		// from being handed the run route pipeline. Running/walking/cycling/
+		// other all flow through summarize + buildRoute, so they stay in
+		// scope; their environment/route live on the per-type detail tables.
 		rows, err := r.db.QueryContext(ctx, `
-			SELECT id, tcx_s3_key, user_id, activity_type
-			FROM activities
-			WHERE deleted_at IS NULL
-			  AND environment = ?
-			  AND activity_type != ?
-			  AND route_geojson IS NULL
-			  AND tcx_s3_key IS NOT NULL
-			  AND tcx_s3_key != ''
+			SELECT a.id, a.tcx_s3_key, a.user_id, a.activity_type
+			`+activityJoins+`
+			WHERE a.deleted_at IS NULL
+			  AND `+detailCoalesce("environment", "")+` = ?
+			  AND a.activity_type != ?
+			  AND `+detailCoalesce("route_geojson", "")+` IS NULL
+			  AND a.tcx_s3_key IS NOT NULL
+			  AND a.tcx_s3_key != ''
 		`, EnvironmentOutdoor, ActivityStrengthTraining)
 		if err != nil {
 			return err
@@ -309,7 +309,7 @@ func (r *SQLiteRepository) BackfillActivityRoutes(ctx context.Context) error {
 		// write error (unlike a skippable fetch/parse failure) ends this pass and
 		// is returned to the caller, which soft-logs it; the boot continues and
 		// the unprocessed rows are retried next time.
-		if err := r.writeBackfilledRoute(ctx, t.id, *route, pts); err != nil {
+		if err := r.writeBackfilledRoute(ctx, t.id, t.actType, *route, pts); err != nil {
 			return fmt.Errorf("update route activity_id=%s: %w", t.id, err)
 		}
 		processed++
@@ -323,7 +323,12 @@ func (r *SQLiteRepository) BackfillActivityRoutes(ctx context.Context) error {
 // trackpoint coordinates in a single transaction. The stored trackpoint rows
 // came from this same downsample on the same bytes, so sequences line up —
 // coordinates are updated in place by sequence, never inserted or deleted.
-func (r *SQLiteRepository) writeBackfilledRoute(ctx context.Context, activityID, route string, pts []Trackpoint) error {
+// The route lives on the activity's per-type detail table.
+func (r *SQLiteRepository) writeBackfilledRoute(ctx context.Context, activityID string, actType ActivityType, route string, pts []Trackpoint) error {
+	table := detailTable(actType)
+	if table == "" {
+		return fmt.Errorf("activity: no detail table for type %q", actType)
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -331,7 +336,7 @@ func (r *SQLiteRepository) writeBackfilledRoute(ctx context.Context, activityID,
 	defer tx.Rollback()
 
 	if _, err = tx.ExecContext(ctx, `
-		UPDATE activities SET route_geojson = ? WHERE id = ?
+		UPDATE `+table+` SET route_geojson = ? WHERE activity_id = ?
 	`, route, activityID); err != nil {
 		return err
 	}

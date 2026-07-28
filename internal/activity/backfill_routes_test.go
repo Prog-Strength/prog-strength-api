@@ -47,7 +47,7 @@ func seedFromFixture(t *testing.T, repo *SQLiteRepository, userID, sourceID, fix
 func routeGeoJSON(t *testing.T, repo *SQLiteRepository, id string) (string, bool) {
 	t.Helper()
 	var route *string
-	if err := repo.db.QueryRow(`SELECT route_geojson FROM activities WHERE id = ?`, id).Scan(&route); err != nil {
+	if err := repo.db.QueryRow(`SELECT route_geojson FROM activity_run_details WHERE activity_id = ?`, id).Scan(&route); err != nil {
 		t.Fatalf("read route_geojson: %v", err)
 	}
 	if route == nil {
@@ -60,7 +60,7 @@ func routeGeoJSON(t *testing.T, repo *SQLiteRepository, id string) (string, bool
 // trackpoint's coordinates cleared, so the backfill has real work to do.
 func nullOutRoute(t *testing.T, repo *SQLiteRepository, id string) {
 	t.Helper()
-	if _, err := repo.db.Exec(`UPDATE activities SET route_geojson = NULL WHERE id = ?`, id); err != nil {
+	if _, err := repo.db.Exec(`UPDATE activity_run_details SET route_geojson = NULL WHERE activity_id = ?`, id); err != nil {
 		t.Fatalf("null route: %v", err)
 	}
 	if _, err := repo.db.Exec(`UPDATE activity_trackpoints SET latitude = NULL, longitude = NULL WHERE activity_id = ?`, id); err != nil {
@@ -144,7 +144,7 @@ func TestBackfillActivityRoutes_NoPositionOutdoorStaysNull(t *testing.T) {
 	// treadmill_5k.tcx has no <Position>, so summarize tags it indoor; force
 	// the row outdoor to exercise the "selected but no geometry" branch.
 	a, _ := seedFromFixture(t, repo, "u1", "no-pos-1", "treadmill_5k.tcx")
-	if _, err := repo.db.Exec(`UPDATE activities SET environment = 'outdoor', route_geojson = NULL WHERE id = ?`, a.ID); err != nil {
+	if _, err := repo.db.Exec(`UPDATE activity_run_details SET environment = 'outdoor', route_geojson = NULL WHERE activity_id = ?`, a.ID); err != nil {
 		t.Fatalf("force outdoor: %v", err)
 	}
 
@@ -195,8 +195,11 @@ func TestBackfillActivityRoutes_MissingS3Object(t *testing.T) {
 	ctx := context.Background()
 
 	a, _ := seedFromFixture(t, repo, "u1", "missing-1", "typical_5k.tcx")
-	if _, err := repo.db.Exec(`UPDATE activities SET tcx_s3_key = 'bogus/key.tcx', route_geojson = NULL WHERE id = ?`, a.ID); err != nil {
+	if _, err := repo.db.Exec(`UPDATE activities SET tcx_s3_key = 'bogus/key.tcx' WHERE id = ?`, a.ID); err != nil {
 		t.Fatalf("bogus key: %v", err)
+	}
+	if _, err := repo.db.Exec(`UPDATE activity_run_details SET route_geojson = NULL WHERE activity_id = ?`, a.ID); err != nil {
+		t.Fatalf("bogus key null route: %v", err)
 	}
 
 	if err := repo.BackfillActivityRoutes(ctx); err != nil {
@@ -219,8 +222,11 @@ func TestBackfillActivityRoutes_OutdoorStrengthNeverSelected(t *testing.T) {
 	// selection filter is meant to avoid. Seed from a GPS-bearing fixture so a
 	// missing filter would visibly write a route.
 	a, _ := seedFromFixture(t, repo, "u1", "strength-1", "typical_5k.tcx")
-	if _, err := repo.db.Exec(`UPDATE activities SET activity_type = ?, environment = 'outdoor', route_geojson = NULL WHERE id = ?`, ActivityStrengthTraining, a.ID); err != nil {
+	if _, err := repo.db.Exec(`UPDATE activities SET activity_type = ? WHERE id = ?`, ActivityStrengthTraining, a.ID); err != nil {
 		t.Fatalf("force strength: %v", err)
+	}
+	if _, err := repo.db.Exec(`UPDATE activity_run_details SET environment = 'outdoor', route_geojson = NULL WHERE activity_id = ?`, a.ID); err != nil {
+		t.Fatalf("force strength env: %v", err)
 	}
 	nullOutRoute(t, repo, a.ID)
 
@@ -244,7 +250,7 @@ func TestBackfillActivityRoutes_IndoorNeverSelected(t *testing.T) {
 	if err := repo.Create(ctx, a, []byte("<TrainingCenterDatabase/>")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := repo.db.Exec(`UPDATE activities SET route_geojson = NULL WHERE id = ?`, a.ID); err != nil {
+	if _, err := repo.db.Exec(`UPDATE activity_run_details SET route_geojson = NULL WHERE activity_id = ?`, a.ID); err != nil {
 		t.Fatalf("null route: %v", err)
 	}
 

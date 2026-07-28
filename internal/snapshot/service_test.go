@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // Tiny fakes for the narrow consumer interfaces. Each carries the rows to
@@ -20,16 +20,16 @@ import (
 // domain's repo failing.
 
 type fakeWorkout struct {
-	workouts []workout.Workout
-	prs      []workout.PersonalRecordEvent
+	workouts []strength.Workout
+	prs      []strength.PersonalRecordEvent
 	err      error
 }
 
-func (f fakeWorkout) ListByUser(_ context.Context, _ string, _ workout.ListOptions) ([]workout.Workout, error) {
+func (f fakeWorkout) ListByUser(_ context.Context, _ string, _ strength.ListOptions) ([]strength.Workout, error) {
 	return f.workouts, f.err
 }
 
-func (f fakeWorkout) ListPersonalRecordEventsByWorkouts(_ context.Context, _ []string) ([]workout.PersonalRecordEvent, error) {
+func (f fakeWorkout) ListPersonalRecordEventsByWorkouts(_ context.Context, _ []string) ([]strength.PersonalRecordEvent, error) {
 	return f.prs, f.err
 }
 
@@ -48,7 +48,7 @@ type fakeActivity struct {
 	err        error
 }
 
-func (f fakeActivity) ListInRange(_ context.Context, _ string, _, _ *time.Time) ([]activity.Activity, error) {
+func (f fakeActivity) ListInRange(_ context.Context, _ string, _, _ *time.Time, _ activity.TypeFilter) ([]activity.Activity, error) {
 	return f.activities, f.err
 }
 
@@ -109,19 +109,28 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 
 	bench := exercise.Exercise{ID: "barbell-bench-press", Name: "barbell bench press",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest}}
-	w := workout.Workout{ID: "w1", Name: "Push Day",
+	w := strength.Workout{ID: "w1", Name: "Push Day",
 		PerformedAt: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC),
-		Exercises: []workout.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []workout.Set{
+		Exercises: []strength.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []strength.Set{
 			{Reps: 8, Weight: 225}, {Reps: 8, Weight: 265},
 		}}}}
-	prs := []workout.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
+	prs := []strength.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
 
 	runStart := time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 	pace := 315.0
-	acts := []activity.Activity{{
-		ActivityType: activity.ActivityRunning, StartTime: runStart, DistanceMeters: 8000,
-		DurationSeconds: 2520, AvgPaceSecPerKm: &pace, Name: strptr("Easy 5"),
-	}}
+	acts := []activity.Activity{
+		{
+			ActivityType: activity.ActivityRunning, StartTime: runStart, DistanceMeters: 8000,
+			DurationSeconds: 2520, AvgPaceSecPerKm: &pace, Name: strptr("Easy 5"),
+		},
+		// A walk: excluded from the running section's aggregates but still
+		// an active day for the consistency section.
+		{
+			ActivityType:   activity.ActivityWalking,
+			StartTime:      time.Date(2026, 6, 19, 13, 0, 0, 0, time.UTC),
+			DistanceMeters: 3000, DurationSeconds: 1800,
+		},
+	}
 	bests := []activity.RunningBestEffort{
 		{DistanceKey: "5k", DurationSeconds: 1320, ActivityStartTime: runStart},
 	}
@@ -139,7 +148,7 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 	}
 
 	svc := NewService(
-		fakeWorkout{workouts: []workout.Workout{w}, prs: prs},
+		fakeWorkout{workouts: []strength.Workout{w}, prs: prs},
 		fakeExercise{exercises: []exercise.Exercise{bench}},
 		fakeActivity{activities: acts, bests: bests},
 		fakeSteps{entries: stepEntries, goal: steps.Goal{Goal: 10000}},
@@ -190,9 +199,10 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 		t.Fatalf("nutrition = %+v", snap.Nutrition)
 	}
 
-	// Consistency: distinct active local days across strength (6-16),
-	// running (6-17) and non-zero step days (6-15, 6-16) = {15,16,17} = 3.
-	if snap.Consistency.WindowDays != 7 || snap.Consistency.ActiveDays != 3 {
+	// Consistency: distinct active local days across strength (6-16), all
+	// session types — the run (6-17) AND the walk (6-19) — and non-zero
+	// step days (6-15, 6-16) = {15,16,17,19} = 4.
+	if snap.Consistency.WindowDays != 7 || snap.Consistency.ActiveDays != 4 {
 		t.Fatalf("consistency = %+v", snap.Consistency)
 	}
 }

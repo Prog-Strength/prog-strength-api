@@ -16,9 +16,10 @@ import (
 // session minutiae. Appended to the shared distiller system prompt.
 const workoutNotePromptHint = `The following are terse free-text notes a user wrote in their training log for a single workout. They are abbreviated and shorthand (e.g. "L shoulder cranky, dropped to 3x5", "hotel gym only this week"). Extract only durable, stable facts worth remembering across future sessions — recurring injuries or limitations, equipment/travel constraints, and lasting preferences. Ignore one-off in-session minutiae and anything that merely restates the logged sets/weights.`
 
-// workoutNoteSource distills one workout's free-text notes (workouts.notes plus
-// its workout_exercises.notes) into durable memories. It reads app.db directly
-// because a unit spans workouts, workout_exercises, and exercises — consistent
+// workoutNoteSource distills one workout's free-text notes (the strength
+// activities row's notes plus its activity_exercises.notes) into durable
+// memories. It reads app.db directly
+// because a unit spans activities, activity_exercises, and exercises — consistent
 // with the chat adapter wrapping the chat repo. settleWindow is the workout
 // settle window (cfg.WorkoutSettleMinutes); the source owns its own cutoff so
 // the job never computes one.
@@ -38,15 +39,16 @@ func (s *workoutNoteSource) PendingUnits(ctx context.Context, now time.Time, lim
 	cutoff := now.Add(-s.settleWindow).UTC()
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT w.id, w.user_id
-		FROM workouts w
-		WHERE w.deleted_at IS NULL
+		FROM activities w
+		WHERE w.activity_type = 'strength_training'
+		  AND w.deleted_at IS NULL
 		  AND w.memory_distilled_at IS NULL
 		  AND w.updated_at < ?
 		  AND (
 		    (w.notes IS NOT NULL AND TRIM(w.notes) <> '')
 		    OR EXISTS (
-		      SELECT 1 FROM workout_exercises we
-		      WHERE we.workout_id = w.id
+		      SELECT 1 FROM activity_exercises we
+		      WHERE we.activity_id = w.id
 		        AND we.notes IS NOT NULL AND TRIM(we.notes) <> ''
 		    )
 		  )
@@ -69,15 +71,16 @@ func (s *workoutNoteSource) CountPending(ctx context.Context, now time.Time) (in
 	cutoff := now.Add(-s.settleWindow).UTC()
 	var n int
 	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM workouts w
-		WHERE w.deleted_at IS NULL
+		SELECT COUNT(*) FROM activities w
+		WHERE w.activity_type = 'strength_training'
+		  AND w.deleted_at IS NULL
 		  AND w.memory_distilled_at IS NULL
 		  AND w.updated_at < ?
 		  AND (
 		    (w.notes IS NOT NULL AND TRIM(w.notes) <> '')
 		    OR EXISTS (
-		      SELECT 1 FROM workout_exercises we
-		      WHERE we.workout_id = w.id
+		      SELECT 1 FROM activity_exercises we
+		      WHERE we.activity_id = w.id
 		        AND we.notes IS NOT NULL AND TRIM(we.notes) <> ''
 		    )
 		  )
@@ -106,15 +109,16 @@ func (s *workoutNoteSource) AllUndistilled(ctx context.Context, cursor string, l
 	// the driver format the column and the cursor value identically.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT w.id, w.user_id, w.updated_at
-		FROM workouts w
-		WHERE w.deleted_at IS NULL
+		FROM activities w
+		WHERE w.activity_type = 'strength_training'
+		  AND w.deleted_at IS NULL
 		  AND w.memory_distilled_at IS NULL
 		  AND (w.updated_at > ? OR (w.updated_at = ? AND w.id > ?))
 		  AND (
 		    (w.notes IS NOT NULL AND TRIM(w.notes) <> '')
 		    OR EXISTS (
-		      SELECT 1 FROM workout_exercises we
-		      WHERE we.workout_id = w.id
+		      SELECT 1 FROM activity_exercises we
+		      WHERE we.activity_id = w.id
 		        AND we.notes IS NOT NULL AND TRIM(we.notes) <> ''
 		    )
 		  )
@@ -141,7 +145,7 @@ func (s *workoutNoteSource) AllUndistilled(ctx context.Context, cursor string, l
 }
 
 func (s *workoutNoteSource) MarkDistilled(ctx context.Context, unitID string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE workouts SET memory_distilled_at = ? WHERE id = ?`, at.UTC(), unitID)
+	_, err := s.db.ExecContext(ctx, `UPDATE activities SET memory_distilled_at = ? WHERE id = ?`, at.UTC(), unitID)
 	return err
 }
 
@@ -193,7 +197,7 @@ func (s *workoutNoteSource) assembleUnits(ctx context.Context, refs []workoutRef
 	for _, ref := range refs {
 		var workoutNote sql.NullString
 		if err := s.db.QueryRowContext(ctx,
-			`SELECT notes FROM workouts WHERE id = ?`, ref.ID).Scan(&workoutNote); err != nil {
+			`SELECT notes FROM activities WHERE id = ?`, ref.ID).Scan(&workoutNote); err != nil {
 			return nil, err
 		}
 
@@ -221,9 +225,9 @@ func (s *workoutNoteSource) assembleUnits(ctx context.Context, refs []workoutRef
 func (s *workoutNoteSource) loadExerciseNotes(ctx context.Context, workoutID string) ([]exerciseNote, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT COALESCE(e.name, ''), we.exercise_id, COALESCE(we.notes, '')
-		FROM workout_exercises we
+		FROM activity_exercises we
 		LEFT JOIN exercises e ON e.id = we.exercise_id
-		WHERE we.workout_id = ?
+		WHERE we.activity_id = ?
 		ORDER BY we.exercise_order ASC
 	`, workoutID)
 	if err != nil {

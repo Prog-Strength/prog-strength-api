@@ -6,13 +6,12 @@ import (
 	"time"
 )
 
-// TestFeed_ExcludesStrengthTraining proves the TypeFilter contract on List/
-// ListInRange: the zero value reads every type (the unified /activities
-// list, strength included), ExcludeStrength preserves the pre-unification
-// feed behavior for the aggregate surfaces still on it, and Only narrows to
-// one type. SummariesByIDs is filter-free (the workout list's enrichment
-// read), and the running-only metrics path is unaffected either way.
-func TestFeed_ExcludesStrengthTraining(t *testing.T) {
+// TestFeed_TypeFilter proves the TypeFilter contract on List/ListInRange:
+// the zero value reads every type (the unified /activities list, strength
+// included) and Only narrows to one type. SummariesByIDs is filter-free
+// (the workout list's enrichment read), and the running-only metrics path
+// is unaffected either way.
+func TestFeed_TypeFilter(t *testing.T) {
 	t.Parallel()
 	repo, _ := newRepo(t)
 	ctx := context.Background()
@@ -51,15 +50,6 @@ func TestFeed_ExcludesStrengthTraining(t *testing.T) {
 		t.Fatalf("List (all types) = %d rows, want 2 incl. strength", len(listed))
 	}
 
-	// ExcludeStrength keeps the pre-unification feed behavior.
-	listed, err = repo.List(ctx, "u1", 50, nil, TypeFilter{ExcludeStrength: true})
-	if err != nil {
-		t.Fatalf("list excl. strength: %v", err)
-	}
-	if len(listed) != 1 || listed[0].ActivityType != ActivityRunning {
-		t.Fatalf("List (excl. strength) = %d rows (%+v), want 1 running row", len(listed), listed)
-	}
-
 	// Only narrows to one type (the ?type= filter).
 	listed, err = repo.List(ctx, "u1", 50, nil, TypeFilter{Only: ActivityStrengthTraining})
 	if err != nil {
@@ -72,19 +62,19 @@ func TestFeed_ExcludesStrengthTraining(t *testing.T) {
 	// ListInRange honors the same filter.
 	since := mustTime(t, "2026-06-19T00:00:00Z")
 	until := mustTime(t, "2026-06-20T00:00:00Z")
-	ranged, err := repo.ListInRange(ctx, "u1", &since, &until, TypeFilter{ExcludeStrength: true})
-	if err != nil {
-		t.Fatalf("list in range: %v", err)
-	}
-	if len(ranged) != 1 || ranged[0].ActivityType != ActivityRunning {
-		t.Fatalf("ListInRange (excl. strength) = %d rows, want 1 running row", len(ranged))
-	}
-	ranged, err = repo.ListInRange(ctx, "u1", &since, &until, TypeFilter{})
+	ranged, err := repo.ListInRange(ctx, "u1", &since, &until, TypeFilter{})
 	if err != nil {
 		t.Fatalf("list in range all: %v", err)
 	}
 	if len(ranged) != 2 {
 		t.Fatalf("ListInRange (all types) = %d rows, want 2", len(ranged))
+	}
+	ranged, err = repo.ListInRange(ctx, "u1", &since, &until, TypeFilter{Only: ActivityStrengthTraining})
+	if err != nil {
+		t.Fatalf("list in range only strength: %v", err)
+	}
+	if len(ranged) != 1 || ranged[0].ActivityType != ActivityStrengthTraining {
+		t.Fatalf("ListInRange (only strength) = %d rows, want 1 strength row", len(ranged))
 	}
 
 	// SummariesByIDs DOES return the strength row (workout-enrichment read).

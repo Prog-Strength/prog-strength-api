@@ -168,18 +168,11 @@ type Repository interface {
 }
 
 // TypeFilter narrows List/ListInRange by activity type. The zero value
-// means every type — the unified /activities surface. Exactly one of the
-// fields is meaningful at a time; Only wins when both are set.
+// means every type — the unified /activities surface.
 type TypeFilter struct {
 	// Only restricts the read to a single type when non-empty (the
 	// unified list's ?type= filter).
 	Only ActivityType
-	// ExcludeStrength preserves the pre-unification feed behavior
-	// (everything but strength_training) for the aggregate surfaces that
-	// still merge workouts separately (dashboard, snapshot). Those callers
-	// converge on the unified base — and this flag goes away — in the
-	// aggregate-surfaces task of the unified-activity-model plan.
-	ExcludeStrength bool
 }
 
 // RunSample is the minimal (start, distance) projection for one running

@@ -14,23 +14,27 @@ import (
 // --- fakes -------------------------------------------------------------
 
 // fakeWorkoutRepo embeds strength.Repository (so unused methods panic) and
-// implements only the reads the hydrator touches. It counts calls so the
-// test can assert PR hydration is a single batch query (no N+1).
+// implements only the reads the hydrator touches through the registry: the
+// batched exercise hydration behind the strength descriptor's Summarize, and
+// the batched PR-event read. It counts calls so the test can assert PR
+// hydration is a single batch query (no N+1).
 type fakeWorkoutRepo struct {
 	strength.Repository
-	workouts        map[string]*strength.Workout
+	exercises       map[string][]strength.WorkoutExercise
 	prEvents        map[string]strength.PersonalRecordEvent
-	getByIDCalls    int
+	listExCalls     int
 	getPREventCalls int
 }
 
-func (f *fakeWorkoutRepo) GetByID(_ context.Context, id string) (*strength.Workout, error) {
-	f.getByIDCalls++
-	w, ok := f.workouts[id]
-	if !ok {
-		return nil, strength.ErrNotFound
+func (f *fakeWorkoutRepo) ListExercisesByWorkoutIDs(_ context.Context, ids []string) (map[string][]strength.WorkoutExercise, error) {
+	f.listExCalls++
+	out := make(map[string][]strength.WorkoutExercise, len(ids))
+	for _, id := range ids {
+		if ex, ok := f.exercises[id]; ok {
+			out[id] = ex
+		}
 	}
-	return w, nil
+	return out, nil
 }
 
 func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []string) ([]strength.PersonalRecordEvent, error) {
@@ -44,11 +48,27 @@ func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []
 	return out, nil
 }
 
-// fakeActivityRepo embeds activity.Repository and implements only Get.
+// fakeActivityRepo embeds activity.Repository and implements the two reads the
+// session/best-effort hydration needs: SummariesByIDs (the batched base read
+// for session cards, user-scoped) and Get (the single-id load carrying the
+// best-effort list SummariesByIDs omits).
 type fakeActivityRepo struct {
 	activity.Repository
 	activities map[string]*activity.Activity
 	getCalls   int
+	summCalls  int
+}
+
+func (f *fakeActivityRepo) SummariesByIDs(_ context.Context, userID string, ids []string) (map[string]activity.Activity, error) {
+	f.summCalls++
+	out := make(map[string]activity.Activity, len(ids))
+	for _, id := range ids {
+		a, ok := f.activities[id]
+		if ok && a.UserID == userID {
+			out[id] = *a
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeActivityRepo) Get(_ context.Context, userID, id string) (*activity.Activity, error) {
@@ -62,25 +82,31 @@ func (f *fakeActivityRepo) Get(_ context.Context, userID, id string) (*activity.
 
 func strptr(s string) *string { return &s }
 
+// testRegistry builds a registry with the running + strength descriptors the
+// session hydration renders through. Endurance summarizes off the base row so
+// its detail store can be nil; strength's descriptor wraps the fake repo whose
+// batched exercise read backs its Summarize.
+func testRegistry(wRepo strength.Repository) *activity.Registry {
+	return activity.NewRegistry(
+		activity.NewEnduranceDescriptor(activity.ActivityRunning, nil),
+		strength.NewDescriptor(wRepo),
+	)
+}
+
 // --- tests -------------------------------------------------------------
 
 func TestHydrate_PerSourceContent(t *testing.T) {
 	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*strength.Workout{
+		exercises: map[string][]strength.WorkoutExercise{
 			"w1": {
-				ID:     "w1",
-				UserID: "u1",
-				Name:   "Push day",
-				Exercises: []strength.WorkoutExercise{
-					{ExerciseID: "bench", Sets: []strength.Set{
-						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
-						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
-					}},
-					{ExerciseID: "ohp", Sets: []strength.Set{
-						{Reps: 8, Weight: 50, Unit: user.WeightUnitPounds},
-					}},
-				},
+				{ExerciseID: "bench", Sets: []strength.Set{
+					{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
+					{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
+				}},
+				{ExerciseID: "ohp", Sets: []strength.Set{
+					{Reps: 8, Weight: 50, Unit: user.WeightUnitPounds},
+				}},
 			},
 		},
 		prEvents: map[string]strength.PersonalRecordEvent{
@@ -89,6 +115,14 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 	}
 	aRepo := &fakeActivityRepo{
 		activities: map[string]*activity.Activity{
+			// The lift's base row: type + name drive the card title; the
+			// exercises/sets that produce its chips come from wRepo.
+			"w1": {
+				ID:           "w1",
+				UserID:       "u1",
+				ActivityType: activity.ActivityStrengthTraining,
+				Name:         strptr("Push day"),
+			},
 			"a1": {
 				ID:              "a1",
 				UserID:          "u1",
@@ -103,7 +137,7 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 		},
 	}
 
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
@@ -171,9 +205,9 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 
 func TestHydrate_OmitsMissingSources(t *testing.T) {
 	now := time.Now().UTC()
-	wRepo := &fakeWorkoutRepo{workouts: map[string]*strength.Workout{}, prEvents: map[string]strength.PersonalRecordEvent{}}
+	wRepo := &fakeWorkoutRepo{exercises: map[string][]strength.WorkoutExercise{}, prEvents: map[string]strength.PersonalRecordEvent{}}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "gone", OccurredAt: now},
@@ -193,7 +227,7 @@ func TestHydrate_OmitsMissingSources(t *testing.T) {
 func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 	now := time.Now().UTC()
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*strength.Workout{},
+		exercises: map[string][]strength.WorkoutExercise{},
 		prEvents: map[string]strength.PersonalRecordEvent{
 			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 100, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 			"pr2": {ID: "pr2", UserID: "u1", ExerciseID: "squat", Weight: 200, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
@@ -201,7 +235,7 @@ func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 		},
 	}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo)
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "pr1", OccurredAt: now},

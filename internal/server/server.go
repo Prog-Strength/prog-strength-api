@@ -465,11 +465,10 @@ func New(cfg config.Config) (*Server, error) {
 	// /exercises public. The progression endpoint needs the exercise
 	// catalog to resolve a muscle_group filter to its member exercises.
 	// Timeline wiring: a publisher (best-effort feed-index writes injected
-	// into the workout/activity handlers) and a hydrator (renders post
-	// content from the live workout/activity repos at read time). Both adapt
-	// the cross-domain repos so the timeline package stays import-clean.
+	// into the workout/activity handlers) adapts the cross-domain repos so the
+	// timeline package stays import-clean. The hydrator is built inside the
+	// group below, once the activity type registry it renders through exists.
 	timelinePublisher := newTimelinePublisher(timelineRepo)
-	timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo)
 
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser(jwtSecret))
@@ -540,13 +539,18 @@ func New(cfg config.Config) (*Server, error) {
 		strengthDesc.Create = workoutHandler.CreateSession
 		strengthDesc.Update = workoutHandler.UpdateSession
 		strengthDesc.MountRoutes = workoutHandler.MountActivityRoutes
-		activityHandler.SetRegistry(activity.NewRegistry(
+		activityRegistry := activity.NewRegistry(
 			runDesc,
 			activity.NewEnduranceDescriptor(activity.ActivityWalking, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityWalking)),
 			activity.NewEnduranceDescriptor(activity.ActivityCycling, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityCycling)),
 			activity.NewEnduranceDescriptor(activity.ActivityOther, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityOther)),
 			strengthDesc,
-		))
+		)
+		activityHandler.SetRegistry(activityRegistry)
+		// The timeline hydrator renders session posts (`workout`/`run`)
+		// through the same registry's Summarize, so build it here now that the
+		// registry exists — it's used by the timeline handler mounted below.
+		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry)
 		// Heart-rate-zone engine: tunables come from the [hr_zones] config
 		// section; the recency window for the reference-max-HR estimate is
 		// derived from recency_window_days.

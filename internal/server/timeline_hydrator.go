@@ -10,24 +10,27 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 )
 
-// timelineHydrator renders timeline post content from the live workout and
-// activity source tables at read time. It implements timeline.SourceHydrator
-// and lives in the wiring layer so the timeline domain never imports
-// workout/activity internals (the SOW's clean-boundary requirement).
+// timelineHydrator renders timeline post content from the live activity
+// source tables at read time. It implements timeline.SourceHydrator and lives
+// in the wiring layer so the timeline domain never imports workout/activity
+// internals (the SOW's clean-boundary requirement).
 //
 // Hydrate groups a feed page's refs by source_type and does the work per
-// type, batching where a batch read exists (PR events) and per-id fetching
-// only where no batch read is available (workouts, activities) — never an
-// N+1 across types. Refs whose source no longer exists are omitted from the
-// returned map; the handler renders that as a dropped post.
+// type, batching where a batch read exists (session summaries, PR events) and
+// per-id fetching only where no batch read is available (best efforts, which
+// need the activity's loaded best-effort list) — never an N+1 across types.
+// Refs whose source no longer exists are omitted from the returned map; the
+// handler renders that as a dropped post.
 type timelineHydrator struct {
 	workoutRepo  strength.Repository
 	activityRepo activity.Repository
+	registry     *activity.Registry
 }
 
-// newTimelineHydrator builds the adapter over the workout + activity repos.
-func newTimelineHydrator(workoutRepo strength.Repository, activityRepo activity.Repository) *timelineHydrator {
-	return &timelineHydrator{workoutRepo: workoutRepo, activityRepo: activityRepo}
+// newTimelineHydrator builds the adapter over the workout + activity repos and
+// the type registry (whose descriptors' Summarize renders the session cards).
+func newTimelineHydrator(workoutRepo strength.Repository, activityRepo activity.Repository, registry *activity.Registry) *timelineHydrator {
+	return &timelineHydrator{workoutRepo: workoutRepo, activityRepo: activityRepo, registry: registry}
 }
 
 var _ timeline.SourceHydrator = (*timelineHydrator)(nil)
@@ -43,10 +46,10 @@ func (h *timelineHydrator) Hydrate(ctx context.Context, refs []timeline.PostRef)
 		byType[ref.SourceType] = append(byType[ref.SourceType], ref)
 	}
 
-	if err := h.hydrateWorkouts(ctx, byType[timeline.SourceWorkout], out); err != nil {
-		return nil, err
-	}
-	if err := h.hydrateRuns(ctx, byType[timeline.SourceRun], out); err != nil {
+	// `workout` and `run` posts both point at rows in the one activities base
+	// table, so they resolve through a single unified path (registry
+	// Summarize), not two divergent renderers.
+	if err := h.hydrateSessions(ctx, byType[timeline.SourceWorkout], byType[timeline.SourceRun], out); err != nil {
 		return nil, err
 	}
 	if err := h.hydratePRs(ctx, byType[timeline.SourcePR], out); err != nil {
@@ -59,79 +62,70 @@ func (h *timelineHydrator) Hydrate(ctx context.Context, refs []timeline.PostRef)
 	return out, nil
 }
 
-// hydrateWorkouts renders `workout` posts. No batch read exists on the
-// workout repo, so we fetch per id (GetByID); a missing/deleted workout is
-// omitted. Href points at the workouts list view — there is no standalone
-// workout-detail web route, the Activities page hosts the workouts tab.
-func (h *timelineHydrator) hydrateWorkouts(ctx context.Context, refs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
-	for _, ref := range refs {
-		w, err := h.workoutRepo.GetByID(ctx, ref.SourceID)
+// hydrateSessions renders `workout` and `run` posts through the unified
+// activity store and the type registry. Both source types point at the
+// activities base table, so they share one batched summary read
+// (SummariesByIDs, grouped by author since a feed page spans the viewer's
+// followees) plus activity.RenderSummaries, which loads each type's detail
+// (strength's exercises/sets) in a single batch and renders the same card the
+// unified /activities list shows. The card body is byte-identical for both
+// types; only the Href differs, and that web-routing concern stays here in the
+// wiring layer because Summary deliberately carries no Href. A ref whose
+// source no longer resolves is absent from the summaries map and omitted.
+func (h *timelineHydrator) hydrateSessions(ctx context.Context, workoutRefs, runRefs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
+	sessionRefs := make([]timeline.PostRef, 0, len(workoutRefs)+len(runRefs))
+	sessionRefs = append(sessionRefs, workoutRefs...)
+	sessionRefs = append(sessionRefs, runRefs...)
+	if len(sessionRefs) == 0 {
+		return nil
+	}
+
+	// SummariesByIDs is user-scoped (it enforces ownership), and the feed
+	// spans the viewer plus their followees, so batch the base read per author.
+	idsByUser := make(map[string][]string)
+	for _, ref := range sessionRefs {
+		idsByUser[ref.UserID] = append(idsByUser[ref.UserID], ref.SourceID)
+	}
+	activities := make([]activity.Activity, 0, len(sessionRefs))
+	for uid, ids := range idsByUser {
+		found, err := h.activityRepo.SummariesByIDs(ctx, uid, ids)
 		if err != nil {
-			// Source gone (deleted/not found): omit from the page.
+			return err
+		}
+		for _, a := range found {
+			activities = append(activities, a)
+		}
+	}
+
+	// The userID passed to RenderSummaries only feeds each type's batch detail
+	// load; strength's is id-scoped (ignores it) and the endurance types
+	// summarize off the joined base row, so one render over the merged authors
+	// is correct.
+	summaries := activity.RenderSummaries(ctx, h.registry, "", activities)
+	for _, ref := range sessionRefs {
+		s, ok := summaries[ref.SourceID]
+		if !ok {
+			// Source gone (deleted/not found) or unrenderable: omit.
 			continue
 		}
-		title := w.Name
-		if strings.TrimSpace(title) == "" {
-			title = "Workout"
-		}
-
-		exerciseCount := len(w.Exercises)
-		totalSets := 0
-		var totalVolume float64
-		for _, ex := range w.Exercises {
-			totalSets += len(ex.Sets)
-			for _, s := range ex.Sets {
-				totalVolume += s.Weight * float64(s.Reps)
-			}
-		}
-
-		metrics := []string{pluralCount(exerciseCount, "exercise")}
-		if totalSets > 0 {
-			metrics = append(metrics, pluralCount(totalSets, "set"))
-		}
-		if totalVolume > 0 {
-			metrics = append(metrics, fmt.Sprintf("%s lb", formatThousands(totalVolume)))
-		}
-
 		out[ref] = timeline.PostContent{
-			Title:    title,
-			Subtitle: pluralCount(exerciseCount, "exercise"),
-			Metrics:  metrics,
-			// /activities?view=workouts — the workouts tab of the consolidated
-			// Activities page; there's no per-workout detail route in web v1.
-			Href: "/activities?view=workouts",
+			Title:    s.Title,
+			Subtitle: s.Subtitle,
+			Metrics:  s.Metrics,
+			Href:     sessionHref(ref.SourceType),
 		}
 	}
 	return nil
 }
 
-// hydrateRuns renders `run` posts. No batch read exists, so fetch per id via
-// Get(ctx, userID, id) (refs carry the author's UserID). A missing/deleted
-// activity is omitted. Href points at the running view of the Activities page.
-func (h *timelineHydrator) hydrateRuns(ctx context.Context, refs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
-	for _, ref := range refs {
-		a, err := h.activityRepo.Get(ctx, ref.UserID, ref.SourceID)
-		if err != nil {
-			continue
-		}
-		title := "Run"
-		if a.Name != nil && strings.TrimSpace(*a.Name) != "" {
-			title = *a.Name
-		}
-
-		distance := formatMiles(a.DistanceMeters)
-		duration := formatDuration(float64(a.DurationSeconds))
-		metrics := []string{distance, duration}
-
-		out[ref] = timeline.PostContent{
-			Title:    title,
-			Subtitle: distance + " · " + duration,
-			Metrics:  metrics,
-			// /activities?view=running — the running tab of the Activities page.
-			Href: "/activities?view=running",
-		}
+// sessionHref maps a session post's source type to its web destination — the
+// workouts or running tab of the consolidated Activities page. There is no
+// per-session detail route in web v1.
+func sessionHref(t timeline.SourceType) string {
+	if t == timeline.SourceWorkout {
+		return "/activities?view=workouts"
 	}
-	return nil
+	return "/activities?view=running"
 }
 
 // hydratePRs renders `pr` posts. The workout repo exposes a batch read keyed
@@ -173,8 +167,9 @@ func (h *timelineHydrator) hydratePRs(ctx context.Context, refs []timeline.PostR
 // hydrateBestEfforts renders `best_effort` posts. The source_id is
 // "<activityID>:<distanceKey>"; we split on the last ':' (activity ids never
 // contain one, but splitting on the last keeps it robust), fetch the activity
-// per id, and find the matching best effort by distance_key. A gone activity
-// or distance is omitted. Href points at the running view of the Activities page.
+// per id (Get loads the best-effort list SummariesByIDs omits), and find the
+// matching best effort by distance_key. A gone activity or distance is
+// omitted. Href points at the running view of the Activities page.
 func (h *timelineHydrator) hydrateBestEfforts(ctx context.Context, refs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
 	for _, ref := range refs {
 		activityID, distanceKey, ok := splitBestEffortSourceID(ref.SourceID)
@@ -200,7 +195,7 @@ func (h *timelineHydrator) hydrateBestEfforts(ctx context.Context, refs []timeli
 		out[ref] = timeline.PostContent{
 			Title:    fmt.Sprintf("%s best effort", label),
 			Subtitle: "Running best effort",
-			Metrics:  []string{formatDuration(matched.DurationSeconds)},
+			Metrics:  []string{activity.FormatDuration(matched.DurationSeconds)},
 			// /activities?view=running — the running tab of the Activities page.
 			Href: "/activities?view=running",
 		}
@@ -231,67 +226,12 @@ func distanceLabel(key string) string {
 	return key
 }
 
-// metersPerMile converts the activity package's metric-internal distances to
-// the miles the cards render. Display-only; the API stays metric.
-const metersPerMile = 1609.344
-
-// formatMiles renders meters as a one-decimal mile string, e.g. "5.0 mi".
-func formatMiles(meters float64) string {
-	return fmt.Sprintf("%.1f mi", meters/metersPerMile)
-}
-
-// formatDuration renders seconds as "M:SS" (or "H:MM:SS" past an hour), e.g.
-// 2472s → "41:12", matching the SOW's example chips.
-func formatDuration(seconds float64) string {
-	total := int(seconds + 0.5)
-	h := total / 3600
-	m := (total % 3600) / 60
-	s := total % 60
-	if h > 0 {
-		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
-	}
-	return fmt.Sprintf("%d:%02d", m, s)
-}
-
 // formatWeight renders a weight without a trailing ".0" for whole numbers,
-// e.g. 305.0 → "305", 102.5 → "102.5".
+// e.g. 305.0 → "305", 102.5 → "102.5". PR-specific (no exported equivalent in
+// the activity card vocabulary, which never renders a bare weight).
 func formatWeight(w float64) string {
 	if w == float64(int64(w)) {
 		return fmt.Sprintf("%d", int64(w))
 	}
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", w), "0"), ".")
-}
-
-// formatThousands renders a whole-number volume with thousands separators,
-// e.g. 8400 → "8,400".
-func formatThousands(v float64) string {
-	n := int64(v + 0.5)
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var b strings.Builder
-	pre := len(s) % 3
-	if pre > 0 {
-		b.WriteString(s[:pre])
-		if len(s) > pre {
-			b.WriteString(",")
-		}
-	}
-	for i := pre; i < len(s); i += 3 {
-		b.WriteString(s[i : i+3])
-		if i+3 < len(s) {
-			b.WriteString(",")
-		}
-	}
-	return b.String()
-}
-
-// pluralCount renders "{n} {noun}" with a naive plural 's' for n != 1, e.g.
-// 1 → "1 exercise", 3 → "3 exercises".
-func pluralCount(n int, noun string) string {
-	if n == 1 {
-		return fmt.Sprintf("1 %s", noun)
-	}
-	return fmt.Sprintf("%d %ss", n, noun)
 }

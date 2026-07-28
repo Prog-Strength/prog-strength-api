@@ -132,17 +132,27 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	todayStr := now.In(loc).Format("2006-01-02")
 	since53wStr := now.In(loc).AddDate(0, 0, -7*sparkLookbackWeeks).Format("2006-01-02")
 
-	// Shared reads: runs (running + streak) and workouts (lifting + streak) and
-	// steps entries (steps + streak) are each fetched once and reused. They are
-	// fetched defensively so a failure degrades to a nil/empty contribution.
-	runs := defer1(ctx, r, "running activities", func() ([]activity.Activity, error) {
-		// ExcludeStrength preserves the pre-unification behavior: lifts still
-		// arrive via the separate workout fetch below until the dashboard
-		// converges on one unified read (unified-activity-model, task 6).
-		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil, activity.TypeFilter{ExcludeStrength: true})
+	// One unified read over the base table covers every session type. It
+	// replaces the pre-042 pair (an endurance-only activity read plus a
+	// separate capped workout read): all-types == old endurance ∪ old lifts,
+	// preserving that equivalence. endurance (non-strength rows) feeds the
+	// running tile and the streak's cardio path exactly as the old
+	// ExcludeStrength read did; the strength rows are re-hydrated into
+	// workouts below for the lifting tile and the streak's completion path.
+	// Reading the base directly also drops the old workout read's 50-row cap,
+	// which silently truncated a heavy lifter's year-long streak window (the
+	// sparkLookbackWeeks comment above always intended a full-year pull).
+	sessions := defer1(ctx, r, "activities", func() ([]activity.Activity, error) {
+		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil, activity.TypeFilter{})
 	})
-	workouts := defer1(ctx, r, "workouts", func() ([]strength.Workout, error) {
-		return h.workoutRepo.ListByUser(ctx, userID, strength.ListOptions{Since: &since53w})
+	endurance := enduranceOnly(sessions)
+	// The lifting/streak builders operate on strength.Workout (sets drive
+	// volume and the completion check), so reconstruct them from the unified
+	// list's strength rows plus a batched exercise hydration. The strength
+	// module still owns its exercises/sets detail — this is a base-list read
+	// plus a type-detail read, not a second session-list query.
+	workouts := defer1(ctx, r, "workout exercises", func() ([]strength.Workout, error) {
+		return h.hydrateStrengthWorkouts(ctx, sessions)
 	})
 	stepEntries := defer1(ctx, r, "steps", func() ([]steps.Entry, error) {
 		entries, _, err := h.stepsRepo.List(ctx, userID, &since53wStr, &todayStr, 0, nil)
@@ -156,12 +166,12 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	})
 
 	summary := Summary{
-		Running:    h.buildRunningSection(ctx, r, userID, runs, now, loc),
+		Running:    h.buildRunningSection(ctx, r, userID, endurance, now, loc),
 		Lifting:    h.buildLiftingSection(ctx, r, userID, workouts, unit, now, loc),
 		Steps:      h.buildStepsSection(ctx, r, userID, stepEntries, now, loc),
 		Nutrition:  h.buildNutritionSection(ctx, r, userID, todayStr, loc),
 		Bodyweight: h.buildBodyweightSection(ctx, r, userID, since8w),
-		Streak:     buildStreak(streakDates(runs, workouts, stepEntries, stepGoal.Goal, loc), now, loc),
+		Streak:     buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc),
 		Recovery:   h.buildRecoverySection(ctx, r, userID, now, loc),
 	}
 
@@ -283,6 +293,61 @@ func thisWeekWorkoutIDs(workouts []strength.Workout, now time.Time, loc *time.Lo
 		}
 	}
 	return ids
+}
+
+// enduranceOnly returns the non-strength_training rows of the unified session
+// list — the endurance sessions the running tile and the streak's cardio path
+// consume, matching the pre-042 ExcludeStrength read exactly (the running
+// builders further narrow to running; walks/rides pass through as before).
+func enduranceOnly(sessions []activity.Activity) []activity.Activity {
+	out := make([]activity.Activity, 0, len(sessions))
+	for i := range sessions {
+		if sessions[i].ActivityType != activity.ActivityStrengthTraining {
+			out = append(out, sessions[i])
+		}
+	}
+	return out
+}
+
+// hydrateStrengthWorkouts reconstructs the strength.Workout values the lifting
+// tile and streak completion check need from the unified list's strength rows.
+// The base row supplies id, start (performed_at), and duration; the exercises
+// come from one batched detail read on the workout repo. EndedAt is derived to
+// match the workout repository's own read: nil when the base duration is NULL
+// (loaded as 0 — an end-less/in-progress lift), else start+duration.
+func (h *Handler) hydrateStrengthWorkouts(ctx context.Context, sessions []activity.Activity) ([]strength.Workout, error) {
+	var ids []string
+	for i := range sessions {
+		if sessions[i].ActivityType == activity.ActivityStrengthTraining {
+			ids = append(ids, sessions[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	exByID, err := h.workoutRepo.ListExercisesByWorkoutIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]strength.Workout, 0, len(ids))
+	for i := range sessions {
+		a := sessions[i]
+		if a.ActivityType != activity.ActivityStrengthTraining {
+			continue
+		}
+		w := strength.Workout{
+			ID:          a.ID,
+			UserID:      a.UserID,
+			PerformedAt: a.StartTime,
+			Exercises:   exByID[a.ID],
+		}
+		if a.DurationSeconds > 0 {
+			end := a.StartTime.Add(time.Duration(a.DurationSeconds) * time.Second)
+			w.EndedAt = &end
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
 
 // streakDates collects the set of local calendar dates the user genuinely

@@ -462,12 +462,9 @@ func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID str
 // See TypeFilter: zero value filters nothing — the unified list reads every
 // type, strength_training included.
 func typeFilterClauses(filter TypeFilter, clauses []string, args []any) ([]string, []any) {
-	switch {
-	case filter.Only != "":
+	if filter.Only != "" {
 		clauses = append(clauses, "a.activity_type = ?")
 		args = append(args, filter.Only)
-	case filter.ExcludeStrength:
-		clauses = append(clauses, "a.activity_type != 'strength_training'")
 	}
 	return clauses, args
 }

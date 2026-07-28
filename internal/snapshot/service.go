@@ -111,10 +111,12 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 	})
 
 	snap.Running = sectionOrNil(ctx, "running", func() (*RunningSection, error) {
-		// ExcludeStrength preserves the pre-unification behavior: lifts come
-		// from the workout repo until the snapshot converges on the unified
-		// base (unified-activity-model, task 6).
-		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{ExcludeStrength: true})
+		// One read over the unified base covers every session type; the
+		// running section keeps only running rows (aggregateRunning filters
+		// by type) and the strength section is built separately above from
+		// the workout repo, which reads the same base table. countActiveDays
+		// then unions both sections' days.
+		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{})
 		if err != nil {
 			return nil, err
 		}

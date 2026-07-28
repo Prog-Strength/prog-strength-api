@@ -32,6 +32,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/snapshot"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
@@ -378,6 +379,31 @@ func TestContract_BaseOnlyType_RendersTimelineCard(t *testing.T) {
 	s, ok = activity.RenderSummary(env.registry, a, nil)
 	if !ok || s.Title != "Shadowboxing" {
 		t.Errorf("unnamed card = %+v (ok=%v), want default title Shadowboxing", s, ok)
+	}
+}
+
+// TestContract_BaseOnlyType_CountsAsSnapshotActiveDay: the training
+// snapshot's consistency section counts a day with ANY logged session as
+// active — same contract as the dashboard streak — so a new base-only type
+// feeds snapshot active-days with no code outside its descriptor.
+func TestContract_BaseOnlyType_CountsAsSnapshotActiveDay(t *testing.T) {
+	env := newContractEnv(t)
+
+	w := env.do(t, "POST", "/activities",
+		`{"activity_type":"shadowboxing","start_time":"2026-07-20T18:00:00Z","duration_seconds":1800,"name":"Snapshot session"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", w.Code, w.Body.String())
+	}
+
+	svc := snapshot.NewService(env.repos.workout, env.repos.exercise, env.repos.activity,
+		env.repos.steps, env.repos.bodyweight, env.repos.nutrition, env.repos.user)
+	start := time.Date(2026, 7, 19, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
+	snap := svc.Build(context.Background(), env.userID, start, end, time.UTC)
+
+	if snap.Consistency.ActiveDays != 1 {
+		t.Fatalf("snapshot active days = %d, want 1 (the shadowboxing day); consistency=%+v",
+			snap.Consistency.ActiveDays, snap.Consistency)
 	}
 }
 

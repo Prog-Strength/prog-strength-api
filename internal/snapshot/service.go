@@ -110,16 +110,23 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 		return aggregateStrength(ws, prs, exs, unit, loc), nil
 	})
 
+	// One all-types session read serves two consumers: the running section
+	// (aggregateRunning narrows to running itself) and the consistency
+	// section's active-day set — any logged session of ANY type is an
+	// active day, matching the dashboard streak and automatically including
+	// future registry types. On error, sessions stays nil: the running
+	// section degrades to null (logged below) and the day set to empty.
+	sessions, sessErr := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{})
+
 	snap.Running = sectionOrNil(ctx, "running", func() (*RunningSection, error) {
-		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{Only: activity.ActivityRunning})
-		if err != nil {
-			return nil, err
+		if sessErr != nil {
+			return nil, sessErr
 		}
 		bests, err := s.activityRepo.GetUserRunningBestEfforts(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
-		return aggregateRunning(acts, bests, start, end, loc), nil
+		return aggregateRunning(sessions, bests, start, end, loc), nil
 	})
 
 	snap.Steps = sectionOrNil(ctx, "steps", func() (*StepsSection, error) {
@@ -160,7 +167,7 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 		return aggregateNutrition(days, goals), nil
 	})
 
-	snap.Consistency.ActiveDays = countActiveDays(snap.Strength, snap.Running, snap.Steps)
+	snap.Consistency.ActiveDays = countActiveDays(snap.Strength, sessionDates(sessions, loc), snap.Steps)
 	return snap
 }
 

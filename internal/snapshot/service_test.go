@@ -118,10 +118,19 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 
 	runStart := time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 	pace := 315.0
-	acts := []activity.Activity{{
-		ActivityType: activity.ActivityRunning, StartTime: runStart, DistanceMeters: 8000,
-		DurationSeconds: 2520, AvgPaceSecPerKm: &pace, Name: strptr("Easy 5"),
-	}}
+	acts := []activity.Activity{
+		{
+			ActivityType: activity.ActivityRunning, StartTime: runStart, DistanceMeters: 8000,
+			DurationSeconds: 2520, AvgPaceSecPerKm: &pace, Name: strptr("Easy 5"),
+		},
+		// A walk: excluded from the running section's aggregates but still
+		// an active day for the consistency section.
+		{
+			ActivityType:   activity.ActivityWalking,
+			StartTime:      time.Date(2026, 6, 19, 13, 0, 0, 0, time.UTC),
+			DistanceMeters: 3000, DurationSeconds: 1800,
+		},
+	}
 	bests := []activity.RunningBestEffort{
 		{DistanceKey: "5k", DurationSeconds: 1320, ActivityStartTime: runStart},
 	}
@@ -190,9 +199,10 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 		t.Fatalf("nutrition = %+v", snap.Nutrition)
 	}
 
-	// Consistency: distinct active local days across strength (6-16),
-	// running (6-17) and non-zero step days (6-15, 6-16) = {15,16,17} = 3.
-	if snap.Consistency.WindowDays != 7 || snap.Consistency.ActiveDays != 3 {
+	// Consistency: distinct active local days across strength (6-16), all
+	// session types — the run (6-17) AND the walk (6-19) — and non-zero
+	// step days (6-15, 6-16) = {15,16,17,19} = 4.
+	if snap.Consistency.WindowDays != 7 || snap.Consistency.ActiveDays != 4 {
 		t.Fatalf("consistency = %+v", snap.Consistency)
 	}
 }

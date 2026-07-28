@@ -285,18 +285,43 @@ func TestCountActiveDays_UnionOfDomains(t *testing.T) {
 	strength := &StrengthSection{Sessions: []StrengthSession{
 		{Date: "2026-06-15"}, {Date: "2026-06-17"},
 	}}
-	running := &RunningSection{Runs: []RunSummary{
-		{Date: "2026-06-17"}, // overlaps strength → counted once
-		{Date: "2026-06-18"},
-	}}
+	// Sessions of EVERY activity type count — any logged session is an
+	// active day (matching the dashboard streak): a walk-only day and a
+	// day of a type this codebase has never heard of both light up.
+	sessions := []activity.Activity{
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)}, // overlaps strength → counted once
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 18, 13, 0, 0, 0, time.UTC)},
+		{ActivityType: activity.ActivityWalking,
+			StartTime: time.Date(2026, 6, 21, 13, 0, 0, 0, time.UTC)}, // walk-only day
+		{ActivityType: activity.ActivityType("shadowboxing"),
+			StartTime: time.Date(2026, 6, 22, 13, 0, 0, 0, time.UTC)}, // future registry type
+	}
 	stepsSec := &StepsSection{ByDay: []StepsDay{
 		{Date: "2026-06-15", Steps: 9000}, // overlaps strength
 		{Date: "2026-06-19", Steps: 5000},
 		{Date: "2026-06-20", Steps: 0}, // zero steps → not active
 	}}
-	// Union: 15, 17, 18, 19 = 4 distinct days.
-	if got := countActiveDays(strength, running, stepsSec); got != 4 {
-		t.Fatalf("active days = %d, want 4", got)
+	// Union: 15, 17, 18, 19, 21, 22 = 6 distinct days.
+	if got := countActiveDays(strength, sessionDates(sessions, time.UTC), stepsSec); got != 6 {
+		t.Fatalf("active days = %d, want 6", got)
+	}
+}
+
+func TestSessionDates_LocalizesAndDedupes(t *testing.T) {
+	loc := mustLoc(t) // America/Denver, UTC-6 in June
+	sessions := []activity.Activity{
+		// 04:30 UTC = 22:30 the previous local day.
+		{ActivityType: activity.ActivityRunning,
+			StartTime: time.Date(2026, 6, 18, 4, 30, 0, 0, time.UTC)},
+		// Same local day as above, different type.
+		{ActivityType: activity.ActivityCycling,
+			StartTime: time.Date(2026, 6, 17, 23, 0, 0, 0, time.UTC)},
+	}
+	days := sessionDates(sessions, loc)
+	if len(days) != 1 || !days["2026-06-17"] {
+		t.Fatalf("session dates = %v, want exactly {2026-06-17}", days)
 	}
 }
 

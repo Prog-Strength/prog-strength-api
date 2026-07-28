@@ -240,20 +240,33 @@ func aggregateNutrition(days []nutrition.DailyMacros, goals nutrition.MacroGoals
 	return sec
 }
 
+// sessionDates collects the distinct local calendar dates of the given
+// sessions. Every activity type counts — any logged session is an active
+// day — so a new registry type feeds the consistency section automatically,
+// with no per-type code here (mirroring the dashboard streak's contract).
+func sessionDates(sessions []activity.Activity, loc *time.Location) map[string]bool {
+	days := make(map[string]bool, len(sessions))
+	for i := range sessions {
+		days[sessions[i].StartTime.In(loc).Format("2006-01-02")] = true
+	}
+	return days
+}
+
 // countActiveDays is the number of distinct local days on which the user
-// did anything: a logged workout, a run, or a non-zero step day. Nil
-// sections (a failed domain) contribute nothing rather than panicking.
-func countActiveDays(strength *StrengthSection, running *RunningSection, stepsSec *StepsSection) int {
+// did anything: a logged session of any type, a workout, or a non-zero step
+// day. sessionDays already covers the strength base rows, but the strength
+// section stays a separate input so a failed activity read degrades to
+// workout-repo days rather than losing them. Nil inputs (a failed domain)
+// contribute nothing rather than panicking.
+func countActiveDays(strength *StrengthSection, sessionDays map[string]bool, stepsSec *StepsSection) int {
 	active := map[string]bool{}
 	if strength != nil {
 		for _, s := range strength.Sessions {
 			active[s.Date] = true
 		}
 	}
-	if running != nil {
-		for _, r := range running.Runs {
-			active[r.Date] = true
-		}
+	for d := range sessionDays {
+		active[d] = true
 	}
 	if stepsSec != nil {
 		for _, d := range stepsSec.ByDay {

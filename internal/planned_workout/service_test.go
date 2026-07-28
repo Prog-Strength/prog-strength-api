@@ -126,7 +126,7 @@ func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
 	}
 
 	// Deleting the session reverts the plan back to planned and clears the link.
-	svc.OnSessionDeleted(context.Background(), "u1", "act-1", SessionKindActivity)
+	svc.OnSessionDeleted(context.Background(), "u1", "act-1")
 
 	got, err = repo.Get(context.Background(), "u1", id)
 	if err != nil {
@@ -173,5 +173,5 @@ func TestService_OnSessionDeleted_NoLinkIsNoOp(t *testing.T) {
 	svc := NewService(repo)
 	svc.SetCalendar(&fakeScheduler{})
 	// No plan links act-x; must not panic or error.
-	svc.OnSessionDeleted(context.Background(), "u1", "act-x", SessionKindActivity)
+	svc.OnSessionDeleted(context.Background(), "u1", "act-x")
 }

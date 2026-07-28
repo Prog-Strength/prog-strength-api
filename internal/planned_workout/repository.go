@@ -52,9 +52,18 @@ type Repository interface {
 	// plan is missing, soft-deleted, or cross-user.
 	ClearCompletion(ctx context.Context, userID, id string) error
 
-	// GetByCompletedSession returns the user's non-deleted plan whose completion
-	// link points at (sessionID, kind), or ErrNotFound when none does.
-	GetByCompletedSession(ctx context.Context, userID, sessionID string, kind SessionKind) (*PlannedWorkout, error)
+	// GetByCompletedSession returns the user's non-deleted plan whose
+	// completion link points at sessionID, or ErrNotFound when none does.
+	// The lookup is deliberately kind-agnostic during the unified-model shim
+	// period: completed_session_kind is written by two wrappers with
+	// different values for the same strength session ('workout' from the
+	// live write path, 'activity' from migration 042's normalization of
+	// pre-existing links), while session ids are globally unique in the one
+	// activities base table — so the id alone IS the key. The
+	// completed_session_kind column is collapsed in the stage-5 cleanup
+	// (TODO: unified-activity-model SOW, stage 5 — remove
+	// completed_session_kind and this note).
+	GetByCompletedSession(ctx context.Context, userID, sessionID string) (*PlannedWorkout, error)
 
 	// SetGoogleSync records the outcome of a Google Calendar sync attempt:
 	// the (possibly nil) event id, the sync status, and the last error

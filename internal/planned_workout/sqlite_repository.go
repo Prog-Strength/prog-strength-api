@@ -240,13 +240,16 @@ func (r *SQLiteRepository) ClearCompletion(ctx context.Context, userID, planID s
 	return affectedOrNotFound(res, err)
 }
 
-func (r *SQLiteRepository) GetByCompletedSession(ctx context.Context, userID, sessionID string, kind SessionKind) (*PlannedWorkout, error) {
+// GetByCompletedSession matches on completed_session_id alone — kind-agnostic
+// during the unified-model shim period (see the Repository interface doc for
+// why, and the stage-5 completed_session_kind cleanup TODO).
+func (r *SQLiteRepository) GetByCompletedSession(ctx context.Context, userID, sessionID string) (*PlannedWorkout, error) {
 	var id string
 	err := r.db.QueryRowContext(ctx, `
 		SELECT id FROM planned_workouts
-		WHERE user_id = ? AND completed_session_id = ? AND completed_session_kind = ? AND deleted_at IS NULL
+		WHERE user_id = ? AND completed_session_id = ? AND deleted_at IS NULL
 		LIMIT 1
-	`, userID, sessionID, string(kind)).Scan(&id)
+	`, userID, sessionID).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

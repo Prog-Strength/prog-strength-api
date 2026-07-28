@@ -763,6 +763,10 @@ func (h *Handler) unlink(w http.ResponseWriter, r *http.Request) {
 
 // bySession (GET /by-session?session_id=&session_kind=) is the reverse lookup:
 // given a logged session, return the plan it completed, or 404 when none does.
+// session_kind stays a required, validated param (contract unchanged for
+// existing clients) but no longer narrows the lookup — the id is the key,
+// kind-agnostic during the unified-model shim period (see
+// Repository.GetByCompletedSession).
 func (h *Handler) bySession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -780,7 +784,7 @@ func (h *Handler) bySession(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "session_kind must be 'workout' or 'activity'")
 		return
 	}
-	plan, err := h.repo.GetByCompletedSession(r.Context(), userID, sessionID, kind)
+	plan, err := h.repo.GetByCompletedSession(r.Context(), userID, sessionID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "no planned workout completed by this session")

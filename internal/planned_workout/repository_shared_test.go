@@ -455,12 +455,39 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
-		got, err := repo.GetByCompletedSession(ctx, "u1", "sess-123", SessionKindWorkout)
+		got, err := repo.GetByCompletedSession(ctx, "u1", "sess-123")
 		if err != nil {
 			t.Fatalf("GetByCompletedSession: %v", err)
 		}
 		if got.ID != pw.ID {
 			t.Errorf("got plan %q, want %q", got.ID, pw.ID)
+		}
+	})
+
+	t.Run("GetByCompletedSession_KindAgnostic", func(t *testing.T) {
+		// The lookup keys on session id alone: a completion recorded with
+		// either completed_session_kind value resolves, since the same
+		// strength session carries 'activity' when migrated by 042 and
+		// 'workout' when written live during the shim period.
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		for _, kind := range []SessionKind{SessionKindWorkout, SessionKindActivity} {
+			pw := newPlan("u1", mustTime(t, "2026-06-20T17:00:00Z"))
+			if err := repo.Create(ctx, pw); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			sessionID := "sess-" + string(kind)
+			if err := repo.SetCompletion(ctx, "u1", pw.ID, sessionID, kind); err != nil {
+				t.Fatalf("SetCompletion(%s): %v", kind, err)
+			}
+			got, err := repo.GetByCompletedSession(ctx, "u1", sessionID)
+			if err != nil {
+				t.Fatalf("GetByCompletedSession(recorded kind %s): %v", kind, err)
+			}
+			if got.ID != pw.ID {
+				t.Errorf("recorded kind %s: got plan %q, want %q", kind, got.ID, pw.ID)
+			}
 		}
 	})
 
@@ -475,16 +502,12 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		if err := repo.SetCompletion(ctx, "u1", pw.ID, "sess-123", SessionKindWorkout); err != nil {
 			t.Fatalf("SetCompletion: %v", err)
 		}
-		// Wrong kind → no match.
-		if _, err := repo.GetByCompletedSession(ctx, "u1", "sess-123", SessionKindActivity); !errors.Is(err, ErrNotFound) {
-			t.Errorf("wrong kind: want ErrNotFound, got %v", err)
-		}
 		// Wrong session id → no match.
-		if _, err := repo.GetByCompletedSession(ctx, "u1", "nope", SessionKindWorkout); !errors.Is(err, ErrNotFound) {
+		if _, err := repo.GetByCompletedSession(ctx, "u1", "nope"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("wrong session id: want ErrNotFound, got %v", err)
 		}
 		// Cross-user → no match.
-		if _, err := repo.GetByCompletedSession(ctx, "u2", "sess-123", SessionKindWorkout); !errors.Is(err, ErrNotFound) {
+		if _, err := repo.GetByCompletedSession(ctx, "u2", "sess-123"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("cross-user: want ErrNotFound, got %v", err)
 		}
 	})

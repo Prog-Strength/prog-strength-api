@@ -44,7 +44,7 @@ func (r *SQLiteRepository) recomputePersonalRecordTx(
 		pr.UpdatedAt = now
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO personal_records (
-				id, user_id, exercise_id, workout_id,
+				id, user_id, exercise_id, activity_id,
 				weight, reps, unit, achieved_at,
 				created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -80,7 +80,7 @@ func (r *SQLiteRepository) recomputePersonalRecordTx(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO personal_record_events (
-				id, user_id, exercise_id, workout_id,
+				id, user_id, exercise_id, activity_id,
 				weight, reps, unit,
 				previous_weight, previous_reps, previous_unit,
 				achieved_at, created_at
@@ -111,20 +111,21 @@ func (r *SQLiteRepository) loadSnapshotsForExerciseTx(
 		SELECT
 			w.id,
 			w.user_id,
-			w.performed_at,
+			w.start_time,
 			we.id AS we_id,
 			we.exercise_order,
 			s.reps,
 			s.weight,
 			s.unit,
 			s.set_order
-		FROM workouts w
-		INNER JOIN workout_exercises we ON we.workout_id = w.id
-		INNER JOIN sets s ON s.workout_exercise_id = we.id
+		FROM activities w
+		INNER JOIN activity_exercises we ON we.activity_id = w.id
+		INNER JOIN sets s ON s.activity_exercise_id = we.id
 		WHERE w.user_id = ?
+		  AND w.activity_type = 'strength_training'
 		  AND w.deleted_at IS NULL
 		  AND we.exercise_id = ?
-		ORDER BY w.performed_at ASC, w.id, we.exercise_order, s.set_order
+		ORDER BY w.start_time ASC, w.id, we.exercise_order, s.set_order
 	`, userID, exerciseID)
 	if err != nil {
 		return nil, err
@@ -208,13 +209,13 @@ func (r *SQLiteRepository) affectedExercisesForRecomputeTx(
 		return rows.Err()
 	}
 
-	if err := addRows(`SELECT DISTINCT exercise_id FROM workout_exercises WHERE workout_id = ?`); err != nil {
+	if err := addRows(`SELECT DISTINCT exercise_id FROM activity_exercises WHERE activity_id = ?`); err != nil {
 		return nil, err
 	}
-	if err := addRows(`SELECT DISTINCT exercise_id FROM personal_records WHERE workout_id = ?`); err != nil {
+	if err := addRows(`SELECT DISTINCT exercise_id FROM personal_records WHERE activity_id = ?`); err != nil {
 		return nil, err
 	}
-	if err := addRows(`SELECT DISTINCT exercise_id FROM personal_record_events WHERE workout_id = ?`); err != nil {
+	if err := addRows(`SELECT DISTINCT exercise_id FROM personal_record_events WHERE activity_id = ?`); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -226,7 +227,7 @@ func (r *SQLiteRepository) ListPersonalRecords(
 	userID string,
 ) ([]PersonalRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, exercise_id, workout_id,
+		SELECT id, user_id, exercise_id, activity_id,
 		       weight, reps, unit, achieved_at,
 		       created_at, updated_at
 		FROM personal_records
@@ -256,7 +257,7 @@ func (r *SQLiteRepository) ListPersonalRecords(
 }
 
 // ListPersonalRecordEventsByWorkouts returns every event whose
-// workout_id is in the given slice. Empty input → empty result. Used
+// activity_id (workout id) is in the given slice. Empty input → empty result. Used
 // by the workout list endpoint to bulk-fetch PR events for the
 // workouts on a page in a single query.
 func (r *SQLiteRepository) ListPersonalRecordEventsByWorkouts(
@@ -273,12 +274,12 @@ func (r *SQLiteRepository) ListPersonalRecordEventsByWorkouts(
 		args[i] = w
 	}
 	query := `
-		SELECT id, user_id, exercise_id, workout_id,
+		SELECT id, user_id, exercise_id, activity_id,
 		       weight, reps, unit,
 		       previous_weight, previous_reps, previous_unit,
 		       achieved_at, created_at
 		FROM personal_record_events
-		WHERE workout_id IN (` + placeholders + `)
+		WHERE activity_id IN (` + placeholders + `)
 		ORDER BY achieved_at DESC
 	`
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -337,7 +338,7 @@ func (r *SQLiteRepository) GetPersonalRecordEventsByIDs(
 		args[i] = id
 	}
 	query := `
-		SELECT id, user_id, exercise_id, workout_id,
+		SELECT id, user_id, exercise_id, activity_id,
 		       weight, reps, unit,
 		       previous_weight, previous_reps, previous_unit,
 		       achieved_at, created_at
@@ -403,9 +404,9 @@ func (r *SQLiteRepository) BackfillPersonalRecords(ctx context.Context) error {
 	// logged set across non-deleted workouts. Recompute each.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT DISTINCT w.user_id, we.exercise_id
-		FROM workouts w
-		INNER JOIN workout_exercises we ON we.workout_id = w.id
-		WHERE w.deleted_at IS NULL
+		FROM activities w
+		INNER JOIN activity_exercises we ON we.activity_id = w.id
+		WHERE w.activity_type = 'strength_training' AND w.deleted_at IS NULL
 	`)
 	if err != nil {
 		return err

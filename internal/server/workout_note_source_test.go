@@ -45,11 +45,11 @@ func seedWorkout(t *testing.T, d *sql.DB, id, userID, note string, updatedAt tim
 	} else {
 		notesArg = note
 	}
-	mustExec(t, d, `INSERT INTO workouts (id, user_id, name, performed_at, notes, created_at, updated_at)
-		VALUES (?, ?, 'W', ?, ?, ?, ?)`, id, userID, updatedAt, notesArg, updatedAt, updatedAt)
+	mustExec(t, d, `INSERT INTO activities (id, user_id, activity_type, ingest_source, name, start_time, notes, created_at, updated_at)
+		VALUES (?, ?, 'strength_training', 'manual', 'W', ?, ?, ?, ?)`, id, userID, updatedAt, notesArg, updatedAt, updatedAt)
 }
 
-// seedWorkoutExercise inserts a workout_exercises row (with an optional note).
+// seedWorkoutExercise inserts an activity_exercises row (with an optional note).
 func seedWorkoutExercise(t *testing.T, d *sql.DB, workoutID, exerciseID, note string, order int) {
 	t.Helper()
 	var notesArg any
@@ -58,13 +58,13 @@ func seedWorkoutExercise(t *testing.T, d *sql.DB, workoutID, exerciseID, note st
 	} else {
 		notesArg = note
 	}
-	mustExec(t, d, `INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, notes)
+	mustExec(t, d, `INSERT INTO activity_exercises (activity_id, exercise_id, exercise_order, notes)
 		VALUES (?, ?, ?, ?)`, workoutID, exerciseID, order, notesArg)
 }
 
 func softDeleteWorkout(t *testing.T, d *sql.DB, id string, at time.Time) {
 	t.Helper()
-	mustExec(t, d, `UPDATE workouts SET deleted_at = ? WHERE id = ?`, at, id)
+	mustExec(t, d, `UPDATE activities SET deleted_at = ? WHERE id = ?`, at, id)
 }
 
 func TestWorkoutNoteSource_PendingUnits(t *testing.T) {
@@ -207,7 +207,7 @@ func TestWorkoutNoteSource_MarkDistilled(t *testing.T) {
 
 	var marked sql.NullTime
 	if err := database.QueryRowContext(ctx,
-		`SELECT memory_distilled_at FROM workouts WHERE id = 'w1'`).Scan(&marked); err != nil {
+		`SELECT memory_distilled_at FROM activities WHERE id = 'w1'`).Scan(&marked); err != nil {
 		t.Fatalf("read memory_distilled_at: %v", err)
 	}
 	if !marked.Valid {

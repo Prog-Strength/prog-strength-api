@@ -16,6 +16,13 @@ import (
 var _ Repository = (*SQLiteRepository)(nil)
 
 // SQLiteRepository is a SQLite-backed implementation of Repository.
+//
+// Since migration 042 a workout is a strength_training row in the shared
+// activities base table (start_time + duration_seconds instead of
+// performed_at + ended_at) with activity_exercises/sets children. The Workout
+// model is unchanged: EndedAt is derived on read as start_time +
+// duration_seconds, and ActivityID is the row's own id when a TCX enrichment
+// (tcx_s3_key) is attached.
 type SQLiteRepository struct {
 	db  *sql.DB
 	now func() time.Time
@@ -26,6 +33,41 @@ func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
 		db:  db,
 		now: time.Now,
 	}
+}
+
+// workoutColumns is the canonical select list for a workout's base row.
+// name/notes are stored as NULL when empty (NULLIF on write) and read back as
+// "" so the Workout model keeps its plain-string fields. The CASE derives
+// ActivityID: the workout's own id when a TCX enrichment is attached.
+const workoutColumns = `
+	id, user_id, COALESCE(name, ''), start_time, duration_seconds, COALESCE(notes, ''),
+	CASE WHEN tcx_s3_key IS NOT NULL THEN id END,
+	created_at, updated_at, deleted_at`
+
+// durationSecondsFromEnd converts the (performedAt, endedAt) pair into the
+// stored duration_seconds: nil when the workout has no end time.
+func durationSecondsFromEnd(performedAt time.Time, endedAt *time.Time) *int64 {
+	if endedAt == nil {
+		return nil
+	}
+	d := int64(endedAt.Sub(performedAt).Round(time.Second) / time.Second)
+	return &d
+}
+
+// scanWorkoutRow reads one base row into a Workout, deriving EndedAt from
+// start_time + duration_seconds.
+func scanWorkoutRow(s interface{ Scan(...any) error }) (*Workout, error) {
+	var w Workout
+	var dur sql.NullInt64
+	if err := s.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &dur, &w.Notes,
+		&w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
+		return nil, err
+	}
+	if dur.Valid {
+		e := w.PerformedAt.Add(time.Duration(dur.Int64) * time.Second)
+		w.EndedAt = &e
+	}
+	return &w, nil
 }
 
 func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
@@ -44,44 +86,21 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 	w.CreatedAt = now
 	w.UpdatedAt = now
 
-	// Insert workout.
+	// Insert the workout's base row. A manually logged lift has no source
+	// file, so ingest_source is 'manual' and the provenance columns stay NULL.
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO workouts (id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, w.ID, w.UserID, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.ActivityID, w.CreatedAt, w.UpdatedAt)
+		INSERT INTO activities (
+			id, user_id, activity_type, start_time, duration_seconds,
+			name, notes, ingest_source, created_at, updated_at
+		) VALUES (?, ?, 'strength_training', ?, ?, NULLIF(?, ''), NULLIF(?, ''), 'manual', ?, ?)
+	`, w.ID, w.UserID, w.PerformedAt, durationSecondsFromEnd(w.PerformedAt, w.EndedAt),
+		w.Name, w.Notes, w.CreatedAt, w.UpdatedAt)
 	if err != nil {
 		return err
 	}
 
-	// Insert workout exercises and sets.
-	for i := range w.Exercises {
-		we := &w.Exercises[i]
-
-		// Insert workout exercise.
-		result, err := tx.ExecContext(ctx, `
-			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, superset_group, notes)
-			VALUES (?, ?, ?, ?, ?)
-		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
-		if err != nil {
-			return err
-		}
-
-		workoutExerciseID, err := result.LastInsertId()
-		if err != nil {
-			return err
-		}
-
-		// Insert sets for this workout exercise.
-		for j := range we.Sets {
-			set := &we.Sets[j]
-			_, err := tx.ExecContext(ctx, `
-				INSERT INTO sets (workout_exercise_id, reps, weight, unit, set_order)
-				VALUES (?, ?, ?, ?, ?)
-			`, workoutExerciseID, set.Reps, set.Weight, set.Unit, j)
-			if err != nil {
-				return err
-			}
-		}
+	if err := insertWorkoutExercisesTx(ctx, tx, w); err != nil {
+		return err
 	}
 
 	// Derived 1RM history. AggregateOneRepMax is pure, so the same call
@@ -104,14 +123,45 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 	return tx.Commit()
 }
 
-func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, error) {
-	var w Workout
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
-		FROM workouts
-		WHERE id = ? AND deleted_at IS NULL
-	`, id).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
+// insertWorkoutExercisesTx writes w's exercises and sets. Shared by Create and
+// Update (which deletes the old children first).
+func insertWorkoutExercisesTx(ctx context.Context, tx *sql.Tx, w *Workout) error {
+	for i := range w.Exercises {
+		we := &w.Exercises[i]
 
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO activity_exercises (activity_id, exercise_id, exercise_order, superset_group, notes)
+			VALUES (?, ?, ?, ?, ?)
+		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
+		if err != nil {
+			return err
+		}
+
+		activityExerciseID, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+
+		for j := range we.Sets {
+			set := &we.Sets[j]
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO sets (activity_exercise_id, reps, weight, unit, set_order)
+				VALUES (?, ?, ?, ?, ?)
+			`, activityExerciseID, set.Reps, set.Weight, set.Unit, j); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) GetByID(ctx context.Context, workoutID string) (*Workout, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+workoutColumns+`
+		FROM activities
+		WHERE id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
+	`, workoutID)
+	w, err := scanWorkoutRow(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -128,29 +178,29 @@ func (r *SQLiteRepository) GetByID(ctx context.Context, id string) (*Workout, er
 		return nil, err
 	}
 	w.Exercises = byWorkout[w.ID]
-	return &w, nil
+	return w, nil
 }
 
 func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts ListOptions) ([]Workout, error) {
 	// Build query with filters.
 	query := `
-		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
-		FROM workouts
-		WHERE user_id = ? AND deleted_at IS NULL
+		SELECT ` + workoutColumns + `
+		FROM activities
+		WHERE user_id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
 	`
 	args := []interface{}{userID}
 
 	if opts.Since != nil {
-		query += " AND performed_at >= ?"
+		query += " AND start_time >= ?"
 		args = append(args, *opts.Since)
 	}
 	if opts.Until != nil {
-		query += " AND performed_at <= ?"
+		query += " AND start_time <= ?"
 		args = append(args, *opts.Until)
 	}
 
-	// Order by performed_at descending (most recent first).
-	query += " ORDER BY performed_at DESC"
+	// Order by start_time descending (most recent first).
+	query += " ORDER BY start_time DESC"
 
 	// Apply pagination.
 	limit := opts.Limit
@@ -163,11 +213,9 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	// Three SQL statements total per call, regardless of page size or
 	// per-workout depth:
 	//   1. SELECT workouts (this query)
-	//   2. SELECT workout_exercises WHERE workout_id IN (...)
-	//   3. SELECT sets WHERE workout_exercise_id IN (...)
-	// The previous implementation issued 1 + N + N*M statements (a
-	// nested query per workout, then per workout_exercise). See
-	// sows/workout-list-batched-hydration.md.
+	//   2. SELECT activity_exercises WHERE activity_id IN (...)
+	//   3. SELECT sets WHERE activity_exercise_id IN (...)
+	// See sows/workout-list-batched-hydration.md.
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -175,11 +223,11 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	defer rows.Close()
 	var workouts []Workout
 	for rows.Next() {
-		var w Workout
-		if err = rows.Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt); err != nil {
-			return nil, err
+		w, scanErr := scanWorkoutRow(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
-		workouts = append(workouts, w)
+		workouts = append(workouts, *w)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
@@ -210,16 +258,16 @@ func (r *SQLiteRepository) CountByUser(
 ) (int, error) {
 	query := `
 		SELECT COUNT(*)
-		FROM workouts
-		WHERE user_id = ? AND deleted_at IS NULL
+		FROM activities
+		WHERE user_id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
 	`
 	args := []interface{}{userID}
 	if opts.Since != nil {
-		query += " AND performed_at >= ?"
+		query += " AND start_time >= ?"
 		args = append(args, *opts.Since)
 	}
 	if opts.Until != nil {
-		query += " AND performed_at <= ?"
+		query += " AND start_time <= ?"
 		args = append(args, *opts.Until)
 	}
 	var n int
@@ -244,8 +292,8 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	var createdAt time.Time
 	err = tx.QueryRowContext(ctx, `
 		SELECT created_at
-		FROM workouts
-		WHERE id = ? AND deleted_at IS NULL
+		FROM activities
+		WHERE id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
 	`, w.ID).Scan(&createdAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -257,12 +305,13 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	w.CreatedAt = createdAt
 	w.UpdatedAt = r.now().UTC()
 
-	// Update workout.
+	// Update the base row. Only the workout-owned columns are touched — the
+	// TCX enrichment columns (vitals, provenance) survive an edit untouched.
 	result, err := tx.ExecContext(ctx, `
-		UPDATE workouts
-		SET name = ?, performed_at = ?, ended_at = ?, notes = ?, updated_at = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`, w.Name, w.PerformedAt, w.EndedAt, w.Notes, w.UpdatedAt, w.ID)
+		UPDATE activities
+		SET name = NULLIF(?, ''), start_time = ?, duration_seconds = ?, notes = NULLIF(?, ''), updated_at = ?
+		WHERE id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
+	`, w.Name, w.PerformedAt, durationSecondsFromEnd(w.PerformedAt, w.EndedAt), w.Notes, w.UpdatedAt, w.ID)
 	if err != nil {
 		return err
 	}
@@ -275,42 +324,16 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 		return ErrNotFound
 	}
 
-	// Delete existing workout exercises and sets (CASCADE handles sets).
+	// Delete existing exercises and sets (CASCADE handles sets).
 	_, err = tx.ExecContext(ctx, `
-		DELETE FROM workout_exercises WHERE workout_id = ?
+		DELETE FROM activity_exercises WHERE activity_id = ?
 	`, w.ID)
 	if err != nil {
 		return err
 	}
 
-	// Re-insert workout exercises and sets.
-	for i := range w.Exercises {
-		we := &w.Exercises[i]
-
-		var weResult sql.Result
-		weResult, err = tx.ExecContext(ctx, `
-			INSERT INTO workout_exercises (workout_id, exercise_id, exercise_order, superset_group, notes)
-			VALUES (?, ?, ?, ?, ?)
-		`, w.ID, we.ExerciseID, we.Order, we.SupersetGroup, we.Notes)
-		if err != nil {
-			return err
-		}
-
-		var workoutExerciseID int64
-		workoutExerciseID, err = weResult.LastInsertId()
-		if err != nil {
-			return err
-		}
-
-		for j := range we.Sets {
-			set := &we.Sets[j]
-			if _, err = tx.ExecContext(ctx, `
-				INSERT INTO sets (workout_exercise_id, reps, weight, unit, set_order)
-				VALUES (?, ?, ?, ?, ?)
-			`, workoutExerciseID, set.Reps, set.Weight, set.Unit, j); err != nil {
-				return err
-			}
-		}
+	if err = insertWorkoutExercisesTx(ctx, tx, w); err != nil {
+		return err
 	}
 
 	// Replace derived 1RM history rows for this workout. Update is full-
@@ -318,7 +341,7 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	// regenerated from the new shape; delete-then-insert is simpler than
 	// trying to compute a diff.
 	if _, err = tx.ExecContext(ctx,
-		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, w.ID); err != nil {
+		`DELETE FROM exercise_one_rep_max_history WHERE activity_id = ?`, w.ID); err != nil {
 		return err
 	}
 	now := r.now().UTC()
@@ -359,7 +382,7 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	// recompute affected PRs after the workout is gone.
 	var userID string
 	err = tx.QueryRowContext(ctx,
-		`SELECT user_id FROM workouts WHERE id = ? AND deleted_at IS NULL`,
+		`SELECT user_id FROM activities WHERE id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL`,
 		workoutID).Scan(&userID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -376,9 +399,9 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	}
 
 	result, err := tx.ExecContext(ctx, `
-		UPDATE workouts
+		UPDATE activities
 		SET deleted_at = ?, updated_at = ?
-		WHERE id = ? AND deleted_at IS NULL
+		WHERE id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
 	`, now, now, workoutID)
 	if err != nil {
 		return err
@@ -394,13 +417,13 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 
 	// History rows are derived and not soft-deleted — hard delete keeps
 	// baseline queries from having to filter by workout state at read
-	// time. Safe because the table is fully rebuildable from `workouts`.
+	// time. Safe because the table is fully rebuildable from workouts.
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, workoutID); err != nil {
+		`DELETE FROM exercise_one_rep_max_history WHERE activity_id = ?`, workoutID); err != nil {
 		return err
 	}
 
-	// PR recompute. The recompute itself reads with `w.deleted_at IS
+	// PR recompute. The recompute itself reads with `deleted_at IS
 	// NULL`, so the soft-deleted workout is correctly excluded.
 	for exerciseID := range affected {
 		if err := r.recomputePersonalRecordTx(ctx, tx, userID, exerciseID, now); err != nil {
@@ -411,111 +434,14 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	return tx.Commit()
 }
 
-// AttachActivity links a live workout to an activity (its Garmin TCX
-// enrichment) by setting activity_id and bumping updated_at. It never
-// touches performed_at/ended_at. Returns ErrNotFound when no live workout
-// matches (id + user). The partial unique index idx_workouts_activity
-// guarantees one live workout per activity; a violation there surfaces as a
-// raw error (it cannot happen in the normal flow, where the activity is
-// freshly created for this attach).
-func (r *SQLiteRepository) AttachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error {
-	result, err := r.db.ExecContext(ctx, `
-		UPDATE workouts
-		SET activity_id = ?, updated_at = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, activityID, now.UTC(), workoutID, userID)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
-// DetachActivity clears a live workout's activity_id and soft-deletes the
-// linked activity, both in one transaction so the link and the activity's
-// liveness flip together (a half-applied detach would either orphan a live
-// activity — blocking re-attach via the dedup index — or strand a workout
-// pointing at a deleted activity). The activity's trackpoints and archived
-// S3 object are intentionally retained, matching run soft-delete. This is
-// the one place the workout repo writes the activities table directly; it's
-// justified by the atomicity the SOW requires and both tables sharing this
-// repo's *sql.DB. Returns ErrNotFound when no live workout matches.
-func (r *SQLiteRepository) DetachActivity(ctx context.Context, userID, workoutID, activityID string, now time.Time) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	ts := now.UTC()
-	result, err := tx.ExecContext(ctx, `
-		UPDATE workouts
-		SET activity_id = NULL, updated_at = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, ts, workoutID, userID)
-	if err != nil {
-		return err
-	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
-		return ErrNotFound
-	}
-
-	// Soft-delete the linked activity. Scoped to the user and to a still-live
-	// row so a double detach is a no-op on the activity side.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE activities
-		SET deleted_at = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, ts, activityID, userID); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-// GetByActivityID returns the live workout linked to activityID (at most one,
-// per idx_workouts_activity), hydrated with its exercises. Returns ErrNotFound
-// when no live workout points at the activity. Used to resolve the "kind"
-// (run vs workout) and target id of a duplicate-upload 409.
-func (r *SQLiteRepository) GetByActivityID(ctx context.Context, userID, activityID string) (*Workout, error) {
-	var w Workout
-	err := r.db.QueryRowContext(ctx, `
-		SELECT id, user_id, name, performed_at, ended_at, notes, activity_id, created_at, updated_at, deleted_at
-		FROM workouts
-		WHERE activity_id = ? AND user_id = ? AND deleted_at IS NULL
-	`, activityID, userID).Scan(&w.ID, &w.UserID, &w.Name, &w.PerformedAt, &w.EndedAt, &w.Notes, &w.ActivityID, &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	byWorkout, err := r.loadWorkoutExercisesForWorkoutIDs(ctx, []string{w.ID})
-	if err != nil {
-		return nil, err
-	}
-	w.Exercises = byWorkout[w.ID]
-	return &w, nil
-}
-
-// loadWorkoutExercisesForWorkoutIDs hydrates every workout_exercise +
+// loadWorkoutExercisesForWorkoutIDs hydrates every activity_exercise +
 // its sets for the given workout IDs using two batched IN-clause
-// queries. Returns a map keyed by workout_id so callers attach in
+// queries. Returns a map keyed by activity_id so callers attach in
 // O(N) time. Empty input → empty result.
 //
 // Replaces the prior pattern of one query per workout for the exercises
-// + one query per workout_exercise for the sets, which produced
-// 1 + N + N*M statements per page. See
+// + one query per exercise for the sets, which produced 1 + N + N*M
+// statements per page. See
 // prog-strength-docs/sows/workout-list-batched-hydration.md.
 //
 // SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 32,766 on 3.32+ (999
@@ -543,10 +469,10 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 		weArgs[i] = id
 	}
 	weQuery := `
-		SELECT id, workout_id, exercise_id, exercise_order, superset_group, notes
-		FROM workout_exercises
-		WHERE workout_id IN (` + placeholders(len(workoutIDs)) + `)
-		ORDER BY workout_id, exercise_order
+		SELECT id, activity_id, exercise_id, exercise_order, superset_group, notes
+		FROM activity_exercises
+		WHERE activity_id IN (` + placeholders(len(workoutIDs)) + `)
+		ORDER BY activity_id, exercise_order
 	`
 	rows, err := r.db.QueryContext(ctx, weQuery, weArgs...)
 	if err != nil {
@@ -578,18 +504,18 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 		return byWorkout, nil
 	}
 
-	// Step 2: batched sets query for every workout_exercise we just
-	// loaded. set_order ASC within each workout_exercise mirrors the
+	// Step 2: batched sets query for every activity_exercise we just
+	// loaded. set_order ASC within each activity_exercise mirrors the
 	// old getSets ordering.
 	setArgs := make([]any, len(staged))
 	for i, s := range staged {
 		setArgs[i] = s.weID
 	}
 	setRows, err := r.db.QueryContext(ctx, `
-		SELECT workout_exercise_id, reps, weight, unit
+		SELECT activity_exercise_id, reps, weight, unit
 		FROM sets
-		WHERE workout_exercise_id IN (`+placeholders(len(staged))+`)
-		ORDER BY workout_exercise_id, set_order
+		WHERE activity_exercise_id IN (`+placeholders(len(staged))+`)
+		ORDER BY activity_exercise_id, set_order
 	`, setArgs...)
 	if err != nil {
 		return nil, err
@@ -611,7 +537,7 @@ func (r *SQLiteRepository) loadWorkoutExercisesForWorkoutIDs(
 	}
 
 	// Step 3: assemble. Slice append preserves the SQL ORDER BY
-	// (workout_id, exercise_order), so each workout's bucket lands in
+	// (activity_id, exercise_order), so each workout's bucket lands in
 	// authored order without an extra sort pass.
 	for _, row := range staged {
 		row.we.Sets = setsByWE[row.weID]
@@ -641,7 +567,7 @@ func (r *SQLiteRepository) writeOneRepMaxHistoryTx(ctx context.Context, tx *sql.
 		e.UpdatedAt = now
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO exercise_one_rep_max_history (
-				id, user_id, workout_id, exercise_id, performed_at,
+				id, user_id, activity_id, exercise_id, performed_at,
 				min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
 				set_count, unit, created_at, updated_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -660,7 +586,7 @@ func (r *SQLiteRepository) ListOneRepMaxHistory(
 	since, until *time.Time,
 ) ([]OneRepMaxEntry, error) {
 	query := `
-		SELECT id, user_id, workout_id, exercise_id, performed_at,
+		SELECT id, user_id, activity_id, exercise_id, performed_at,
 		       min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
 		       set_count, unit, created_at, updated_at
 		FROM exercise_one_rep_max_history
@@ -743,7 +669,7 @@ func (r *SQLiteRepository) BackfillOneRepMaxHistory(ctx context.Context) error {
 			e.UpdatedAt = now
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO exercise_one_rep_max_history (
-					id, user_id, workout_id, exercise_id, performed_at,
+					id, user_id, activity_id, exercise_id, performed_at,
 					min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
 					set_count, unit, created_at, updated_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -767,9 +693,9 @@ func (r *SQLiteRepository) BackfillOneRepMaxHistory(ctx context.Context) error {
 // reads go through ListByUser.
 func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Workout, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, performed_at
-		FROM workouts
-		WHERE deleted_at IS NULL
+		SELECT id, user_id, start_time
+		FROM activities
+		WHERE activity_type = 'strength_training' AND deleted_at IS NULL
 	`)
 	if err != nil {
 		return nil, err
@@ -805,15 +731,17 @@ func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Wo
 	return workouts, nil
 }
 
-// ListCompletedSessionsSince returns the (performed_at, ended_at) projection
-// for the user's live workouts that have an ended_at at/after `since`. End-less
-// workouts are filtered out in SQL (ended_at IS NOT NULL) — their duration is
-// unknown. Ordering is unspecified; the handler buckets into local weeks.
+// ListCompletedSessionsSince returns the (start, end) projection for the
+// user's live workouts that have a duration at/after `since`. Duration-less
+// workouts are filtered out in SQL (duration_seconds IS NOT NULL) — their
+// session length is unknown. Ordering is unspecified; the handler buckets
+// into local weeks.
 func (r *SQLiteRepository) ListCompletedSessionsSince(ctx context.Context, userID string, since time.Time) ([]SessionDuration, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT performed_at, ended_at
-		FROM workouts
-		WHERE user_id = ? AND deleted_at IS NULL AND ended_at IS NOT NULL AND performed_at >= ?
+		SELECT start_time, duration_seconds
+		FROM activities
+		WHERE user_id = ? AND activity_type = 'strength_training' AND deleted_at IS NULL
+		  AND duration_seconds IS NOT NULL AND start_time >= ?
 	`, userID, since)
 	if err != nil {
 		return nil, err
@@ -823,9 +751,11 @@ func (r *SQLiteRepository) ListCompletedSessionsSince(ctx context.Context, userI
 	var out []SessionDuration
 	for rows.Next() {
 		var sd SessionDuration
-		if err := rows.Scan(&sd.PerformedAt, &sd.EndedAt); err != nil {
+		var dur int64
+		if err := rows.Scan(&sd.PerformedAt, &dur); err != nil {
 			return nil, err
 		}
+		sd.EndedAt = sd.PerformedAt.Add(time.Duration(dur) * time.Second)
 		out = append(out, sd)
 	}
 	if err := rows.Err(); err != nil {

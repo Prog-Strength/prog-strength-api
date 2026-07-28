@@ -141,10 +141,11 @@ func (h *Handler) detailDTO(ctx context.Context, w *Workout) (workoutWithEvents,
 // --- handlers ----------------------------------------------------------
 
 // importFromTCX handles POST /workouts/imports — the "Log from TCX" path. It
-// mints an EMPTY workout from a Garmin strength TCX: the file becomes a
-// strength_training activity, and a zero-exercise workout is created pointing
-// at it with performed_at = the TCX start and ended_at = start + duration.
-// The user fills in exercises afterward on the detail page.
+// mints an EMPTY workout from a Garmin strength TCX: a zero-exercise workout
+// is created with performed_at = the TCX start and ended_at = start +
+// duration, and the file's HR/effort layer is folded onto that workout's own
+// base row (single-row model — no separate enrichment activity). The user
+// fills in exercises afterward on the detail page.
 func (h *Handler) importFromTCX(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -158,42 +159,55 @@ func (h *Handler) importFromTCX(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	a, ok := h.ingestTCXActivity(w, r, userID, "", file)
+	a, data, ok := h.parseStrengthTCX(w, r, userID, "", file)
 	if !ok {
 		return
 	}
 
-	activityID := a.ID
+	// Dedup pre-check: the same file already in the log is a 409 before any
+	// workout row is minted. The unique index backstops the race below.
+	if existing, err := h.activityRepo.GetBySourceActivityID(r.Context(), userID, activity.IngestManualTCX, a.SourceActivityID); err == nil {
+		h.respondDuplicate(w, r, userID, "", *existing)
+		return
+	}
+
 	endedAt := a.StartTime.Add(time.Duration(a.DurationSeconds) * time.Second)
 	workout := &Workout{
 		UserID:      userID,
 		Name:        fmt.Sprintf("Workout - %s", a.StartTime.Format("Jan 02, 2006")),
 		PerformedAt: a.StartTime,
 		EndedAt:     &endedAt,
-		ActivityID:  &activityID,
 		Exercises:   []WorkoutExercise{},
 	}
 	if err := h.repo.Create(r.Context(), workout); err != nil {
-		// The activity already committed in its own transaction; clean it up
-		// best-effort so a failed import doesn't leave an orphan that blocks a
-		// re-upload via the dedup index. Ignore the cleanup error — the 500 is
-		// the load-bearing signal.
-		_ = h.activityRepo.SoftDelete(r.Context(), userID, a.ID)
 		httpresp.ServerError(w, r.Context(), "create workout from tcx", err)
 		return
 	}
 
+	if err := h.activityRepo.AttachStrengthEnrichment(r.Context(), userID, workout.ID, &a, data); err != nil {
+		// The workout already committed; clean it up best-effort so a failed
+		// import doesn't leave an empty orphan. Ignore the cleanup error —
+		// the error response is the load-bearing signal.
+		_ = h.repo.Delete(r.Context(), workout.ID)
+		h.respondEnrichmentError(w, r, userID, workout.ID, a, err)
+		return
+	}
+
 	// Best-effort: a new workout publishes its timeline post and fires the
-	// workout plan matcher, exactly like any other create. The activity plan
-	// matcher is deliberately NOT fired — the workout is the reconciliation
-	// signal, and double-firing would double-count the planned session.
+	// workout plan matcher, exactly like any other create.
 	h.publishWorkoutPosts(r.Context(), workout)
 	h.matchSession(r.Context(), workout.UserID, SessionRef{SessionID: workout.ID, StartUTC: workout.PerformedAt})
 
 	log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s source_activity_id=%s outcome=imported",
 		requestid.FromContext(r.Context()), userID, workout.ID, a.SourceActivityID)
 
-	dto, err := h.detailDTO(r.Context(), workout)
+	// Reload so the DTO carries the enrichment-derived fields (activity_id).
+	created, err := h.repo.GetByID(r.Context(), workout.ID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "reload workout", err)
+		return
+	}
+	dto, err := h.detailDTO(r.Context(), created)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "build workout dto", err)
 		return
@@ -203,8 +217,9 @@ func (h *Handler) importFromTCX(w http.ResponseWriter, r *http.Request) {
 
 // attachTCX handles POST /workouts/{id}/tcx — the retroactive attach. It
 // loads the workout, rejects a second file (409 workout_tcx_exists), then
-// ingests the TCX as a strength_training activity and points the workout at
-// it. performed_at/ended_at are left untouched (the user logged those).
+// folds the TCX's HR/effort layer onto the workout's own base row.
+// performed_at is left untouched (the user logged it); an end-less workout
+// adopts the TCX session duration.
 func (h *Handler) attachTCX(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -233,21 +248,18 @@ func (h *Handler) attachTCX(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	a, ok := h.ingestTCXActivity(w, r, userID, workoutID, file)
+	a, data, ok := h.parseStrengthTCX(w, r, userID, workoutID, file)
 	if !ok {
 		return
 	}
 
-	if err := h.repo.AttachActivity(r.Context(), userID, workoutID, a.ID, time.Now().UTC()); err != nil {
-		// The activity committed in its own transaction; if linking it to the
-		// workout fails (e.g. the workout was deleted in a race), soft-delete
-		// it best-effort so it doesn't orphan and block a re-attach.
-		_ = h.activityRepo.SoftDelete(r.Context(), userID, a.ID)
-		if errors.Is(err, ErrNotFound) {
+	if err := h.activityRepo.AttachStrengthEnrichment(r.Context(), userID, workoutID, &a, data); err != nil {
+		if errors.Is(err, activity.ErrNotFound) {
+			// Race: deleted between our GetByID and the attach.
 			httpresp.Error(w, http.StatusNotFound, "workout not found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "attach activity", err)
+		h.respondEnrichmentError(w, r, userID, workoutID, a, err)
 		return
 	}
 
@@ -268,10 +280,10 @@ func (h *Handler) attachTCX(w http.ResponseWriter, r *http.Request) {
 }
 
 // detachTCX handles DELETE /workouts/{id}/tcx. It clears the workout's
-// activity_id and soft-deletes the linked activity (retaining its trackpoints
-// and archived file). Idempotent: a workout with no TCX attached returns 204
-// without touching anything. It never fires either plan matcher — the workout
-// itself is unchanged.
+// enrichment columns and deletes its HR trackpoints (retaining the archived
+// file in S3). Idempotent: a workout with no TCX attached returns 204 without
+// touching anything. It never fires either plan matcher — the workout itself
+// is unchanged.
 func (h *Handler) detachTCX(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -294,17 +306,17 @@ func (h *Handler) detachTCX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.repo.DetachActivity(r.Context(), userID, workoutID, *existing.ActivityID, time.Now().UTC()); err != nil {
-		if errors.Is(err, ErrNotFound) {
+	if err := h.activityRepo.DetachStrengthEnrichment(r.Context(), userID, workoutID); err != nil {
+		if errors.Is(err, activity.ErrNotFound) {
 			httpresp.Error(w, http.StatusNotFound, "workout not found")
 			return
 		}
-		httpresp.ServerError(w, r.Context(), "detach activity", err)
+		httpresp.ServerError(w, r.Context(), "detach enrichment", err)
 		return
 	}
 
-	log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s source_activity_id=%s outcome=detached",
-		requestid.FromContext(r.Context()), userID, workoutID, *existing.ActivityID)
+	log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s outcome=detached",
+		requestid.FromContext(r.Context()), userID, workoutID)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -354,60 +366,68 @@ func readTCXUpload(w http.ResponseWriter, r *http.Request) (multipart.File, bool
 	return file, true
 }
 
-// ingestTCXActivity runs the strength-TCX ingest and maps its error modes to
-// HTTP responses, writing the response itself and returning ok=false when the
-// ingest fails. On success it returns the persisted activity. workoutID is
+// parseStrengthTCX parses + validates the upload into an unsaved enrichment
+// summary, mapping the parse/validation error modes to HTTP responses. It
+// writes the response itself and returns ok=false on failure. workoutID is
 // "" for the create-from-TCX path (no workout exists yet) and used only for
 // the structured log line.
-func (h *Handler) ingestTCXActivity(w http.ResponseWriter, r *http.Request, userID, workoutID string, file multipart.File) (activity.Activity, bool) {
+func (h *Handler) parseStrengthTCX(w http.ResponseWriter, r *http.Request, userID, workoutID string, file multipart.File) (activity.Activity, []byte, bool) {
+	a, data, err := activity.ParseStrengthTCX(userID, file)
+	if err == nil {
+		return a, data, true
+	}
+	var verr *activity.ValidationError
+	if errors.As(err, &verr) {
+		log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s outcome=invalid slug=%s",
+			requestid.FromContext(r.Context()), userID, workoutID, verr.Slug)
+		httpresp.ErrorWithCode(w, http.StatusBadRequest, verr.Msg, verr.Slug)
+		return activity.Activity{}, nil, false
+	}
+	var mbErr *http.MaxBytesError
+	if errors.As(err, &mbErr) {
+		httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "tcx file exceeds 10 MB limit", "file_too_large")
+		return activity.Activity{}, nil, false
+	}
+	httpresp.ServerError(w, r.Context(), "parse strength tcx", err)
+	return activity.Activity{}, nil, false
+}
+
+// respondEnrichmentError maps an AttachStrengthEnrichment failure to the HTTP
+// response: duplicate_activity 409 (resolving where the file already lives),
+// storage_failed 500, or a generic 500.
+func (h *Handler) respondEnrichmentError(w http.ResponseWriter, r *http.Request, userID, workoutID string, a activity.Activity, err error) {
 	rid := requestid.FromContext(r.Context())
-	a, err := activity.IngestStrengthTCX(r.Context(), h.activityRepo, userID, file)
 	switch {
-	case err == nil:
-		return a, true
 	case errors.Is(err, activity.ErrDuplicate):
-		existing := h.resolveDuplicate(r.Context(), userID, a)
+		if existing, lookupErr := h.activityRepo.GetBySourceActivityID(r.Context(), userID, activity.IngestManualTCX, a.SourceActivityID); lookupErr == nil {
+			h.respondDuplicate(w, r, userID, workoutID, *existing)
+			return
+		}
 		log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s source_activity_id=%s outcome=duplicate",
 			rid, userID, workoutID, a.SourceActivityID)
-		httpresp.ErrorWithCodeData(w, http.StatusConflict, "this file is already in your log", "duplicate_activity",
-			map[string]any{"existing": existing})
-		return activity.Activity{}, false
+		httpresp.ErrorWithCode(w, http.StatusConflict, "this file is already in your log", "duplicate_activity")
 	case errors.Is(err, activity.ErrStorage):
 		log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s outcome=storage_failed err=%v",
 			rid, userID, workoutID, err)
 		httpresp.ErrorWithCode(w, http.StatusInternalServerError, "failed to archive tcx file", "storage_failed")
-		return activity.Activity{}, false
 	default:
-		var verr *activity.ValidationError
-		if errors.As(err, &verr) {
-			log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s outcome=invalid slug=%s",
-				rid, userID, workoutID, verr.Slug)
-			httpresp.ErrorWithCode(w, http.StatusBadRequest, verr.Msg, verr.Slug)
-			return activity.Activity{}, false
-		}
-		var mbErr *http.MaxBytesError
-		if errors.As(err, &mbErr) {
-			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "tcx file exceeds 10 MB limit", "file_too_large")
-			return activity.Activity{}, false
-		}
-		httpresp.ServerError(w, r.Context(), "ingest strength tcx", err)
-		return activity.Activity{}, false
+		httpresp.ServerError(w, r.Context(), "attach strength enrichment", err)
 	}
 }
 
-// resolveDuplicate builds the { kind, id } pointer for a duplicate_activity
-// 409: where the file already lives. A live strength_training activity that is
-// attached to a live workout resolves to that workout (kind "workout", the
-// WORKOUT id). Anything else — a run uploaded via the run importer, or the
-// anomalous orphaned strength activity with no live workout — resolves to the
-// activity itself (kind "run", the ACTIVITY id), which is a valid id in the
-// activities domain the client can navigate to. We never label an activity id
-// as kind "workout": the client would GET /workouts/{id} and 404.
-func (h *Handler) resolveDuplicate(ctx context.Context, userID string, existing activity.Activity) map[string]any {
+// respondDuplicate writes the duplicate_activity 409 carrying the { kind, id }
+// pointer for where the file already lives. Since the unified model an
+// enriched workout IS the strength_training row, so a strength duplicate
+// resolves directly to kind "workout" with that row's id; anything else (a
+// run uploaded via the run importer) resolves to kind "run" with the activity
+// id the client can navigate to.
+func (h *Handler) respondDuplicate(w http.ResponseWriter, r *http.Request, userID, workoutID string, existing activity.Activity) {
+	kind := "run"
 	if existing.ActivityType == activity.ActivityStrengthTraining {
-		if linked, err := h.repo.GetByActivityID(ctx, userID, existing.ID); err == nil {
-			return map[string]any{"kind": "workout", "id": linked.ID}
-		}
+		kind = "workout"
 	}
-	return map[string]any{"kind": "run", "id": existing.ID}
+	log.Printf("workout tcx: request_id=%s user_id=%s workout_id=%s source_activity_id=%s outcome=duplicate",
+		requestid.FromContext(r.Context()), userID, workoutID, existing.SourceActivityID)
+	httpresp.ErrorWithCodeData(w, http.StatusConflict, "this file is already in your log", "duplicate_activity",
+		map[string]any{"existing": map[string]any{"kind": kind, "id": existing.ID}})
 }

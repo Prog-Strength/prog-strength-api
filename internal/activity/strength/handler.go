@@ -30,11 +30,12 @@ import (
 type Handler struct {
 	repo         Repository
 	exerciseRepo exercise.Repository
-	// activityRepo owns the activities domain that holds a workout's Garmin
-	// TCX enrichment (heart rate, calories, downsampled trackpoints). The
-	// workout-TCX endpoints create/load/soft-delete the linked activity
-	// through it. The cross-package coupling lives here at the HTTP edge,
-	// mirroring exerciseRepo — the workout domain types never import activity.
+	// activityRepo owns the activities base table that holds a workout's
+	// Garmin TCX enrichment (heart rate, calories, downsampled trackpoints)
+	// on the workout's OWN row. The workout-TCX endpoints attach/load/detach
+	// the enrichment through it. The cross-package coupling lives here at the
+	// HTTP edge, mirroring exerciseRepo — the workout domain types never
+	// import activity.
 	activityRepo activity.Repository
 	// publisher pushes completed workouts and the PR breaks they set into
 	// the timeline feed index. Optional and nil-safe: existing handler

@@ -16,7 +16,7 @@ func TestMigrate035_MultiSourceMemory(t *testing.T) {
 	conn := newEmptyDB(t)
 
 	// Pause right before 035 to seed a chat-sourced memory under the OLD schema.
-	applyMigrationsThrough(t, conn, 35, func(t *testing.T, db *sql.DB) {
+	applyMigrationsThrough(t, conn, 41, 35, func(t *testing.T, db *sql.DB) {
 		const now = "2026-06-20T12:00:00Z"
 		if _, err := db.Exec(`INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at, last_message_at) VALUES ('sess-1','u1','',?,?,?)`, now, now, now); err != nil {
 			t.Fatalf("seed chat_sessions: %v", err)

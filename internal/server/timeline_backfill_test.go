@@ -38,24 +38,26 @@ func TestBackfillTimeline(t *testing.T) {
 
 	// Seed sources directly (raw inserts mirror what the live tables hold).
 	// A workout for u1.
-	mustExec(t, database, `INSERT INTO workouts (id, user_id, name, performed_at, created_at, updated_at)
-		VALUES ('w1', 'u1', 'Push', ?, ?, ?)`, now, now, now)
+	mustExec(t, database, `INSERT INTO activities (id, user_id, activity_type, ingest_source, name, start_time, created_at, updated_at)
+		VALUES ('w1', 'u1', 'strength_training', 'manual', 'Push', ?, ?, ?)`, now, now, now)
 	// A running activity for u1, with one best effort.
 	mustExec(t, database, `INSERT INTO activities
 		(id, user_id, activity_type, ingest_source, source_activity_id, start_time,
-		 distance_meters, duration_seconds, tcx_s3_key, created_at)
-		VALUES ('a1', 'u1', 'running', 'manual_tcx', 'src1', ?, 5000, 1500, 'k1', ?)`, now, now)
+		 duration_seconds, tcx_s3_key, created_at, updated_at)
+		VALUES ('a1', 'u1', 'running', 'manual_tcx', 'src1', ?, 1500, 'k1', ?, ?)`, now, now, now)
+	mustExec(t, database, `INSERT INTO activity_run_details (activity_id, distance_meters, raw_distance_meters)
+		VALUES ('a1', 5000, 5000)`)
 	mustExec(t, database, `INSERT INTO activity_best_efforts (activity_id, distance_key, duration_seconds)
 		VALUES ('a1', '5k', 1500)`)
 	// A PR event for u1. exercise_id/workout_id reference seeded rows.
 	mustExec(t, database, `INSERT INTO exercises (id, name, description, created_at, updated_at)
 		VALUES ('bench', 'Bench', '', ?, ?)`, now, now)
 	mustExec(t, database, `INSERT INTO personal_record_events
-		(id, user_id, exercise_id, workout_id, weight, reps, unit, achieved_at, created_at)
+		(id, user_id, exercise_id, activity_id, weight, reps, unit, achieved_at, created_at)
 		VALUES ('pr1', 'u1', 'bench', 'w1', 225, 3, 'lb', ?, ?)`, now, now)
 	// A soft-deleted workout must be skipped.
-	mustExec(t, database, `INSERT INTO workouts (id, user_id, name, performed_at, created_at, updated_at, deleted_at)
-		VALUES ('wdel', 'u1', 'Deleted', ?, ?, ?, ?)`, now, now, now, now)
+	mustExec(t, database, `INSERT INTO activities (id, user_id, activity_type, ingest_source, name, start_time, created_at, updated_at, deleted_at)
+		VALUES ('wdel', 'u1', 'strength_training', 'manual', 'Deleted', ?, ?, ?, ?)`, now, now, now, now)
 
 	repo := timeline.NewSQLiteRepository(database)
 

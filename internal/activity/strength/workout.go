@@ -3,12 +3,14 @@ package strength
 import "time"
 
 // Workout is a single training session performed by a user on a given date,
-// composed of one or more exercises with their sets.
+// composed of one or more exercises with their sets. Since the unified
+// activity model (migration 042) it is stored as a strength_training row in
+// the activities base table plus activity_exercises/sets children.
 //
-// PerformedAt is the start time. EndedAt is optional; when present, session
-// duration is EndedAt.Sub(PerformedAt). Stored as two timestamps rather than
-// (start + duration) so the model is symmetric and either value is queryable
-// directly.
+// PerformedAt is the start time (the row's start_time). EndedAt is derived on
+// read from start_time + duration_seconds (nil when duration is NULL — an
+// end-less lift); on write the repository stores EndedAt − PerformedAt as
+// duration_seconds. The DTO shape (performed_at/ended_at) is unchanged.
 type Workout struct {
 	ID          string            `json:"id"`
 	UserID      string            `json:"user_id"`
@@ -17,12 +19,11 @@ type Workout struct {
 	EndedAt     *time.Time        `json:"ended_at,omitempty"`
 	Notes       string            `json:"notes,omitempty"`
 	Exercises   []WorkoutExercise `json:"exercises"`
-	// ActivityID is a nullable soft reference to the activities row holding
-	// this workout's Garmin TCX enrichment (heart rate, calories). Null when
-	// no TCX is attached. There is no hard FK — the workout and activity
-	// domains stay decoupled, matching how UserID is also un-FK'd. The
-	// activities row carries the per-second HR trackpoints; the workout keeps
-	// owning its exercises and sets.
+	// ActivityID is derived on read, kept for API compatibility through the
+	// shim period: it is the workout's OWN id when a TCX enrichment is
+	// attached (the row's tcx_s3_key is non-NULL) and nil otherwise. The old
+	// dual-row link column is gone — the enrichment lives on this workout's
+	// base row itself, so "the enrichment activity" IS the workout.
 	ActivityID *string    `json:"activity_id"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`

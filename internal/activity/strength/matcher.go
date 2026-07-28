@@ -12,7 +12,7 @@ type SessionRef struct {
 	StartUTC  time.Time
 }
 
-// PlanMatcher is the seam the workout package depends on to best-effort link a
+// PlanMatcher is the seam the strength package depends on to best-effort link a
 // logged lift to the planned workout it completes (and revert on delete).
 // Declared here, implemented in server wiring so this package never imports
 // planned_workout. Best-effort: failures must not affect create or delete.

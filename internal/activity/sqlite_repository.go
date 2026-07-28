@@ -17,14 +17,50 @@ import (
 // Compile-time check that *SQLiteRepository satisfies Repository.
 var _ Repository = (*SQLiteRepository)(nil)
 
+// Since migration 042 the activities table is the base for EVERY session type;
+// the endurance summary columns live in per-type detail tables. Reads LEFT
+// JOIN all four detail tables and COALESCE per column — at most one detail
+// row exists per activity, so the COALESCE picks the only non-NULL branch.
+// Strength rows have no detail row; their endurance fields fall back to the
+// zero values the Activity struct always used for them.
+const activityJoins = `
+	FROM activities a
+	LEFT JOIN activity_run_details rd ON rd.activity_id = a.id
+	LEFT JOIN activity_walk_details wd ON wd.activity_id = a.id
+	LEFT JOIN activity_cycle_details cd ON cd.activity_id = a.id
+	LEFT JOIN activity_other_details od ON od.activity_id = a.id`
+
 // activityColumns is the canonical select list, kept in one place so the
-// scan order can't drift between queries.
+// scan order can't drift between queries. Must be paired with activityJoins.
 const activityColumns = `
-	id, user_id, activity_type, ingest_source, source_activity_id,
-	start_time, name, distance_meters, duration_seconds,
-	avg_pace_sec_per_km, best_pace_sec_per_km,
-	avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-	tcx_s3_key, created_at, deleted_at, environment, raw_distance_meters`
+	a.id, a.user_id, a.activity_type, a.ingest_source, COALESCE(a.source_activity_id, ''),
+	a.start_time, a.name,
+	COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+	COALESCE(a.duration_seconds, 0),
+	COALESCE(rd.avg_pace_sec_per_km, wd.avg_pace_sec_per_km, cd.avg_pace_sec_per_km, od.avg_pace_sec_per_km),
+	COALESCE(rd.best_pace_sec_per_km, wd.best_pace_sec_per_km, cd.best_pace_sec_per_km, od.best_pace_sec_per_km),
+	a.avg_heart_rate_bpm, a.max_heart_rate_bpm, a.total_calories,
+	COALESCE(rd.elevation_gain_meters, wd.elevation_gain_meters, cd.elevation_gain_meters, od.elevation_gain_meters),
+	COALESCE(a.tcx_s3_key, ''), a.created_at, a.deleted_at,
+	COALESCE(rd.environment, wd.environment, cd.environment, od.environment, 'outdoor'),
+	COALESCE(rd.raw_distance_meters, wd.raw_distance_meters, cd.raw_distance_meters, od.raw_distance_meters, 0)`
+
+// detailTable maps an activity type to its detail table, or "" for base-only
+// types (strength_training keeps its details in activity_exercises/sets,
+// owned by the strength repository).
+func detailTable(t ActivityType) string {
+	switch t {
+	case ActivityRunning:
+		return "activity_run_details"
+	case ActivityWalking:
+		return "activity_walk_details"
+	case ActivityCycling:
+		return "activity_cycle_details"
+	case ActivityOther:
+		return "activity_other_details"
+	}
+	return ""
+}
 
 type SQLiteRepository struct {
 	db       *sql.DB
@@ -36,10 +72,10 @@ func NewSQLiteRepository(db *sql.DB, archiver Archiver) *SQLiteRepository {
 	return &SQLiteRepository{db: db, archiver: archiver, now: time.Now}
 }
 
-// Create inserts the activity + its trackpoints in one transaction and
-// archives the TCX file. The ordering matters for consistency:
+// Create inserts the activity + its detail row + trackpoints in one
+// transaction and archives the TCX file. The ordering matters for consistency:
 //
-//	BEGIN → INSERT activity (+ trackpoints) → archive Put → COMMIT
+//	BEGIN → INSERT activity (+ detail + trackpoints) → archive Put → COMMIT
 //
 // The row + its points go in first so a UNIQUE violation short-circuits
 // before we touch S3. The Put happens before COMMIT so a storage failure
@@ -61,10 +97,10 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 	a.TCXS3Key = key
 	a.CreatedAt = now
 	a.DeletedAt = nil
-	// environment is a NOT NULL column with a CHECK (outdoor|indoor); an
-	// unset Environment ("") would fail that CHECK. The summarizers always set
-	// it, but hand-built Activities (and older test seeds) may not — default
-	// to outdoor, matching the migration's per-row default.
+	// environment is a NOT NULL detail column with a CHECK (outdoor|indoor);
+	// an unset Environment ("") would fail that CHECK. The summarizers always
+	// set it, but hand-built Activities (and older test seeds) may not —
+	// default to outdoor, matching the migration's per-row default.
 	if a.Environment == "" {
 		a.Environment = EnvironmentOutdoor
 	}
@@ -78,21 +114,31 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO activities (
-			id, user_id, activity_type, ingest_source, source_activity_id,
-			start_time, name, distance_meters, duration_seconds,
-			avg_pace_sec_per_km, best_pace_sec_per_km,
-			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories, elevation_gain_meters,
-			tcx_s3_key, created_at, environment, raw_distance_meters, route_geojson
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, a.ID, a.UserID, a.ActivityType, a.IngestSource, a.SourceActivityID,
-		a.StartTime, a.Name, a.DistanceMeters, a.DurationSeconds,
-		a.AvgPaceSecPerKm, a.BestPaceSecPerKm,
-		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories, a.ElevationGainMeters,
-		a.TCXS3Key, a.CreatedAt, a.Environment, a.RawDistanceMeters, a.RouteGeoJSON); err != nil {
+			id, user_id, activity_type, start_time, duration_seconds, name,
+			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories,
+			ingest_source, source_activity_id, tcx_s3_key, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+	`, a.ID, a.UserID, a.ActivityType, a.StartTime, a.DurationSeconds, a.Name,
+		a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories,
+		a.IngestSource, a.SourceActivityID, a.TCXS3Key, a.CreatedAt, a.CreatedAt); err != nil {
 		if isUniqueViolation(err) {
 			return ErrDuplicate
 		}
 		return err
+	}
+
+	if table := detailTable(a.ActivityType); table != "" {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO `+table+` (
+				activity_id, distance_meters, raw_distance_meters,
+				avg_pace_sec_per_km, best_pace_sec_per_km, elevation_gain_meters,
+				environment, route_geojson
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, a.ID, a.DistanceMeters, a.RawDistanceMeters,
+			a.AvgPaceSecPerKm, a.BestPaceSecPerKm, a.ElevationGainMeters,
+			a.Environment, a.RouteGeoJSON); err != nil {
+			return err
+		}
 	}
 
 	if err := insertTrackpointsTx(ctx, tx, a.ID, a.Trackpoints); err != nil {
@@ -115,6 +161,111 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 		return err
 	}
 	return nil
+}
+
+// AttachStrengthEnrichment folds a parsed strength TCX into an existing live
+// strength_training base row (a logged workout): vitals, tcx provenance,
+// duration when the workout has none, HR trackpoints keyed by the workout's
+// own id, and the S3 archive. Returns ErrNotFound when no live
+// strength_training row matches (id + user), ErrDuplicate when the
+// (user, manual_tcx, source_activity_id) dedup fires, ErrStorage when the
+// archive Put fails. On success a.ID and a.TCXS3Key are populated.
+func (r *SQLiteRepository) AttachStrengthEnrichment(ctx context.Context, userID, activityID string, a *Activity, tcx []byte) error {
+	key, err := buildTCXKey(userID, ActivityStrengthTraining, a.StartTime, activityID)
+	if err != nil {
+		return err
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := r.now().UTC()
+	// duration_seconds = COALESCE(existing, TCX): a workout the user gave an
+	// end time keeps it; an end-less one adopts the TCX session duration.
+	res, err := tx.ExecContext(ctx, `
+		UPDATE activities
+		SET avg_heart_rate_bpm = ?, max_heart_rate_bpm = ?, total_calories = ?,
+		    ingest_source = ?, source_activity_id = NULLIF(?, ''), tcx_s3_key = ?,
+		    duration_seconds = COALESCE(duration_seconds, ?), updated_at = ?
+		WHERE id = ? AND user_id = ? AND activity_type = ? AND deleted_at IS NULL
+	`, a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories,
+		IngestManualTCX, a.SourceActivityID, key,
+		a.DurationSeconds, now,
+		activityID, userID, ActivityStrengthTraining)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrDuplicate
+		}
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+
+	// Replace-then-insert keeps a re-attach after a detach idempotent even if
+	// stray points survived.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM activity_trackpoints WHERE activity_id = ?`, activityID); err != nil {
+		return err
+	}
+	if err := insertTrackpointsTx(ctx, tx, activityID, a.Trackpoints); err != nil {
+		return err
+	}
+
+	// Archive before COMMIT so a storage failure aborts the whole write,
+	// mirroring Create.
+	if err := r.archiver.Put(ctx, key, tcx, ObjectMetadata{IngestSource: IngestManualTCX}); err != nil {
+		return fmt.Errorf("%w: %w", ErrStorage, err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = r.archiver.Delete(ctx, key)
+		return err
+	}
+	a.ID = activityID
+	a.TCXS3Key = key
+	return nil
+}
+
+// DetachStrengthEnrichment clears a strength row's TCX enrichment: vitals,
+// provenance, and trackpoints. The archived S3 object is intentionally
+// retained (matching run soft-delete semantics). duration_seconds is left
+// alone — the workout's timing survives a detach. Returns ErrNotFound when
+// no live enriched strength row matches.
+func (r *SQLiteRepository) DetachStrengthEnrichment(ctx context.Context, userID, activityID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := r.now().UTC()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE activities
+		SET avg_heart_rate_bpm = NULL, max_heart_rate_bpm = NULL, total_calories = NULL,
+		    ingest_source = ?, source_activity_id = NULL, tcx_s3_key = NULL, updated_at = ?
+		WHERE id = ? AND user_id = ? AND activity_type = ? AND deleted_at IS NULL
+		  AND tcx_s3_key IS NOT NULL
+	`, IngestManual, now, activityID, userID, ActivityStrengthTraining)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM activity_trackpoints WHERE activity_id = ?`, activityID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func insertTrackpointsTx(ctx context.Context, tx *sql.Tx, activityID string, points []Trackpoint) error {
@@ -207,10 +358,11 @@ func (r *SQLiteRepository) GetUserRunningBestEfforts(ctx context.Context, userID
 // for the user's live running activities, ascending by start_time.
 func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, userID, distanceKey string) ([]BestEffortPoint, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.activity_id, a.start_time, e.duration_seconds, a.distance_meters,
-		       a.avg_pace_sec_per_km, e.window_start_elapsed_seconds, e.window_end_elapsed_seconds
+		SELECT e.activity_id, a.start_time, e.duration_seconds, rd.distance_meters,
+		       rd.avg_pace_sec_per_km, e.window_start_elapsed_seconds, e.window_end_elapsed_seconds
 		FROM activity_best_efforts e
 		JOIN activities a ON a.id = e.activity_id
+		JOIN activity_run_details rd ON rd.activity_id = a.id
 		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.activity_type = ? AND e.distance_key = ?
 		ORDER BY a.start_time ASC
 	`, userID, ActivityRunning, distanceKey)
@@ -233,9 +385,8 @@ func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, user
 
 func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID string, source IngestSource, sourceActivityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+activityColumns+`
-		FROM activities
-		WHERE user_id = ? AND ingest_source = ? AND source_activity_id = ? AND deleted_at IS NULL
+		SELECT `+activityColumns+activityJoins+`
+		WHERE a.user_id = ? AND a.ingest_source = ? AND a.source_activity_id = ? AND a.deleted_at IS NULL
 	`, userID, source, sourceActivityID)
 	a, err := scanActivity(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -247,19 +398,18 @@ func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID str
 func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time) ([]Activity, error) {
 	args := []any{userID}
 	// strength_training rows live in this table but their canonical surface
-	// is the workout they enrich, not the standalone activities feed — so the
+	// is still the /workouts view, not the standalone activities feed — so the
 	// feed and the day-bucketed overview (which calls List/ListInRange)
 	// exclude them. The type-scoped running queries are unaffected.
-	clauses := []string{"user_id = ?", "deleted_at IS NULL", "activity_type != 'strength_training'"}
+	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL", "a.activity_type != 'strength_training'"}
 	if before != nil {
-		clauses = append(clauses, "start_time < ?")
+		clauses = append(clauses, "a.start_time < ?")
 		args = append(args, *before)
 	}
 	q := `
-		SELECT ` + activityColumns + `
-		FROM activities
+		SELECT ` + activityColumns + activityJoins + `
 		WHERE ` + strings.Join(clauses, " AND ") + `
-		ORDER BY start_time DESC`
+		ORDER BY a.start_time DESC`
 	if limit > 0 {
 		q += " LIMIT ?"
 		args = append(args, limit)
@@ -285,22 +435,21 @@ func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since
 	args := []any{userID}
 	// See List: strength_training rows are excluded from the activities feed
 	// and the day-bucketed overview that this range query backs.
-	clauses := []string{"user_id = ?", "deleted_at IS NULL", "activity_type != 'strength_training'"}
+	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL", "a.activity_type != 'strength_training'"}
 	if since != nil {
-		clauses = append(clauses, "start_time >= ?")
+		clauses = append(clauses, "a.start_time >= ?")
 		args = append(args, *since)
 	}
 	if until != nil {
 		// Half-open interval — an activity at exactly `until` belongs to
 		// the next window (callers chain adjacent month boundaries).
-		clauses = append(clauses, "start_time < ?")
+		clauses = append(clauses, "a.start_time < ?")
 		args = append(args, *until)
 	}
 	q := `
-		SELECT ` + activityColumns + `
-		FROM activities
+		SELECT ` + activityColumns + activityJoins + `
 		WHERE ` + strings.Join(clauses, " AND ") + `
-		ORDER BY start_time DESC`
+		ORDER BY a.start_time DESC`
 	rows, err := r.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -320,9 +469,8 @@ func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since
 
 func (r *SQLiteRepository) Get(ctx context.Context, userID, activityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+activityColumns+`
-		FROM activities
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+		SELECT `+activityColumns+activityJoins+`
+		WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL
 	`, activityID, userID)
 	a, err := scanActivity(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -337,15 +485,18 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID, activityID string) (
 	}
 	a.Trackpoints = points
 
-	var route sql.NullString
-	if err := r.db.QueryRowContext(ctx, `
-		SELECT route_geojson FROM activities
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, activityID, userID).Scan(&route); err != nil {
-		return nil, err
-	}
-	if route.Valid {
-		a.RouteGeoJSON = &route.String
+	// Route geometry lives on the detail row and only loads on this detail
+	// path. Base-only types (strength) have no detail table and no route.
+	if table := detailTable(a.ActivityType); table != "" {
+		var route sql.NullString
+		if err := r.db.QueryRowContext(ctx, `
+			SELECT route_geojson FROM `+table+` WHERE activity_id = ?
+		`, activityID).Scan(&route); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if route.Valid {
+			a.RouteGeoJSON = &route.String
+		}
 	}
 	return a, nil
 }
@@ -364,9 +515,8 @@ func (r *SQLiteRepository) SummariesByIDs(ctx context.Context, userID string, id
 	// No activity_type filter: callers fetch by explicit id and want the
 	// strength_training rows that List/ListInRange exclude from the feed.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+activityColumns+`
-		FROM activities
-		WHERE user_id = ? AND deleted_at IS NULL AND id IN (`+placeholders+`)
+		SELECT `+activityColumns+activityJoins+`
+		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.id IN (`+placeholders+`)
 	`, args...)
 	if err != nil {
 		return nil, err
@@ -437,9 +587,9 @@ func (r *SQLiteRepository) loadTrackpoints(ctx context.Context, activityID strin
 func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name string) (*Activity, error) {
 	res, err := r.db.ExecContext(ctx, `
 		UPDATE activities
-		SET name = ?
+		SET name = ?, updated_at = ?
 		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, name, activityID, userID)
+	`, name, r.now().UTC(), activityID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -451,12 +601,7 @@ func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name 
 		return nil, ErrNotFound
 	}
 	// Re-read so the returned activity reflects exactly what's persisted.
-	row := r.db.QueryRowContext(ctx, `
-		SELECT `+activityColumns+`
-		FROM activities
-		WHERE id = ? AND user_id = ?
-	`, activityID, userID)
-	return scanActivity(row)
+	return r.readActivitySummary(ctx, userID, activityID)
 }
 
 func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID string, newDistanceMeters float64) (*Activity, error) {
@@ -467,15 +612,18 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 	defer tx.Rollback()
 
 	var (
+		actType     ActivityType
 		curDistance float64
 		duration    int
 	)
 	row := tx.QueryRowContext(ctx, `
-		SELECT distance_meters, duration_seconds
-		FROM activities
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+		SELECT a.activity_type,
+		       COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+		       COALESCE(a.duration_seconds, 0)
+		`+activityJoins+`
+		WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL
 	`, activityID, userID)
-	if err := row.Scan(&curDistance, &duration); err != nil {
+	if err := row.Scan(&actType, &curDistance, &duration); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -486,6 +634,12 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 		// would divide by zero below.
 		return nil, fmt.Errorf("activity: cannot calibrate zero-distance activity %s", activityID)
 	}
+	table := detailTable(actType)
+	if table == "" {
+		// Base-only types carry no distance to calibrate; unreachable through
+		// the handler's running-only guard.
+		return nil, ErrNotFound
+	}
 	f := newDistanceMeters / curDistance
 
 	// avg pace is recomputed from the corrected distance. Best pace is
@@ -493,11 +647,11 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 	// ÷f here.
 	avgPace := float64(duration) / (newDistanceMeters / 1000)
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE activities
+		UPDATE `+table+`
 		SET distance_meters = ?,
 		    avg_pace_sec_per_km = ?
-		WHERE id = ? AND user_id = ?
-	`, newDistanceMeters, avgPace, activityID, userID); err != nil {
+		WHERE activity_id = ?
+	`, newDistanceMeters, avgPace, activityID); err != nil {
 		return nil, err
 	}
 
@@ -540,8 +694,8 @@ func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID str
 		return nil, rowsErr
 	}
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE activities SET best_pace_sec_per_km = ? WHERE id = ? AND user_id = ?
-	`, bestRollingPace(tps, 1000), activityID, userID); err != nil {
+		UPDATE `+table+` SET best_pace_sec_per_km = ? WHERE activity_id = ?
+	`, bestRollingPace(tps, 1000), activityID); err != nil {
 		return nil, err
 	}
 
@@ -560,9 +714,12 @@ func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activi
 		actType     ActivityType
 	)
 	row := r.db.QueryRowContext(ctx, `
-		SELECT environment, raw_distance_meters, distance_meters, tcx_s3_key, activity_type
-		FROM activities
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+		SELECT COALESCE(rd.environment, wd.environment, cd.environment, od.environment, 'outdoor'),
+		       COALESCE(rd.raw_distance_meters, wd.raw_distance_meters, cd.raw_distance_meters, od.raw_distance_meters, 0),
+		       COALESCE(rd.distance_meters, wd.distance_meters, cd.distance_meters, od.distance_meters, 0),
+		       COALESCE(a.tcx_s3_key, ''), a.activity_type
+		`+activityJoins+`
+		WHERE a.id = ? AND a.user_id = ? AND a.deleted_at IS NULL
 	`, activityID, userID)
 	if err := row.Scan(&curEnv, &rawDistance, &distance, &s3Key, &actType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -572,6 +729,12 @@ func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activi
 	}
 	if curEnv == newEnv {
 		return r.readActivitySummary(ctx, userID, activityID)
+	}
+	table := detailTable(actType)
+	if table == "" {
+		// Base-only types have no environment; unreachable through the
+		// handler's endurance-only surface.
+		return nil, ErrNotFound
 	}
 
 	// For indoor -> outdoor on a running activity, regenerate best efforts from
@@ -613,9 +776,9 @@ func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activi
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx, `
-		UPDATE activities SET environment = ?
-		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
-	`, newEnv, activityID, userID); err != nil {
+		UPDATE `+table+` SET environment = ?
+		WHERE activity_id = ?
+	`, newEnv, activityID); err != nil {
 		return nil, err
 	}
 
@@ -651,9 +814,8 @@ func (r *SQLiteRepository) ChangeEnvironment(ctx context.Context, userID, activi
 // caller has just confirmed/updated a live row.
 func (r *SQLiteRepository) readActivitySummary(ctx context.Context, userID, activityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT `+activityColumns+`
-		FROM activities
-		WHERE id = ? AND user_id = ?
+		SELECT `+activityColumns+activityJoins+`
+		WHERE a.id = ? AND a.user_id = ?
 	`, activityID, userID)
 	return scanActivity(row)
 }
@@ -686,11 +848,12 @@ func (r *SQLiteRepository) RunningMetrics(ctx context.Context, userID string, no
 	// the full scan cheap and the code far clearer than window SQL.
 	//
 	// The (user_id, activity_type, start_time DESC) WHERE deleted_at IS NULL
-	// partial index covers this query exactly.
+	// partial index covers the base side of this query.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT start_time, distance_meters, duration_seconds
-		FROM activities
-		WHERE user_id = ? AND activity_type = ? AND deleted_at IS NULL
+		SELECT a.start_time, rd.distance_meters, COALESCE(a.duration_seconds, 0)
+		FROM activities a
+		JOIN activity_run_details rd ON rd.activity_id = a.id
+		WHERE a.user_id = ? AND a.activity_type = ? AND a.deleted_at IS NULL
 	`, userID, ActivityRunning)
 	if err != nil {
 		return Metrics{}, err
@@ -714,14 +877,13 @@ func (r *SQLiteRepository) RunningMetrics(ctx context.Context, userID string, no
 // ListRunningSamplesSince returns the (start_time, distance_meters) projection
 // for the user's live ActivityRunning rows starting at/after `since`. Mirrors
 // RunningMetrics' filter (running type, deleted_at IS NULL); the handler
-// buckets the samples into local weeks. The
-// (user_id, activity_type, start_time DESC) WHERE deleted_at IS NULL partial
-// index covers this query.
+// buckets the samples into local weeks.
 func (r *SQLiteRepository) ListRunningSamplesSince(ctx context.Context, userID string, since time.Time) ([]RunSample, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT start_time, distance_meters
-		FROM activities
-		WHERE user_id = ? AND activity_type = ? AND deleted_at IS NULL AND start_time >= ?
+		SELECT a.start_time, rd.distance_meters
+		FROM activities a
+		JOIN activity_run_details rd ON rd.activity_id = a.id
+		WHERE a.user_id = ? AND a.activity_type = ? AND a.deleted_at IS NULL AND a.start_time >= ?
 	`, userID, ActivityRunning, since)
 	if err != nil {
 		return nil, err

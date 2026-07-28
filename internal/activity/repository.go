@@ -91,6 +91,22 @@ type Repository interface {
 	// row matches.
 	SoftDelete(ctx context.Context, userID, id string) error
 
+	// AttachStrengthEnrichment folds a parsed strength TCX (a, as produced
+	// by ParseStrengthTCX) into an existing live strength_training base row
+	// — the workout's own activities row: vitals, tcx provenance, duration
+	// when the workout has none, HR trackpoints, S3 archive. Returns
+	// ErrNotFound when no live strength row matches, ErrDuplicate on the
+	// (user, manual_tcx, source_activity_id) dedup, ErrStorage on an
+	// archive failure (persisting nothing). On success a.ID and a.TCXS3Key
+	// are populated.
+	AttachStrengthEnrichment(ctx context.Context, userID, activityID string, a *Activity, tcx []byte) error
+
+	// DetachStrengthEnrichment clears a live strength row's TCX enrichment:
+	// vitals, provenance columns, and trackpoints. ingest_source reverts to
+	// manual; the archived S3 object and the row's duration are retained.
+	// Returns ErrNotFound when no live enriched strength row matches.
+	DetachStrengthEnrichment(ctx context.Context, userID, activityID string) error
+
 	// RunningMetrics aggregates the dashboard stat tiles over the user's
 	// live ActivityRunning rows only. Walks/rides don't contribute — the
 	// running dashboard is sport-specific. Week/month boundaries are

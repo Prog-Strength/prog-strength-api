@@ -78,13 +78,13 @@ func newMem(userID, sessionID string, vec []float32) NewMemory {
 	}
 }
 
-// seedWorkout inserts the workouts row a workout-note memory's FK requires.
+// seedWorkout inserts the strength activities row a workout-note memory's FK requires.
 func seedWorkout(t *testing.T, db *sql.DB, id, userID string) {
 	t.Helper()
 	now := time.Now().UTC()
 	if _, err := db.Exec(`
-		INSERT INTO workouts (id, user_id, name, performed_at, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO activities (id, user_id, activity_type, ingest_source, name, start_time, notes, created_at, updated_at)
+		VALUES (?, ?, 'strength_training', 'manual', ?, ?, ?, ?, ?)
 	`, id, userID, "leg day", now, "felt strong", now, now); err != nil {
 		t.Fatalf("seed workout %s: %v", id, err)
 	}

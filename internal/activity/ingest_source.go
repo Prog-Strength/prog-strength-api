@@ -6,12 +6,15 @@ package activity
 // where a row came from.
 //
 // The enum is closed: each new source requires a code change (a constant
-// here, a CHECK-constraint migration, and a new branch in any switch on
-// IngestSource). That trade-off is deliberate — silently accepting an
-// unknown source would let inserts pass Go validation and fail at the DB.
+// here and a new branch in any switch on IngestSource). Since migration 042
+// there is no DB CHECK — Go owns the valid set.
 type IngestSource string
 
 const (
+	// IngestManual is a manually logged session with no source file — every
+	// strength workout created through POST /workouts. It carries no
+	// source_activity_id, so it is exempt from the dedup index.
+	IngestManual IngestSource = "manual"
 	// IngestManualTCX is a user-uploaded TCX file (the only source wired
 	// up today). The activity ID comes from the TCX <Id> element.
 	IngestManualTCX IngestSource = "manual_tcx"
@@ -24,7 +27,7 @@ const (
 // Valid reports whether s is one of the known sources.
 func (s IngestSource) Valid() bool {
 	switch s {
-	case IngestManualTCX, IngestGarminAPI:
+	case IngestManual, IngestManualTCX, IngestGarminAPI:
 		return true
 	}
 	return false

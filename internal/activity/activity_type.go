@@ -3,9 +3,10 @@ package activity
 import "strings"
 
 // ActivityType is the closed, sport-agnostic taxonomy stored on every
-// Activity. New values require a code change and a CHECK-constraint
-// migration on the activities table — adding a value silently here would
-// let inserts pass Go validation and fail at the DB.
+// Activity. Since migration 042 the activities table carries no CHECK on
+// activity_type — Go owns the valid set, so new values only require a code
+// change here (plus a detail-table migration when the type has structured
+// metrics).
 type ActivityType string
 
 const (
@@ -13,13 +14,13 @@ const (
 	ActivityWalking ActivityType = "walking"
 	ActivityCycling ActivityType = "cycling"
 	ActivityOther   ActivityType = "other"
-	// ActivityStrengthTraining is a strength session enriched from a Garmin
-	// "Strength Training" TCX. Unlike the other types it is never produced
-	// by normalizeActivityType from a TCX <Sport> tag — it is set explicitly
-	// by the workout-TCX endpoints, which own the only path that creates it.
-	// A strength row carries HR/calories but no distance/pace/elevation, and
-	// is deliberately excluded from the standalone activities feed (its
-	// canonical surface is the workout it enriches).
+	// ActivityStrengthTraining is a lifting session. Every logged workout's
+	// base row carries this type; a Garmin "Strength Training" TCX enriches
+	// that same row with HR/calories. Unlike the other types it is never
+	// produced by normalizeActivityType from a TCX <Sport> tag — the
+	// strength domain owns the only paths that create it. Strength rows are
+	// deliberately excluded from the standalone activities feed for now (the
+	// /workouts surface is still their canonical view).
 	ActivityStrengthTraining ActivityType = "strength_training"
 )
 

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -244,7 +243,7 @@ func TestAttachTCX_DuplicateActivityPointsToWorkout(t *testing.T) {
 	}
 }
 
-func TestDetachTCX_ClearsLinkAndSoftDeletesActivity(t *testing.T) {
+func TestDetachTCX_ClearsEnrichment(t *testing.T) {
 	h, wrepo, arepo := newTCXHandler(t)
 	imp := doTCXImport(t, h, strengthFixture(t, "strength_session.tcx"))
 	if imp.Code != http.StatusCreated {
@@ -252,14 +251,16 @@ func TestDetachTCX_ClearsLinkAndSoftDeletesActivity(t *testing.T) {
 	}
 	env := decodeWorkout(t, imp)
 	workoutID := env.Data.ID
-	activityID := *env.Data.ActivityID
+	if env.Data.ActivityID == nil || *env.Data.ActivityID != workoutID {
+		t.Fatalf("activity_id = %v, want the workout's own id %q (single-row model)", env.Data.ActivityID, workoutID)
+	}
 
 	w := doTCXDetach(t, h, workoutID)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("detach status = %d, want 204; body=%s", w.Code, w.Body.String())
 	}
 
-	// activity_id cleared on the workout.
+	// activity_id cleared on the workout (no TCX attached anymore).
 	reloaded, err := wrepo.GetByID(context.Background(), workoutID)
 	if err != nil {
 		t.Fatalf("reload workout: %v", err)
@@ -267,9 +268,29 @@ func TestDetachTCX_ClearsLinkAndSoftDeletesActivity(t *testing.T) {
 	if reloaded.ActivityID != nil {
 		t.Errorf("activity_id = %v, want nil after detach", reloaded.ActivityID)
 	}
-	// Linked activity soft-deleted (no longer live).
-	if _, err := arepo.Get(context.Background(), tcxTestUser, activityID); !errors.Is(err, activity.ErrNotFound) {
-		t.Errorf("activity get err = %v, want ErrNotFound (soft-deleted)", err)
+	// Enrichment (vitals + trackpoints) gone from the workout's own base row,
+	// which stays live — the workout itself survives a detach.
+	a, err := arepo.Get(context.Background(), tcxTestUser, workoutID)
+	if err != nil {
+		t.Fatalf("base row get: %v", err)
+	}
+	if a.AvgHeartRateBpm != nil || a.MaxHeartRateBpm != nil || a.TotalCalories != nil {
+		t.Errorf("vitals = %v/%v/%v, want all nil after detach", a.AvgHeartRateBpm, a.MaxHeartRateBpm, a.TotalCalories)
+	}
+	if a.TCXS3Key != "" || a.SourceActivityID != "" {
+		t.Errorf("provenance = (%q, %q), want cleared after detach", a.TCXS3Key, a.SourceActivityID)
+	}
+	if len(a.Trackpoints) != 0 {
+		t.Errorf("trackpoints = %d, want 0 after detach", len(a.Trackpoints))
+	}
+
+	// A re-upload of the same file now succeeds (the dedup slot was freed).
+	w3 := doTCXAttach(t, h, workoutID, strengthFixture(t, "strength_session.tcx"))
+	if w3.Code != http.StatusOK {
+		t.Fatalf("re-attach after detach status = %d, want 200; body=%s", w3.Code, w3.Body.String())
+	}
+	if err := h.activityRepo.DetachStrengthEnrichment(context.Background(), tcxTestUser, workoutID); err != nil {
+		t.Fatalf("cleanup detach: %v", err)
 	}
 
 	// Idempotent: a second detach is a 204 no-op.

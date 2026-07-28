@@ -168,11 +168,16 @@ func (h *Handler) Mount(r chi.Router) {
 
 // MountActivityRoutes is the strength descriptor's MountRoutes: the
 // type-specific endpoints on the /activities subrouter. Progression keeps
-// its /workouts/progression response shape at its new canonical path, and
-// the TCX enrichment pair gains its /activities/{id}/tcx home alongside the
-// /workouts/{id}/tcx alias. Assigned to the descriptor in server.go.
+// its /workouts/progression response shape at its new canonical path, the
+// TCX enrichment pair gains its /activities/{id}/tcx home alongside the
+// /workouts/{id}/tcx alias, and the stage-3 parity aliases relocate the
+// create-from-TCX import and the per-exercise 1RM history under /activities
+// (same handlers, same response shapes — chi matches these literal segments
+// ahead of the /{id} params). Assigned to the descriptor in server.go.
 func (h *Handler) MountActivityRoutes(r chi.Router) {
 	r.Get("/progression", h.progression)
+	r.Post("/imports", h.importFromTCX)
+	r.Get("/personal-records/{exercise_id}/history", h.exerciseOneRMHistory)
 	r.Post("/{id}/tcx", h.attachTCX)
 	r.Delete("/{id}/tcx", h.detachTCX)
 }

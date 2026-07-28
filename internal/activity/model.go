@@ -34,7 +34,11 @@ type Activity struct {
 	SourceActivityID string
 	StartTime        time.Time
 	Name             *string
-	DistanceMeters   float64
+	// Notes is the base-row notes column, written by the unified manual
+	// create/update surface (and by workouts through their own repository).
+	// nil when the session carries none.
+	Notes          *string
+	DistanceMeters float64
 	// RawDistanceMeters is the distance as originally ingested. Set equal to
 	// DistanceMeters at ingest and never touched by calibration, so
 	// "calibrated" is derivable as RawDistanceMeters != DistanceMeters and a

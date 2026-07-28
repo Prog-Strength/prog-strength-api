@@ -48,7 +48,7 @@ type fakeActivity struct {
 	err        error
 }
 
-func (f fakeActivity) ListInRange(_ context.Context, _ string, _, _ *time.Time) ([]activity.Activity, error) {
+func (f fakeActivity) ListInRange(_ context.Context, _ string, _, _ *time.Time, _ activity.TypeFilter) ([]activity.Activity, error) {
 	return f.activities, f.err
 }
 

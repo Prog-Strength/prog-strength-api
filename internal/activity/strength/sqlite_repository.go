@@ -434,6 +434,13 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	return tx.Commit()
 }
 
+// ListExercisesByWorkoutIDs exposes the batched hydration to the unified
+// /activities list (via the strength descriptor's BulkDetailLoader), which
+// renders each lift's summary card from its exercises.
+func (r *SQLiteRepository) ListExercisesByWorkoutIDs(ctx context.Context, workoutIDs []string) (map[string][]WorkoutExercise, error) {
+	return r.loadWorkoutExercisesForWorkoutIDs(ctx, workoutIDs)
+}
+
 // loadWorkoutExercisesForWorkoutIDs hydrates every activity_exercise +
 // its sets for the given workout IDs using two batched IN-clause
 // queries. Returns a map keyed by activity_id so callers attach in

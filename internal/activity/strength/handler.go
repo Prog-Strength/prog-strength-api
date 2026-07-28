@@ -166,6 +166,115 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/headline-exercises/defaults", h.getHeadlineExercisesDefaults)
 }
 
+// MountActivityRoutes is the strength descriptor's MountRoutes: the
+// type-specific endpoints on the /activities subrouter. Progression keeps
+// its /workouts/progression response shape at its new canonical path, and
+// the TCX enrichment pair gains its /activities/{id}/tcx home alongside the
+// /workouts/{id}/tcx alias. Assigned to the descriptor in server.go.
+func (h *Handler) MountActivityRoutes(r chi.Router) {
+	r.Get("/progression", h.progression)
+	r.Post("/{id}/tcx", h.attachTCX)
+	r.Delete("/{id}/tcx", h.detachTCX)
+}
+
+// CreateSession is the strength descriptor's Create seam for the unified
+// POST /activities: the exact POST /workouts machinery minus the HTTP
+// decode — same name default, same repository create (PR detection, 1RM
+// history), same best-effort timeline posts and plan matching. Validation
+// errors are wrapped in activity.ErrInvalidDetails so the unified handler's
+// sentinel mapping (→ 400) works without importing this package. The
+// request's vitals fields are ignored: a manually logged lift has no HR
+// source — vitals arrive via TCX enrichment, exactly as on /workouts.
+func (h *Handler) CreateSession(ctx context.Context, userID string, req activity.CreateRequest) (string, error) {
+	w, err := h.workoutFromCreateRequest(userID, "", req)
+	if err != nil {
+		return "", err
+	}
+	if w.Name == "" {
+		w.Name = fmt.Sprintf("Workout - %s", time.Now().Format("Jan 02, 2006"))
+	}
+	if err := h.repo.Create(ctx, w); err != nil {
+		return "", translateWorkoutError(err)
+	}
+	h.publishWorkoutPosts(ctx, w)
+	h.matchSession(ctx, userID, SessionRef{SessionID: w.ID, StartUTC: w.PerformedAt})
+	return w.ID, nil
+}
+
+// UpdateSession is the strength descriptor's Update seam for the unified
+// PUT /activities/{id}: full-replacement through the workout repository so
+// PRs/1RM history recompute and TCX-enrichment vitals survive, exactly like
+// PUT /workouts/{id} (including the best-effort PR-post republish). No name
+// default, matching the workout update's "an update sets state verbatim"
+// stance.
+func (h *Handler) UpdateSession(ctx context.Context, userID, activityID string, req activity.CreateRequest) error {
+	existing, err := h.repo.GetByID(ctx, activityID)
+	if err != nil {
+		return translateWorkoutError(err)
+	}
+	if existing.UserID != userID {
+		return activity.ErrNotFound
+	}
+	w, err := h.workoutFromCreateRequest(userID, activityID, req)
+	if err != nil {
+		return err
+	}
+	// Carry the TCX link through for the same reason PUT /workouts does:
+	// the repo's UPDATE never touches the enrichment columns.
+	w.ActivityID = existing.ActivityID
+	if err := h.repo.Update(ctx, w); err != nil {
+		return translateWorkoutError(err)
+	}
+	h.publishWorkoutPosts(ctx, w)
+	return nil
+}
+
+// workoutFromCreateRequest maps the unified create/update payload onto the
+// domain Workout: start_time is performed_at, duration derives ended_at,
+// and the details blob is the exercises list.
+func (h *Handler) workoutFromCreateRequest(userID, workoutID string, req activity.CreateRequest) (*Workout, error) {
+	exercises, err := parseDetails(req.Details)
+	if err != nil {
+		return nil, err
+	}
+	var endedAt *time.Time
+	if req.DurationSeconds != nil {
+		e := req.StartTime.Add(time.Duration(*req.DurationSeconds) * time.Second)
+		endedAt = &e
+	}
+	name := ""
+	if req.Name != nil {
+		name = *req.Name
+	}
+	notes := ""
+	if req.Notes != nil {
+		notes = *req.Notes
+	}
+	return &Workout{
+		ID:          workoutID,
+		UserID:      userID,
+		Name:        name,
+		PerformedAt: req.StartTime,
+		EndedAt:     endedAt,
+		Notes:       notes,
+		Exercises:   exercises,
+	}, nil
+}
+
+// translateWorkoutError maps this package's sentinels onto the base
+// activity package's, per the descriptor seam contract: not-found stays
+// enumeration-safe, and the validation set reads as invalid details so the
+// unified handler's errors.Is mapping yields a 400 with the real message.
+func translateWorkoutError(err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return activity.ErrNotFound
+	}
+	if isWorkoutValidationError(err) {
+		return fmt.Errorf("%w: %w", activity.ErrInvalidDetails, err)
+	}
+	return err
+}
+
 // workoutListResponse is the data envelope for GET /workouts. Wraps
 // the page of workouts in pagination metadata so the frontend can
 // render "showing N–M of TOTAL" and disable Previous/Next at the
@@ -738,17 +847,24 @@ func parseOptionalRFC3339(s string) (*time.Time, error) {
 	return &t, nil
 }
 
+// isWorkoutValidationError reports whether err is one of the workout
+// domain's validation sentinels. Shared by the HTTP mapping below and the
+// unified-surface seam's error translation.
+func isWorkoutValidationError(err error) bool {
+	var invalidEnumErr *InvalidEnumError
+	return errors.As(err, &invalidEnumErr) || errors.Is(err, ErrUserIDRequired) ||
+		errors.Is(err, ErrPerformedAtRequired) || errors.Is(err, ErrEndedAtBeforeStart) ||
+		errors.Is(err, ErrExercisesRequired) || errors.Is(err, ErrExerciseIDRequired) ||
+		errors.Is(err, ErrInvalidOrder) || errors.Is(err, ErrSetsRequired) ||
+		errors.Is(err, ErrInvalidReps) || errors.Is(err, ErrInvalidWeight)
+}
+
 // mapWorkoutValidationError writes a 400 response if err is a known workout
 // validation error and returns true. Returns false for unknown errors so the
 // caller can decide (typically: log and respond 500). Centralized so create
 // and update don't duplicate the long error chain.
 func mapWorkoutValidationError(w http.ResponseWriter, err error) bool {
-	var invalidEnumErr *InvalidEnumError
-	if errors.As(err, &invalidEnumErr) || errors.Is(err, ErrUserIDRequired) ||
-		errors.Is(err, ErrPerformedAtRequired) || errors.Is(err, ErrEndedAtBeforeStart) ||
-		errors.Is(err, ErrExercisesRequired) || errors.Is(err, ErrExerciseIDRequired) ||
-		errors.Is(err, ErrInvalidOrder) || errors.Is(err, ErrSetsRequired) ||
-		errors.Is(err, ErrInvalidReps) || errors.Is(err, ErrInvalidWeight) {
+	if isWorkoutValidationError(err) {
 		httpresp.Error(w, http.StatusBadRequest, err.Error())
 		return true
 	}

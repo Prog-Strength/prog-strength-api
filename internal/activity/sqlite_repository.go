@@ -48,7 +48,7 @@ func detailCoalesce(col, fallback string) string {
 // scan order can't drift between queries. Must be paired with activityJoins.
 var activityColumns = `
 	a.id, a.user_id, a.activity_type, a.ingest_source, COALESCE(a.source_activity_id, ''),
-	a.start_time, a.name,
+	a.start_time, a.name, a.notes,
 	` + detailCoalesce("distance_meters", "0") + `,
 	COALESCE(a.duration_seconds, 0),
 	` + detailCoalesce("avg_pace_sec_per_km", "") + `,
@@ -173,6 +173,55 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 		// don't leak an orphan. Best-effort; ignore the delete error.
 		_ = r.archiver.Delete(ctx, a.TCXS3Key)
 		return err
+	}
+	return nil
+}
+
+// CreateManual inserts a manually-logged session's base row. Unlike Create
+// there is no source file: no archive, no trackpoints, no dedup key (manual
+// rows carry a NULL source_activity_id, exempt from the unique index), and
+// no detail row — the unified handler persists typed details through the
+// type's DetailStore afterwards. duration_seconds stays NULL when the
+// request carries none.
+func (r *SQLiteRepository) CreateManual(ctx context.Context, userID string, req CreateRequest) (string, error) {
+	now := r.now().UTC()
+	activityID := id.New()
+	if _, err := r.db.ExecContext(ctx, `
+		INSERT INTO activities (
+			id, user_id, activity_type, start_time, duration_seconds, name, notes,
+			avg_heart_rate_bpm, max_heart_rate_bpm, total_calories,
+			ingest_source, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?, ?, ?, ?)
+	`, activityID, userID, req.Type, req.StartTime.UTC(), req.DurationSeconds, req.Name, req.Notes,
+		req.AvgHeartRateBpm, req.MaxHeartRateBpm, req.TotalCalories,
+		IngestManual, now, now); err != nil {
+		return "", err
+	}
+	return activityID, nil
+}
+
+// UpdateBase full-replaces the user-editable base columns of a live owned
+// row. Provenance (ingest_source, source_activity_id, tcx_s3_key) and
+// created_at are never touched.
+func (r *SQLiteRepository) UpdateBase(ctx context.Context, userID, activityID string, req CreateRequest) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET start_time = ?, duration_seconds = ?, name = NULLIF(?, ''), notes = NULLIF(?, ''),
+		    avg_heart_rate_bpm = ?, max_heart_rate_bpm = ?, total_calories = ?,
+		    updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, req.StartTime.UTC(), req.DurationSeconds, req.Name, req.Notes,
+		req.AvgHeartRateBpm, req.MaxHeartRateBpm, req.TotalCalories,
+		r.now().UTC(), activityID, userID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
 	}
 	return nil
 }
@@ -409,13 +458,24 @@ func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID str
 	return a, err
 }
 
-func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time) ([]Activity, error) {
+// typeFilterClauses appends filter's WHERE clause (if any) to clauses/args.
+// See TypeFilter: zero value filters nothing — the unified list reads every
+// type, strength_training included.
+func typeFilterClauses(filter TypeFilter, clauses []string, args []any) ([]string, []any) {
+	switch {
+	case filter.Only != "":
+		clauses = append(clauses, "a.activity_type = ?")
+		args = append(args, filter.Only)
+	case filter.ExcludeStrength:
+		clauses = append(clauses, "a.activity_type != 'strength_training'")
+	}
+	return clauses, args
+}
+
+func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, before *time.Time, filter TypeFilter) ([]Activity, error) {
 	args := []any{userID}
-	// strength_training rows live in this table but their canonical surface
-	// is still the /workouts view, not the standalone activities feed — so the
-	// feed and the day-bucketed overview (which calls List/ListInRange)
-	// exclude them. The type-scoped running queries are unaffected.
-	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL", "a.activity_type != 'strength_training'"}
+	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL"}
+	clauses, args = typeFilterClauses(filter, clauses, args)
 	if before != nil {
 		clauses = append(clauses, "a.start_time < ?")
 		args = append(args, *before)
@@ -445,11 +505,10 @@ func (r *SQLiteRepository) List(ctx context.Context, userID string, limit int, b
 	return out, rows.Err()
 }
 
-func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Activity, error) {
+func (r *SQLiteRepository) ListInRange(ctx context.Context, userID string, since, until *time.Time, filter TypeFilter) ([]Activity, error) {
 	args := []any{userID}
-	// See List: strength_training rows are excluded from the activities feed
-	// and the day-bucketed overview that this range query backs.
-	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL", "a.activity_type != 'strength_training'"}
+	clauses := []string{"a.user_id = ?", "a.deleted_at IS NULL"}
+	clauses, args = typeFilterClauses(filter, clauses, args)
 	if since != nil {
 		clauses = append(clauses, "a.start_time >= ?")
 		args = append(args, *since)
@@ -526,8 +585,8 @@ func (r *SQLiteRepository) SummariesByIDs(ctx context.Context, userID string, id
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	// No activity_type filter: callers fetch by explicit id and want the
-	// strength_training rows that List/ListInRange exclude from the feed.
+	// No activity_type filter: callers fetch by explicit id (the workout
+	// list's enrichment read included), so every live owned row qualifies.
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT `+activityColumns+activityJoins+`
 		WHERE a.user_id = ? AND a.deleted_at IS NULL AND a.id IN (`+placeholders+`)
@@ -976,6 +1035,7 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	var (
 		act       Activity
 		name      sql.NullString
+		notes     sql.NullString
 		avgPace   sql.NullFloat64
 		bestPace  sql.NullFloat64
 		avgHR     sql.NullInt64
@@ -986,7 +1046,7 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	)
 	if err := s.Scan(
 		&act.ID, &act.UserID, &act.ActivityType, &act.IngestSource, &act.SourceActivityID,
-		&act.StartTime, &name, &act.DistanceMeters, &act.DurationSeconds,
+		&act.StartTime, &name, &notes, &act.DistanceMeters, &act.DurationSeconds,
 		&avgPace, &bestPace,
 		&avgHR, &maxHR, &calories, &elevation,
 		&act.TCXS3Key, &act.CreatedAt, &deletedAt, &act.Environment, &act.RawDistanceMeters,
@@ -996,6 +1056,10 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	if name.Valid {
 		v := name.String
 		act.Name = &v
+	}
+	if notes.Valid {
+		v := notes.String
+		act.Notes = &v
 	}
 	if avgPace.Valid {
 		v := avgPace.Float64

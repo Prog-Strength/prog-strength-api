@@ -14,24 +14,32 @@ import (
 // NewDescriptor builds the strength_training descriptor for the activity
 // type registry. The strength package owns it (the parent internal/activity
 // must never import this child), and server.go passes it to NewRegistry
-// alongside the endurance descriptors.
-//
-// MountRoutes is nil for now: /workouts/* stays mounted by Handler until
-// the unified /activities surface re-mounts the strength routes through the
-// registry. repo may be nil in tests that only exercise validation or
-// summaries.
+// alongside the endurance descriptors — after binding Create/Update/
+// MountRoutes to the workout handler (Handler.CreateSession,
+// Handler.UpdateSession, Handler.MountActivityRoutes), so the unified
+// surface reuses the exact POST/PUT /workouts machinery instead of
+// reimplementing it. repo may be nil in tests that only exercise validation
+// or summaries.
 func NewDescriptor(repo Repository) *activity.Descriptor {
 	return &activity.Descriptor{
 		Type:           activity.ActivityStrengthTraining,
 		ValidateCreate: validateCreate,
 		Details:        &detailStore{repo: repo},
 		Summarize:      summarize,
+		DecodeDetails:  decodeDetails,
 	}
 }
 
-// detailsPayload is the strength Details blob for the unified create/update
-// path: the same exercises shape POST /workouts accepts (order assigned
-// from slice position, like the workout handler does).
+// Details is the strength detail payload the unified surface reads and
+// writes: the same exercises shape POST /workouts accepts (order assigned
+// from slice position, like the workout handler does). One struct for both
+// directions so what a client POSTs as `details` is what GET returns.
+type Details struct {
+	Exercises []WorkoutExercise `json:"exercises"`
+}
+
+// detailsPayload is the decode shape for the Details blob (the create-
+// request exercise DTO, whose slice position becomes Order).
 type detailsPayload struct {
 	Exercises []createWorkoutExercise `json:"exercises"`
 }
@@ -39,6 +47,8 @@ type detailsPayload struct {
 // parseDetails decodes a Details blob into the domain exercise slice.
 // Absent/JSON-null details are a zero-exercise lift — allowed, mirroring
 // Workout.Validate (a session created before its exercises are filled in).
+// Decode failures wrap activity.ErrInvalidDetails per the DetailStore error
+// contract.
 func parseDetails(raw json.RawMessage) ([]WorkoutExercise, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -47,7 +57,7 @@ func parseDetails(raw json.RawMessage) ([]WorkoutExercise, error) {
 	dec.DisallowUnknownFields()
 	var p detailsPayload
 	if err := dec.Decode(&p); err != nil {
-		return nil, fmt.Errorf("invalid strength details: %w", err)
+		return nil, fmt.Errorf("%w: invalid strength details: %w", activity.ErrInvalidDetails, err)
 	}
 	out := make([]WorkoutExercise, len(p.Exercises))
 	for i, ex := range p.Exercises {
@@ -60,6 +70,21 @@ func parseDetails(raw json.RawMessage) ([]WorkoutExercise, error) {
 		}
 	}
 	return out, nil
+}
+
+// decodeDetails is the descriptor's DecodeDetails: the *Details value the
+// detail store saves and Summarize renders. Absent details decode to nil
+// (the unified generic path then clears/skips) — though in practice
+// strength writes flow through Create/Update, not this seam.
+func decodeDetails(raw json.RawMessage) (any, error) {
+	exercises, err := parseDetails(raw)
+	if err != nil {
+		return nil, err
+	}
+	if exercises == nil {
+		return nil, nil
+	}
+	return &Details{Exercises: exercises}, nil
 }
 
 // validateCreate parses the Details blob and runs the same per-exercise
@@ -114,36 +139,64 @@ func (s *detailStore) Load(ctx context.Context, userID, activityID string) (any,
 	if err != nil {
 		return nil, err
 	}
-	return w.Exercises, nil
+	return &Details{Exercises: w.Exercises}, nil
+}
+
+// LoadMany is the BulkDetailLoader capability the unified list uses: one
+// batched read (the repository's two-statement exercise hydration) for a
+// whole page of lifts. Per the seam's contract the ids are already
+// user-scoped by the caller's base list read, so no per-id ownership check
+// re-runs here.
+func (s *detailStore) LoadMany(ctx context.Context, _ string, ids []string) (map[string]any, error) {
+	byWorkout, err := s.repo.ListExercisesByWorkoutIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(byWorkout))
+	for id, exercises := range byWorkout {
+		out[id] = &Details{Exercises: exercises}
+	}
+	return out, nil
 }
 
 // Save replaces the session's exercise list wholesale — the same
 // full-replacement semantics as PUT /workouts, routed through Update so PR
-// detection and 1RM history stay on the one write path.
+// detection and 1RM history stay on the one write path. An Update error is
+// translated to the base sentinel like every other seam error (the row can
+// vanish between the ownership read and the write).
 func (s *detailStore) Save(ctx context.Context, userID, activityID string, details any) error {
-	exercises, ok := details.([]WorkoutExercise)
+	d, ok := details.(*Details)
 	if !ok {
-		return fmt.Errorf("strength: detail store got %T, want []WorkoutExercise", details)
+		return fmt.Errorf("strength: detail store got %T, want *Details", details)
 	}
 	w, err := s.owned(ctx, userID, activityID)
 	if err != nil {
 		return err
 	}
-	w.Exercises = exercises
-	return s.repo.Update(ctx, w)
+	w.Exercises = d.Exercises
+	if err := s.repo.Update(ctx, w); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return activity.ErrNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // Delete clears the session's exercises/sets. The base row survives — soft
 // deleting the activity itself is the base domain's job.
 func (s *detailStore) Delete(ctx context.Context, userID, activityID string) error {
-	return s.Save(ctx, userID, activityID, []WorkoutExercise{})
+	return s.Save(ctx, userID, activityID, &Details{Exercises: []WorkoutExercise{}})
 }
 
 // summarize renders the workout card the timeline hydrator renders today:
 // title, "N exercises" subtitle, and exercises/sets/volume chips (zero-value
 // chips omitted, matching the hydrator).
 func summarize(a activity.Activity, details any) activity.Summary {
-	exercises, _ := details.([]WorkoutExercise)
+	var exercises []WorkoutExercise
+	if d, ok := details.(*Details); ok && d != nil {
+		exercises = d.Exercises
+	}
 
 	title := "Workout"
 	if a.Name != nil && strings.TrimSpace(*a.Name) != "" {

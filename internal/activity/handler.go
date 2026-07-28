@@ -152,13 +152,29 @@ func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
 // a new HTTP route.
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/activities", func(r chi.Router) {
+		// /tcx stays on the base handler: the upload is cross-type endurance
+		// ingest (the TCX <Sport> tag decides running/walking/cycling), so no
+		// single descriptor owns it.
 		r.Post("/tcx", h.uploadTCX)
 		r.Get("/", h.list)
 		r.Get("/running-metrics", h.runningMetrics)
+		r.Post("/", h.createUnified)
 		r.Get("/{id}", h.get)
+		// PATCH stays on the base handler too: rename is genuinely
+		// cross-type, and the environment toggle shares the route.
 		r.Patch("/{id}", h.patch)
-		r.Post("/{id}/calibrate", h.calibrate)
+		r.Put("/{id}", h.updateUnified)
 		r.Delete("/{id}", h.delete)
+		// Type-specific routes (running calibrate, strength TCX enrichment
+		// and progression) mount through the registered descriptors, wired
+		// in server.go.
+		if h.registry != nil {
+			for _, d := range h.registry.Descriptors() {
+				if d.MountRoutes != nil {
+					d.MountRoutes(r)
+				}
+			}
+		}
 	})
 
 	// Running best efforts (running PRs). The data lives in the activity
@@ -170,6 +186,14 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Get("/max-effort", h.runningMaxEffort)
 		r.Get("/max-effort/{distance_key}", h.runningMaxEffortDetail)
 	})
+}
+
+// MountRunningRoutes is the running descriptor's MountRoutes: the routes
+// only a run can answer, mounted on the /activities subrouter. Assigned to
+// the descriptor in server.go (same package as the handler, so the method
+// can stay bound to the unexported handler internals).
+func (h *Handler) MountRunningRoutes(r chi.Router) {
+	r.Post("/{id}/calibrate", h.calibrate)
 }
 
 // standardDistanceByKey returns the StandardDistance for a key and whether
@@ -213,6 +237,7 @@ type activityDTO struct {
 	IngestSource        IngestSource    `json:"ingest_source"`
 	SourceActivityID    string          `json:"source_activity_id"`
 	Name                *string         `json:"name"`
+	Notes               *string         `json:"notes"`
 	StartTime           time.Time       `json:"start_time"`
 	DistanceMeters      float64         `json:"distance_meters"`
 	RawDistanceMeters   float64         `json:"raw_distance_meters"`
@@ -244,6 +269,16 @@ type activityDTO struct {
 	// (key absent) when the activity has no route. The map consumes this; the
 	// per-trackpoint DTO deliberately stays coordinate-free.
 	Route json.RawMessage `json:"route,omitempty"`
+	// Summary is the type's rendered card (registry Summarize): title,
+	// subtitle, metric chips. Present on unified list items and detail
+	// reads; omitted when no registry is wired or the row's type is
+	// unregistered (degrade, don't fail).
+	Summary *Summary `json:"summary,omitempty"`
+	// Details is the type-keyed detail payload (registry DetailStore.Load):
+	// exercises/sets for strength, the detail-table fields for endurance.
+	// Detail reads only; omitted on lists, for base-only shaped sessions
+	// (no detail row), and when no registry is wired.
+	Details any `json:"details,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -316,6 +351,7 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		IngestSource:        a.IngestSource,
 		SourceActivityID:    a.SourceActivityID,
 		Name:                a.Name,
+		Notes:               a.Notes,
 		StartTime:           a.StartTime,
 		DistanceMeters:      a.DistanceMeters,
 		RawDistanceMeters:   a.RawDistanceMeters,
@@ -487,6 +523,21 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ?type= narrows the unified list to one registered type. Absent means
+	// every type — strength_training included, per the unified-activity-model
+	// SOW (the pre-042 exclusion is gone).
+	var filter TypeFilter
+	if raw := r.URL.Query().Get("type"); raw != "" {
+		t := ActivityType(raw)
+		if h.registry != nil {
+			if _, err := h.registry.Lookup(t); err != nil {
+				httpresp.Error(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+		filter.Only = t
+	}
+
 	if hasSince || hasUntil {
 		since, err := parseOptionalTimeParam(r, "since")
 		if err != nil {
@@ -498,16 +549,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			httpresp.Error(w, http.StatusBadRequest, "until must be an RFC3339 timestamp")
 			return
 		}
-		activities, err := h.repo.ListInRange(r.Context(), userID, since, until)
+		activities, err := h.repo.ListInRange(r.Context(), userID, since, until, filter)
 		if err != nil {
 			httpresp.ServerError(w, r.Context(), "list activities in range", err)
 			return
 		}
-		out := make([]activityDTO, 0, len(activities))
-		for _, a := range activities {
-			out = append(out, toActivityDTO(a, false))
-		}
-		httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nil})
+		httpresp.OK(w, "listed activities", listResponse{Activities: h.toListDTOs(r.Context(), userID, activities), NextBefore: nil})
 		return
 	}
 
@@ -534,15 +581,10 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		before = &t
 	}
 
-	activities, err := h.repo.List(r.Context(), userID, limit, before)
+	activities, err := h.repo.List(r.Context(), userID, limit, before, filter)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list activities", err)
 		return
-	}
-
-	out := make([]activityDTO, 0, len(activities))
-	for _, a := range activities {
-		out = append(out, toActivityDTO(a, false))
 	}
 
 	var nextBefore *string
@@ -551,7 +593,55 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		nextBefore = &cursor
 	}
 
-	httpresp.OK(w, "listed activities", listResponse{Activities: out, NextBefore: nextBefore})
+	httpresp.OK(w, "listed activities", listResponse{Activities: h.toListDTOs(r.Context(), userID, activities), NextBefore: nextBefore})
+}
+
+// toListDTOs renders one page of unified list items: the base DTO (no
+// trackpoints) plus each type's Summary. Detail loads are batched per type
+// through the optional BulkDetailLoader capability (strength needs its
+// exercises to count sets/volume; the endurance types summarize from the
+// joined base row, so their stores skip the extra read entirely). Summary
+// rendering is best-effort: a failed bulk load or an unregistered type
+// degrades to a base-row card or a summary-less item, never a failed page.
+func (h *Handler) toListDTOs(ctx context.Context, userID string, activities []Activity) []activityDTO {
+	out := make([]activityDTO, 0, len(activities))
+	for _, a := range activities {
+		out = append(out, toActivityDTO(a, false))
+	}
+	if h.registry == nil {
+		return out
+	}
+
+	idsByType := make(map[ActivityType][]string)
+	for _, a := range activities {
+		idsByType[a.ActivityType] = append(idsByType[a.ActivityType], a.ID)
+	}
+	details := make(map[string]any)
+	for t, ids := range idsByType {
+		d, err := h.registry.Lookup(t)
+		if err != nil {
+			continue
+		}
+		if bulk, ok := d.Details.(BulkDetailLoader); ok {
+			loaded, err := bulk.LoadMany(ctx, userID, ids)
+			if err != nil {
+				log.Printf("activity list: bulk detail load for type %s failed: %v", t, err)
+				continue
+			}
+			for id, v := range loaded {
+				details[id] = v
+			}
+		}
+	}
+	for i, a := range activities {
+		d, err := h.registry.Lookup(a.ActivityType)
+		if err != nil || d.Summarize == nil {
+			continue
+		}
+		s := d.Summarize(a, details[a.ID])
+		out[i].Summary = &s
+	}
+	return out
 }
 
 func parseOptionalTimeParam(r *http.Request, name string) (*time.Time, error) {
@@ -618,6 +708,9 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // GET and the calibrate response so both return an identical shape.
 func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity, unit DistanceUnit) (activityDTO, error) {
 	dto := toActivityDTO(a, true)
+	if err := h.attachTypedPayload(ctx, userID, a, &dto); err != nil {
+		return activityDTO{}, err
+	}
 	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
 		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
 		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
@@ -681,6 +774,282 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 		}
 	}
 	return dto, nil
+}
+
+// attachTypedPayload adds the registry-driven fields to a detail-read DTO:
+// the typed details payload from the type's DetailStore and the rendered
+// Summary. A base-only shaped session (no detail row) omits details —
+// ErrNotFound from Load after the base read already succeeded can only mean
+// "no detail row here". No registry (legacy construction) attaches nothing.
+func (h *Handler) attachTypedPayload(ctx context.Context, userID string, a Activity, dto *activityDTO) error {
+	if h.registry == nil {
+		return nil
+	}
+	d, err := h.registry.Lookup(a.ActivityType)
+	if err != nil {
+		return nil
+	}
+	var details any
+	if d.Details != nil {
+		details, err = d.Details.Load(ctx, userID, a.ID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
+	}
+	dto.Details = details
+	if d.Summarize != nil {
+		s := d.Summarize(a, details)
+		dto.Summary = &s
+	}
+	return nil
+}
+
+// --- unified create / update ---------------------------------------------
+
+// createActivityRequest is the POST/PUT /activities body: the activities
+// base columns plus the type-keyed details blob each descriptor validates.
+type createActivityRequest struct {
+	ActivityType    string          `json:"activity_type"`
+	StartTime       string          `json:"start_time"` // RFC3339
+	DurationSeconds *int            `json:"duration_seconds"`
+	Name            *string         `json:"name"`
+	Notes           *string         `json:"notes"`
+	AvgHeartRateBpm *int            `json:"avg_heart_rate_bpm"`
+	MaxHeartRateBpm *int            `json:"max_heart_rate_bpm"`
+	TotalCalories   *int            `json:"total_calories"`
+	Details         json.RawMessage `json:"details"`
+}
+
+// decodeCreateRequest decodes + base-validates the unified write body and
+// resolves its descriptor. Base-field validation (type known, start_time
+// present, duration sane) is the handler's job; everything inside details
+// is the descriptor's. Writes the error response itself and returns ok=false
+// on failure.
+func (h *Handler) decodeCreateRequest(w http.ResponseWriter, r *http.Request) (CreateRequest, *Descriptor, bool) {
+	var body createActivityRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
+		return CreateRequest{}, nil, false
+	}
+	if body.ActivityType == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity_type is required")
+		return CreateRequest{}, nil, false
+	}
+	desc, err := h.registry.Lookup(ActivityType(body.ActivityType))
+	if err != nil {
+		// Unknown type is a 422 (well-formed request, unregistered type)
+		// listing the valid set — the registry's error text carries it.
+		httpresp.Error(w, http.StatusUnprocessableEntity, err.Error())
+		return CreateRequest{}, nil, false
+	}
+	if body.StartTime == "" {
+		httpresp.Error(w, http.StatusBadRequest, "start_time is required")
+		return CreateRequest{}, nil, false
+	}
+	start, err := time.Parse(time.RFC3339, body.StartTime)
+	if err != nil {
+		httpresp.Error(w, http.StatusBadRequest, "invalid start_time: must be RFC3339 format")
+		return CreateRequest{}, nil, false
+	}
+	if body.DurationSeconds != nil && *body.DurationSeconds < 0 {
+		httpresp.Error(w, http.StatusBadRequest, "duration_seconds must not be negative")
+		return CreateRequest{}, nil, false
+	}
+	req := CreateRequest{
+		Type:            desc.Type,
+		StartTime:       start,
+		DurationSeconds: body.DurationSeconds,
+		Name:            body.Name,
+		Notes:           body.Notes,
+		AvgHeartRateBpm: body.AvgHeartRateBpm,
+		MaxHeartRateBpm: body.MaxHeartRateBpm,
+		TotalCalories:   body.TotalCalories,
+		Details:         body.Details,
+	}
+	if desc.ValidateCreate != nil {
+		if err := desc.ValidateCreate(req); err != nil {
+			// Every ValidateCreate failure — ErrInvalidDetails,
+			// ErrDistanceRequired, a type's own validation sentinel — is a
+			// 400 with the first error's message, matching the existing
+			// handlers' first-error-wins boundary validation.
+			httpresp.Error(w, http.StatusBadRequest, err.Error())
+			return CreateRequest{}, nil, false
+		}
+	}
+	return req, desc, true
+}
+
+// respondWriteError maps a create/update persistence error onto the
+// existing handler conventions: 404 not found, 409 duplicate, 400 for
+// descriptor-translated validation/detail errors, 500 otherwise.
+func respondWriteError(w http.ResponseWriter, r *http.Request, action string, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+	case errors.Is(err, ErrDuplicate):
+		httpresp.ErrorWithCode(w, http.StatusConflict, "an activity for this source already exists", "duplicate_activity")
+	case errors.Is(err, ErrInvalidDetails), errors.Is(err, ErrDistanceRequired):
+		httpresp.Error(w, http.StatusBadRequest, err.Error())
+	default:
+		httpresp.ServerError(w, r.Context(), action, err)
+	}
+}
+
+// createUnified handles POST /activities: the one create endpoint for every
+// registered type. The descriptor decides the write path — strength routes
+// through its own Create (workout repo: PR detection, 1RM history, timeline
+// posts); everything else is a base-row insert plus a DetailStore save.
+func (h *Handler) createUnified(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	if h.registry == nil {
+		httpresp.ServerError(w, r.Context(), "activity registry not wired", errors.New("SetRegistry not called"))
+		return
+	}
+	req, desc, ok := h.decodeCreateRequest(w, r)
+	if !ok {
+		return
+	}
+
+	var activityID string
+	var err error
+	if desc.Create != nil {
+		activityID, err = desc.Create(r.Context(), userID, req)
+		if err != nil {
+			respondWriteError(w, r, "create activity", err)
+			return
+		}
+	} else {
+		activityID, err = h.repo.CreateManual(r.Context(), userID, req)
+		if err != nil {
+			respondWriteError(w, r, "create activity", err)
+			return
+		}
+		if err := h.saveDecodedDetails(r.Context(), userID, activityID, desc, req); err != nil {
+			// The base row is in but its details didn't land: roll the
+			// manual create back (best-effort) so a failed write never
+			// leaves a half-logged session behind.
+			_ = h.repo.SoftDelete(r.Context(), userID, activityID)
+			respondWriteError(w, r, "save activity details", err)
+			return
+		}
+		// Best-effort side effects for manual runs, mirroring the TCX
+		// ingest path: a timeline post and a planned-workout match. Other
+		// endurance/base-only types aren't feed sources (yet).
+		if desc.Type == ActivityRunning {
+			h.publish(r.Context(), timeline.PostRef{
+				UserID:     userID,
+				SourceType: timeline.SourceRun,
+				SourceID:   activityID,
+				OccurredAt: req.StartTime,
+			})
+			h.matchSession(r.Context(), userID, SessionRef{SessionID: activityID, StartUTC: req.StartTime})
+		}
+	}
+
+	dto, ok := h.unifiedReadDTO(w, r, userID, activityID)
+	if !ok {
+		return
+	}
+	httpresp.Created(w, "created activity", dto)
+}
+
+// updateUnified handles PUT /activities/{id}: full-replacement typed update.
+// The row's stored type picks the descriptor — a PUT can't change a
+// session's type.
+func (h *Handler) updateUnified(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	if h.registry == nil {
+		httpresp.ServerError(w, r.Context(), "activity registry not wired", errors.New("SetRegistry not called"))
+		return
+	}
+	activityID := chi.URLParam(r, "id")
+	if activityID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
+		return
+	}
+	existing, err := h.repo.Get(r.Context(), userID, activityID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get activity", err)
+		return
+	}
+	req, desc, ok := h.decodeCreateRequest(w, r)
+	if !ok {
+		return
+	}
+	if desc.Type != existing.ActivityType {
+		httpresp.Error(w, http.StatusBadRequest, "activity_type cannot be changed on update")
+		return
+	}
+
+	if desc.Update != nil {
+		if err := desc.Update(r.Context(), userID, activityID, req); err != nil {
+			respondWriteError(w, r, "update activity", err)
+			return
+		}
+	} else {
+		if err := h.repo.UpdateBase(r.Context(), userID, activityID, req); err != nil {
+			respondWriteError(w, r, "update activity", err)
+			return
+		}
+		if err := h.saveDecodedDetails(r.Context(), userID, activityID, desc, req); err != nil {
+			respondWriteError(w, r, "save activity details", err)
+			return
+		}
+	}
+
+	dto, ok := h.unifiedReadDTO(w, r, userID, activityID)
+	if !ok {
+		return
+	}
+	httpresp.OK(w, "updated activity", dto)
+}
+
+// saveDecodedDetails runs the generic details write: decode the blob via the
+// descriptor and full-replace through its DetailStore. An absent blob means
+// "no details" — on update the existing detail row is removed to honor
+// full-replacement semantics (idempotent for types that never had one).
+func (h *Handler) saveDecodedDetails(ctx context.Context, userID, activityID string, desc *Descriptor, req CreateRequest) error {
+	if desc.Details == nil || desc.DecodeDetails == nil {
+		return nil
+	}
+	decoded, err := desc.DecodeDetails(req.Details)
+	if err != nil {
+		return err
+	}
+	if decoded == nil {
+		return desc.Details.Delete(ctx, userID, activityID)
+	}
+	return desc.Details.Save(ctx, userID, activityID, decoded)
+}
+
+// unifiedReadDTO re-reads a just-written activity and renders the unified
+// detail shape (base + summary + details, no trackpoint derivations — the
+// write paths never carry a track). Writes the error response itself and
+// returns ok=false on failure.
+func (h *Handler) unifiedReadDTO(w http.ResponseWriter, r *http.Request, userID, activityID string) (activityDTO, bool) {
+	a, err := h.repo.Get(r.Context(), userID, activityID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "read back activity", err)
+		return activityDTO{}, false
+	}
+	dto := toActivityDTO(*a, false)
+	if err := h.attachTypedPayload(r.Context(), userID, *a, &dto); err != nil {
+		httpresp.ServerError(w, r.Context(), "load activity details", err)
+		return activityDTO{}, false
+	}
+	return dto, true
 }
 
 func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {

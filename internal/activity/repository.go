@@ -32,15 +32,35 @@ type Repository interface {
 
 	// List returns live activities newest-first by start_time, capped at
 	// limit. When before != nil, only activities with start_time < before
-	// are returned (keyset pagination). Trackpoints are not loaded.
-	List(ctx context.Context, userID string, limit int, before *time.Time) ([]Activity, error)
+	// are returned (keyset pagination). filter narrows by activity type
+	// (zero value = every type, including strength_training).
+	// Trackpoints are not loaded.
+	List(ctx context.Context, userID string, limit int, before *time.Time, filter TypeFilter) ([]Activity, error)
 
 	// ListInRange returns every live activity whose start_time falls in
 	// the half-open interval [since, until), newest-first. Either bound
 	// may be nil to mean "open-ended on that side." This is the calendar's
 	// month-view path; no cursor is returned since the bounds already cap
-	// the result. Trackpoints are not loaded.
-	ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]Activity, error)
+	// the result. filter narrows by activity type as in List.
+	// Trackpoints are not loaded.
+	ListInRange(ctx context.Context, userID string, since, until *time.Time, filter TypeFilter) ([]Activity, error)
+
+	// CreateManual inserts a manually-logged session's base row: ingest
+	// source 'manual', no source file, no trackpoints, and no detail row —
+	// persisting the typed details is the caller's job via the type's
+	// DetailStore. Returns the generated activity id. This is the write
+	// half of the unified POST /activities generic path; types with their
+	// own create machinery (strength) never come through here.
+	CreateManual(ctx context.Context, userID string, req CreateRequest) (string, error)
+
+	// UpdateBase full-replaces a live owned activity's user-editable base
+	// columns (start_time, duration_seconds, name, notes, vitals) and
+	// stamps updated_at. Provenance columns (ingest_source,
+	// source_activity_id, tcx_s3_key) are never touched. Returns
+	// ErrNotFound when no live row matches. The unified PUT generic path;
+	// strength updates go through the workout repository instead so
+	// TCX-enrichment vitals survive an edit.
+	UpdateBase(ctx context.Context, userID, id string, req CreateRequest) error
 
 	// Get returns one live activity WITH its Trackpoints ordered by
 	// sequence. Returns ErrNotFound when the activity is missing,
@@ -145,6 +165,21 @@ type Repository interface {
 	// fills it from the viewed run. excludeActivityID is typically the run
 	// being viewed so its own samples don't bias its reference.
 	RecentHRStats(ctx context.Context, userID string, window time.Duration, excludeActivityID string) (hrzones.Stats, error)
+}
+
+// TypeFilter narrows List/ListInRange by activity type. The zero value
+// means every type — the unified /activities surface. Exactly one of the
+// fields is meaningful at a time; Only wins when both are set.
+type TypeFilter struct {
+	// Only restricts the read to a single type when non-empty (the
+	// unified list's ?type= filter).
+	Only ActivityType
+	// ExcludeStrength preserves the pre-unification feed behavior
+	// (everything but strength_training) for the aggregate surfaces that
+	// still merge workouts separately (dashboard, snapshot). Those callers
+	// converge on the unified base — and this flag goes away — in the
+	// aggregate-surfaces task of the unified-activity-model plan.
+	ExcludeStrength bool
 }
 
 // RunSample is the minimal (start, distance) projection for one running

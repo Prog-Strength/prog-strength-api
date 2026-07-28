@@ -136,7 +136,10 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	// steps entries (steps + streak) are each fetched once and reused. They are
 	// fetched defensively so a failure degrades to a nil/empty contribution.
 	runs := defer1(ctx, r, "running activities", func() ([]activity.Activity, error) {
-		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil)
+		// ExcludeStrength preserves the pre-unification behavior: lifts still
+		// arrive via the separate workout fetch below until the dashboard
+		// converges on one unified read (unified-activity-model, task 6).
+		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil, activity.TypeFilter{ExcludeStrength: true})
 	})
 	workouts := defer1(ctx, r, "workouts", func() ([]strength.Workout, error) {
 		return h.workoutRepo.ListByUser(ctx, userID, strength.ListOptions{Since: &since53w})

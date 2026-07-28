@@ -35,7 +35,33 @@ type Descriptor struct {
 	// degrades to a base-row-only render rather than failing the page.
 	Summarize func(a Activity, details any) Summary
 
-	// MountRoutes registers type-specific endpoints (nil when none).
+	// DecodeDetails parses a (ValidateCreate-approved) Details blob into the
+	// typed value DetailStore.Save accepts and Summarize renders. Returns
+	// nil, nil for an absent/JSON-null blob. Nil for base-only types. Only
+	// the generic create/update path uses it — types with their own Create/
+	// Update funcs decode inside those.
+	DecodeDetails func(raw json.RawMessage) (any, error)
+
+	// Create, optional: persists a brand-new session of this type when a
+	// bare base-row insert + Details.Save can't express the type's create.
+	// Strength supplies it so the write runs through the workout repository
+	// (PR detection, 1RM history) and the same best-effort side effects
+	// (timeline posts, plan matching) as POST /workouts — the descriptor is
+	// bound to the workout handler's machinery in server.go rather than
+	// reimplementing it. Nil: the unified handler inserts the base row via
+	// Repository.CreateManual and saves decoded details.
+	Create func(ctx context.Context, userID string, req CreateRequest) (activityID string, err error)
+
+	// Update, optional: full-replacement update counterpart of Create, for
+	// PUT /activities/{id}. Strength supplies it so an edit recomputes PRs
+	// and leaves TCX-enrichment vitals untouched, exactly like PUT
+	// /workouts/{id}. Nil: the unified handler updates the base row via
+	// Repository.UpdateBase and replaces details through the DetailStore.
+	Update func(ctx context.Context, userID, activityID string, req CreateRequest) error
+
+	// MountRoutes registers type-specific endpoints on the /activities
+	// subrouter (nil when none). Wired in server.go, mounted by
+	// Handler.Mount.
 	MountRoutes func(r chi.Router)
 }
 
@@ -51,6 +77,18 @@ type DetailStore interface {
 	Load(ctx context.Context, userID, activityID string) (any, error)
 	Save(ctx context.Context, userID, activityID string, details any) error
 	Delete(ctx context.Context, userID, activityID string) error
+}
+
+// BulkDetailLoader is an optional DetailStore capability: load details for
+// many of one user's activities in a single round trip. The unified list
+// uses it to render Summaries without a per-row query fan-out; stores that
+// don't implement it are summarized from the base row alone (which is
+// enough for the endurance types — their list distance is joined onto the
+// base read). ids must already be user-scoped: they come from the same
+// user's base list read, so implementations may skip per-id ownership
+// checks. Ids that don't resolve are simply absent from the map.
+type BulkDetailLoader interface {
+	LoadMany(ctx context.Context, userID string, ids []string) (map[string]any, error)
 }
 
 // CreateRequest is the type-agnostic create/update payload the unified
@@ -115,5 +153,16 @@ func (r *Registry) Types() []ActivityType {
 		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// Descriptors returns every registered descriptor in Types() order, for
+// callers that iterate the whole set (route mounting).
+func (r *Registry) Descriptors() []*Descriptor {
+	types := r.Types()
+	out := make([]*Descriptor, 0, len(types))
+	for _, t := range types {
+		out = append(out, r.byType[t])
+	}
 	return out
 }

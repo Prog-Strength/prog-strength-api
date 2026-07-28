@@ -37,6 +37,14 @@ type Repository interface {
 	// Returns ErrNotFound if the workout doesn't exist or is already deleted.
 	Delete(ctx context.Context, id string) error
 
+	// ListExercisesByWorkoutIDs returns each workout's exercises (with
+	// their sets), keyed by workout id, in one batched read — the same
+	// two-statement hydration ListByUser uses. Ids that don't resolve are
+	// simply absent. There is no user-scoping here: callers pass ids they
+	// already read under a user scope (the unified list's summary
+	// rendering).
+	ListExercisesByWorkoutIDs(ctx context.Context, workoutIDs []string) (map[string][]WorkoutExercise, error)
+
 	// ListOneRepMaxHistory returns the user's per-workout estimated 1RM
 	// entries for a single exercise, sorted most recent first. Optional
 	// since/until bounds filter on performed_at. Returns an empty slice

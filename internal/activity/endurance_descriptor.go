@@ -40,16 +40,38 @@ func enduranceLabel(t ActivityType) string {
 // and the backing detail table (inside store) differ. store may be nil in
 // tests that only exercise validation/summaries.
 //
-// MountRoutes is nil for now: the existing endurance endpoints (TCX import,
-// calibrate, environment) stay mounted by the handler until the unified
-// /activities surface re-mounts them through the registry.
+// MountRoutes stays nil here: only running has type-specific routes
+// (calibrate), assigned in server.go from the activity handler. The TCX
+// upload and the rename/environment PATCH remain on the base handler — the
+// former is cross-type endurance ingest (the file's <Sport> tag picks the
+// type), the latter is shared by every type.
 func NewEnduranceDescriptor(t ActivityType, store DetailStore) *Descriptor {
 	return &Descriptor{
 		Type:           t,
 		ValidateCreate: enduranceValidateCreate(t),
 		Details:        store,
 		Summarize:      enduranceSummarize(t),
+		DecodeDetails:  decodeEnduranceDetails,
 	}
+}
+
+// decodeEnduranceDetails is the generic-write decode step: parse the blob
+// and default RawDistanceMeters to the entered distance, preserving the
+// "raw equals distance at ingest" invariant for manual logs (calibration
+// later diverges the pair).
+func decodeEnduranceDetails(raw json.RawMessage) (any, error) {
+	d, err := parseEnduranceDetails(raw)
+	if err != nil {
+		return nil, err
+	}
+	if d == nil {
+		// A typed nil inside `any` would read as non-nil to the caller.
+		return nil, nil
+	}
+	if d.RawDistanceMeters == 0 {
+		d.RawDistanceMeters = d.DistanceMeters
+	}
+	return d, nil
 }
 
 // enduranceValidateCreate checks a manual endurance create's Details blob.

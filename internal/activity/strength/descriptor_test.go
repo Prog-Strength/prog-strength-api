@@ -64,7 +64,7 @@ func TestDescriptor_SummarizeMirrorsWorkoutCard(t *testing.T) {
 		{ExerciseID: "leg-press", Sets: nSets(2, 5, 100)},
 	}
 
-	got := d.Summarize(a, exercises)
+	got := d.Summarize(a, &Details{Exercises: exercises})
 	want := activity.Summary{
 		Title:    "Leg Day",
 		Subtitle: "2 exercises",
@@ -92,7 +92,7 @@ func TestDescriptor_SummarizeDefaultsAndOmitsEmptyChips(t *testing.T) {
 
 	// Bodyweight-only session: sets chip present, volume chip omitted.
 	exercises := []WorkoutExercise{{ExerciseID: "pull-up", Sets: []Set{{Reps: 10, Weight: 0, Unit: user.WeightUnitPounds}}}}
-	got = d.Summarize(activity.Activity{}, exercises)
+	got = d.Summarize(activity.Activity{}, &Details{Exercises: exercises})
 	want = activity.Summary{
 		Title:    "Workout",
 		Subtitle: "1 exercise",
@@ -121,17 +121,17 @@ func TestDescriptor_DetailStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	exercises, ok := loaded.([]WorkoutExercise)
+	det, ok := loaded.(*Details)
 	if !ok {
-		t.Fatalf("Load returned %T, want []WorkoutExercise", loaded)
+		t.Fatalf("Load returned %T, want *Details", loaded)
 	}
-	if len(exercises) != 1 || exercises[0].ExerciseID != "back-squat" || len(exercises[0].Sets) != 3 {
-		t.Fatalf("Load = %+v, want the created exercise with 3 sets", exercises)
+	if len(det.Exercises) != 1 || det.Exercises[0].ExerciseID != "back-squat" || len(det.Exercises[0].Sets) != 3 {
+		t.Fatalf("Load = %+v, want the created exercise with 3 sets", det.Exercises)
 	}
 
 	// Save replaces the exercise list wholesale (full-replacement semantics,
 	// same as PUT /workouts).
-	replacement := []WorkoutExercise{{ExerciseID: "leg-press", Order: 0, Sets: nSets(2, 8, 180)}}
+	replacement := &Details{Exercises: []WorkoutExercise{{ExerciseID: "leg-press", Order: 0, Sets: nSets(2, 8, 180)}}}
 	if saveErr := d.Details.Save(ctx, "u1", w.ID, replacement); saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)
 	}
@@ -139,9 +139,9 @@ func TestDescriptor_DetailStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after save: %v", err)
 	}
-	exercises = loaded.([]WorkoutExercise)
-	if len(exercises) != 1 || exercises[0].ExerciseID != "leg-press" {
-		t.Fatalf("Load after save = %+v, want the replacement exercise", exercises)
+	det = loaded.(*Details)
+	if len(det.Exercises) != 1 || det.Exercises[0].ExerciseID != "leg-press" {
+		t.Fatalf("Load after save = %+v, want the replacement exercise", det.Exercises)
 	}
 
 	// Delete clears the children; the base row (and its zero-exercise
@@ -154,8 +154,8 @@ func TestDescriptor_DetailStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after delete: %v", err)
 	}
-	if exercises = loaded.([]WorkoutExercise); len(exercises) != 0 {
-		t.Fatalf("Load after delete = %+v, want no exercises", exercises)
+	if det = loaded.(*Details); len(det.Exercises) != 0 {
+		t.Fatalf("Load after delete = %+v, want no exercises", det.Exercises)
 	}
 }
 
@@ -179,7 +179,7 @@ func TestDescriptor_DetailStoreEnforcesOwnership(t *testing.T) {
 	if _, err := d.Details.Load(ctx, "intruder", w.ID); !errors.Is(err, activity.ErrNotFound) {
 		t.Fatalf("Load as wrong user err = %v, want activity.ErrNotFound", err)
 	}
-	if err := d.Details.Save(ctx, "intruder", w.ID, []WorkoutExercise{}); !errors.Is(err, activity.ErrNotFound) {
+	if err := d.Details.Save(ctx, "intruder", w.ID, &Details{}); !errors.Is(err, activity.ErrNotFound) {
 		t.Fatalf("Save as wrong user err = %v, want activity.ErrNotFound", err)
 	}
 	if err := d.Details.Delete(ctx, "intruder", w.ID); !errors.Is(err, activity.ErrNotFound) {
@@ -194,7 +194,7 @@ func TestDescriptor_DetailStoreEnforcesOwnership(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load as owner: %v", err)
 	}
-	if exercises := loaded.([]WorkoutExercise); len(exercises) != 1 {
-		t.Fatalf("owner exercises = %+v, want the original one", exercises)
+	if det := loaded.(*Details); len(det.Exercises) != 1 {
+		t.Fatalf("owner exercises = %+v, want the original one", det.Exercises)
 	}
 }

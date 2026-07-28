@@ -28,7 +28,7 @@ type exerciseReader interface {
 }
 
 type activityReader interface {
-	ListInRange(ctx context.Context, userID string, since, until *time.Time) ([]activity.Activity, error)
+	ListInRange(ctx context.Context, userID string, since, until *time.Time, filter activity.TypeFilter) ([]activity.Activity, error)
 	GetUserRunningBestEfforts(ctx context.Context, userID string) ([]activity.RunningBestEffort, error)
 }
 
@@ -111,7 +111,10 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 	})
 
 	snap.Running = sectionOrNil(ctx, "running", func() (*RunningSection, error) {
-		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end)
+		// ExcludeStrength preserves the pre-unification behavior: lifts come
+		// from the workout repo until the snapshot converges on the unified
+		// base (unified-activity-model, task 6).
+		acts, err := s.activityRepo.ListInRange(ctx, userID, &start, &end, activity.TypeFilter{ExcludeStrength: true})
 		if err != nil {
 			return nil, err
 		}

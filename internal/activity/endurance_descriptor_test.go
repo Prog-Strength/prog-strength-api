@@ -51,6 +51,21 @@ func TestEnduranceDescriptor_SummarizeDefaultTitlePerSport(t *testing.T) {
 	}
 }
 
+func TestEnduranceDescriptor_SummarizeOmitsZeroDistance(t *testing.T) {
+	// A duration-only "other" activity (base-only create, no details) must
+	// render just its duration — "1:00:00", not "0.0 mi · 1:00:00".
+	d := NewEnduranceDescriptor(ActivityOther, nil)
+	got := d.Summarize(Activity{DurationSeconds: 3600}, nil)
+	want := Summary{
+		Title:    "Activity",
+		Subtitle: "1:00:00",
+		Metrics:  []string{"1:00:00"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Summarize(zero distance) = %+v, want %+v", got, want)
+	}
+}
+
 func TestEnduranceDescriptor_SummarizePrefersLoadedDetails(t *testing.T) {
 	d := NewEnduranceDescriptor(ActivityRunning, nil)
 	// The base row carries no endurance fields (e.g. a caller that skipped

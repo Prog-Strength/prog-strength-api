@@ -127,7 +127,10 @@ func parseEnduranceDetails(raw json.RawMessage) (*EnduranceDetails, error) {
 // enduranceSummarize renders the endurance card: "5.0 mi · 41:12" — the same
 // shape the timeline hydrator renders for run posts. Distance prefers the
 // loaded details (authoritative) and falls back to the base Activity's
-// joined-in endurance fields; duration always lives on the base row.
+// joined-in endurance fields; duration always lives on the base row. A
+// zero distance drops the distance chip entirely ("1:00:00", never
+// "0.0 mi · 1:00:00") — only duration-only ActivityOther entries hit this
+// in practice, since the distance-first sports validate distance > 0.
 func enduranceSummarize(t ActivityType) func(a Activity, details any) Summary {
 	label := enduranceLabel(t)
 	return func(a Activity, details any) Summary {
@@ -139,8 +142,15 @@ func enduranceSummarize(t ActivityType) func(a Activity, details any) Summary {
 		if d, ok := details.(*EnduranceDetails); ok && d != nil {
 			meters = d.DistanceMeters
 		}
-		distance := FormatMiles(meters)
 		duration := FormatDuration(float64(a.DurationSeconds))
+		if meters <= 0 {
+			return Summary{
+				Title:    title,
+				Subtitle: duration,
+				Metrics:  []string{duration},
+			}
+		}
+		distance := FormatMiles(meters)
 		return Summary{
 			Title:    title,
 			Subtitle: distance + " · " + duration,

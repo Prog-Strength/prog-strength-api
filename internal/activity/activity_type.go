@@ -19,8 +19,9 @@ const (
 	// that same row with HR/calories. Unlike the other types it is never
 	// produced by normalizeActivityType from a TCX <Sport> tag — the
 	// strength domain owns the only paths that create it. Strength rows are
-	// deliberately excluded from the standalone activities feed for now (the
-	// /workouts surface is still their canonical view).
+	// included in the unified /activities list like every other type; the
+	// legacy /workouts surface is a deprecated shim kept only for rollout
+	// sequencing (removed in the unified-activity-model stage-5 cleanup).
 	ActivityStrengthTraining ActivityType = "strength_training"
 )
 

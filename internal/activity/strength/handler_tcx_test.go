@@ -1,4 +1,4 @@
-package workout
+package strength
 
 import (
 	"bytes"
@@ -35,7 +35,7 @@ func newTCXHandler(t *testing.T) (*Handler, Repository, activity.Repository) {
 // strengthFixture reads a TCX fixture from the activity package's testdata.
 func strengthFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile("../activity/testdata/" + name)
+	data, err := os.ReadFile("../testdata/" + name)
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", name, err)
 	}

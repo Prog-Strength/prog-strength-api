@@ -6,36 +6,36 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // --- fakes -------------------------------------------------------------
 
-// fakeWorkoutRepo embeds workout.Repository (so unused methods panic) and
+// fakeWorkoutRepo embeds strength.Repository (so unused methods panic) and
 // implements only the reads the hydrator touches. It counts calls so the
 // test can assert PR hydration is a single batch query (no N+1).
 type fakeWorkoutRepo struct {
-	workout.Repository
-	workouts        map[string]*workout.Workout
-	prEvents        map[string]workout.PersonalRecordEvent
+	strength.Repository
+	workouts        map[string]*strength.Workout
+	prEvents        map[string]strength.PersonalRecordEvent
 	getByIDCalls    int
 	getPREventCalls int
 }
 
-func (f *fakeWorkoutRepo) GetByID(_ context.Context, id string) (*workout.Workout, error) {
+func (f *fakeWorkoutRepo) GetByID(_ context.Context, id string) (*strength.Workout, error) {
 	f.getByIDCalls++
 	w, ok := f.workouts[id]
 	if !ok {
-		return nil, workout.ErrNotFound
+		return nil, strength.ErrNotFound
 	}
 	return w, nil
 }
 
-func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []string) ([]workout.PersonalRecordEvent, error) {
+func (f *fakeWorkoutRepo) GetPersonalRecordEventsByIDs(_ context.Context, ids []string) ([]strength.PersonalRecordEvent, error) {
 	f.getPREventCalls++
-	var out []workout.PersonalRecordEvent
+	var out []strength.PersonalRecordEvent
 	for _, id := range ids {
 		if e, ok := f.prEvents[id]; ok {
 			out = append(out, e)
@@ -67,23 +67,23 @@ func strptr(s string) *string { return &s }
 func TestHydrate_PerSourceContent(t *testing.T) {
 	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*workout.Workout{
+		workouts: map[string]*strength.Workout{
 			"w1": {
 				ID:     "w1",
 				UserID: "u1",
 				Name:   "Push day",
-				Exercises: []workout.WorkoutExercise{
-					{ExerciseID: "bench", Sets: []workout.Set{
+				Exercises: []strength.WorkoutExercise{
+					{ExerciseID: "bench", Sets: []strength.Set{
 						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
 						{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds},
 					}},
-					{ExerciseID: "ohp", Sets: []workout.Set{
+					{ExerciseID: "ohp", Sets: []strength.Set{
 						{Reps: 8, Weight: 50, Unit: user.WeightUnitPounds},
 					}},
 				},
 			},
 		},
-		prEvents: map[string]workout.PersonalRecordEvent{
+		prEvents: map[string]strength.PersonalRecordEvent{
 			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 305, Reps: 3, Unit: user.WeightUnitPounds, AchievedAt: now},
 		},
 	}
@@ -171,7 +171,7 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 
 func TestHydrate_OmitsMissingSources(t *testing.T) {
 	now := time.Now().UTC()
-	wRepo := &fakeWorkoutRepo{workouts: map[string]*workout.Workout{}, prEvents: map[string]workout.PersonalRecordEvent{}}
+	wRepo := &fakeWorkoutRepo{workouts: map[string]*strength.Workout{}, prEvents: map[string]strength.PersonalRecordEvent{}}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
 	h := newTimelineHydrator(wRepo, aRepo)
 
@@ -193,8 +193,8 @@ func TestHydrate_OmitsMissingSources(t *testing.T) {
 func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 	now := time.Now().UTC()
 	wRepo := &fakeWorkoutRepo{
-		workouts: map[string]*workout.Workout{},
-		prEvents: map[string]workout.PersonalRecordEvent{
+		workouts: map[string]*strength.Workout{},
+		prEvents: map[string]strength.PersonalRecordEvent{
 			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 100, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 			"pr2": {ID: "pr2", UserID: "u1", ExerciseID: "squat", Weight: 200, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},
 			"pr3": {ID: "pr3", UserID: "u1", ExerciseID: "dead", Weight: 300, Reps: 1, Unit: user.WeightUnitPounds, AchievedAt: now},

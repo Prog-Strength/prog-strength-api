@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // Tiny fakes for the narrow consumer interfaces. Each carries the rows to
@@ -20,16 +20,16 @@ import (
 // domain's repo failing.
 
 type fakeWorkout struct {
-	workouts []workout.Workout
-	prs      []workout.PersonalRecordEvent
+	workouts []strength.Workout
+	prs      []strength.PersonalRecordEvent
 	err      error
 }
 
-func (f fakeWorkout) ListByUser(_ context.Context, _ string, _ workout.ListOptions) ([]workout.Workout, error) {
+func (f fakeWorkout) ListByUser(_ context.Context, _ string, _ strength.ListOptions) ([]strength.Workout, error) {
 	return f.workouts, f.err
 }
 
-func (f fakeWorkout) ListPersonalRecordEventsByWorkouts(_ context.Context, _ []string) ([]workout.PersonalRecordEvent, error) {
+func (f fakeWorkout) ListPersonalRecordEventsByWorkouts(_ context.Context, _ []string) ([]strength.PersonalRecordEvent, error) {
 	return f.prs, f.err
 }
 
@@ -109,12 +109,12 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 
 	bench := exercise.Exercise{ID: "barbell-bench-press", Name: "barbell bench press",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest}}
-	w := workout.Workout{ID: "w1", Name: "Push Day",
+	w := strength.Workout{ID: "w1", Name: "Push Day",
 		PerformedAt: time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC),
-		Exercises: []workout.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []workout.Set{
+		Exercises: []strength.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []strength.Set{
 			{Reps: 8, Weight: 225}, {Reps: 8, Weight: 265},
 		}}}}
-	prs := []workout.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
+	prs := []strength.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
 
 	runStart := time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 	pace := 315.0
@@ -139,7 +139,7 @@ func TestBuild_FanOutHappyPath(t *testing.T) {
 	}
 
 	svc := NewService(
-		fakeWorkout{workouts: []workout.Workout{w}, prs: prs},
+		fakeWorkout{workouts: []strength.Workout{w}, prs: prs},
 		fakeExercise{exercises: []exercise.Exercise{bench}},
 		fakeActivity{activities: acts, bests: bests},
 		fakeSteps{entries: stepEntries, goal: steps.Goal{Goal: 10000}},

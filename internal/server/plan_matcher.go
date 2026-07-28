@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // activityPlanMatcher adapts the shared planned-workout service to the
@@ -24,12 +24,12 @@ func (m *activityPlanMatcher) OnSessionDeleted(ctx context.Context, userID, sess
 }
 
 // workoutPlanMatcher adapts the shared planned-workout service to the
-// workout.PlanMatcher port. A logged workout completes a "workout"-kind plan.
+// strength.PlanMatcher port. A logged workout completes a "workout"-kind plan.
 type workoutPlanMatcher struct{ svc *plannedworkout.Service }
 
-var _ workout.PlanMatcher = (*workoutPlanMatcher)(nil)
+var _ strength.PlanMatcher = (*workoutPlanMatcher)(nil)
 
-func (m *workoutPlanMatcher) OnSessionLogged(ctx context.Context, userID string, ref workout.SessionRef) {
+func (m *workoutPlanMatcher) OnSessionLogged(ctx context.Context, userID string, ref strength.SessionRef) {
 	m.svc.OnSessionLogged(ctx, userID, ref.SessionID, plannedworkout.SessionKindWorkout, ref.StartUTC)
 }
 

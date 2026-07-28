@@ -1,4 +1,4 @@
-package workout
+package strength
 
 import "github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 

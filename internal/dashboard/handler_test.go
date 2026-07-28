@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
@@ -23,7 +24,6 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // --- harness ----------------------------------------------------------
@@ -41,7 +41,7 @@ var testNow = time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 // test can seed across domains and read them all back through the handler.
 type repos struct {
 	activity   *activity.SQLiteRepository
-	workout    *workout.SQLiteRepository
+	workout    *strength.SQLiteRepository
 	exercise   *exercise.SQLiteRepository
 	steps      *steps.SQLiteRepository
 	nutrition  *nutrition.SQLiteRepository
@@ -59,7 +59,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	db := dbtest.New(t)
 	rp := &repos{
 		activity:   activity.NewSQLiteRepository(db, activity.NewMemoryArchiver()),
-		workout:    workout.NewSQLiteRepository(db),
+		workout:    strength.NewSQLiteRepository(db),
 		exercise:   exercise.NewSQLiteRepository(db),
 		steps:      steps.NewSQLiteRepository(db),
 		nutrition:  nutrition.NewSQLiteRepository(db),
@@ -141,16 +141,16 @@ func seedRun(t *testing.T, rp *repos, userID string, start time.Time, distanceMe
 func seedWorkout(t *testing.T, rp *repos, userID string, performedAt time.Time, exerciseID string, weight float64, reps int) {
 	t.Helper()
 	ended := performedAt.Add(45 * time.Minute)
-	w := &workout.Workout{
+	w := &strength.Workout{
 		UserID:      userID,
 		Name:        "Session",
 		PerformedAt: performedAt,
 		EndedAt:     &ended,
-		Exercises: []workout.WorkoutExercise{
+		Exercises: []strength.WorkoutExercise{
 			{
 				ExerciseID: exerciseID,
 				Order:      0,
-				Sets: []workout.Set{
+				Sets: []strength.Set{
 					{Reps: reps, Weight: weight, Unit: user.WeightUnitPounds},
 				},
 			},
@@ -365,7 +365,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 	db := dbtest.New(t)
 	rp := &repos{
 		activity:   activity.NewSQLiteRepository(db, activity.NewMemoryArchiver()),
-		workout:    workout.NewSQLiteRepository(db),
+		workout:    strength.NewSQLiteRepository(db),
 		exercise:   exercise.NewSQLiteRepository(db),
 		steps:      steps.NewSQLiteRepository(db),
 		nutrition:  nutrition.NewSQLiteRepository(db),
@@ -494,7 +494,7 @@ func TestSummary_StreakOnlyCountsCompletedActivity(t *testing.T) {
 	t.Run("abandoned workout does not count", func(t *testing.T) {
 		r, rp, userID := newTestEnv(t)
 		// Started but never finished: no end time, no sets.
-		w := &workout.Workout{UserID: userID, PerformedAt: monday.Add(10 * time.Hour)}
+		w := &strength.Workout{UserID: userID, PerformedAt: monday.Add(10 * time.Hour)}
 		if err := rp.workout.Create(context.Background(), w); err != nil {
 			t.Fatalf("seed abandoned workout: %v", err)
 		}

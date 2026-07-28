@@ -1,4 +1,4 @@
-package workout
+package strength
 
 // HeadlineExercises is the curated default list of exercise slugs
 // surfaced on the Personal Records view. Lives in backend Go (rather

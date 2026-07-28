@@ -6,21 +6,21 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // Narrow consumer interfaces: only the methods the snapshot needs, so
 // tests can supply tiny fakes. The concrete domain repositories satisfy
 // these. (Idiomatic Go: accept the interface you use.)
 type workoutReader interface {
-	ListByUser(ctx context.Context, userID string, opts workout.ListOptions) ([]workout.Workout, error)
-	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]workout.PersonalRecordEvent, error)
+	ListByUser(ctx context.Context, userID string, opts strength.ListOptions) ([]strength.Workout, error)
+	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]strength.PersonalRecordEvent, error)
 }
 
 type exerciseReader interface {
@@ -91,7 +91,7 @@ func (s *Service) Build(ctx context.Context, userID string, start, end time.Time
 	}
 
 	snap.Strength = sectionOrNil(ctx, "strength", func() (*StrengthSection, error) {
-		ws, err := s.workoutRepo.ListByUser(ctx, userID, workout.ListOptions{Since: &start, Until: &end})
+		ws, err := s.workoutRepo.ListByUser(ctx, userID, strength.ListOptions{Since: &start, Until: &end})
 		if err != nil {
 			return nil, err
 		}

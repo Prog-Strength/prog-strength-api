@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // timelineHydrator renders timeline post content from the live workout and
@@ -21,12 +21,12 @@ import (
 // N+1 across types. Refs whose source no longer exists are omitted from the
 // returned map; the handler renders that as a dropped post.
 type timelineHydrator struct {
-	workoutRepo  workout.Repository
+	workoutRepo  strength.Repository
 	activityRepo activity.Repository
 }
 
 // newTimelineHydrator builds the adapter over the workout + activity repos.
-func newTimelineHydrator(workoutRepo workout.Repository, activityRepo activity.Repository) *timelineHydrator {
+func newTimelineHydrator(workoutRepo strength.Repository, activityRepo activity.Repository) *timelineHydrator {
 	return &timelineHydrator{workoutRepo: workoutRepo, activityRepo: activityRepo}
 }
 
@@ -150,7 +150,7 @@ func (h *timelineHydrator) hydratePRs(ctx context.Context, refs []timeline.PostR
 	if err != nil {
 		return err
 	}
-	byID := make(map[string]workout.PersonalRecordEvent, len(events))
+	byID := make(map[string]strength.PersonalRecordEvent, len(events))
 	for _, e := range events {
 		byID[e.ID] = e
 	}

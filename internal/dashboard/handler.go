@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
@@ -21,7 +22,6 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // sparkLookbackWeeks is how far back the running/lifting reads pull. The
@@ -37,7 +37,7 @@ const sparkLookbackWeeks = 53
 // a 500 — and assembling the envelope.
 type Handler struct {
 	activityRepo   activity.Repository
-	workoutRepo    workout.Repository
+	workoutRepo    strength.Repository
 	exerciseRepo   exercise.Repository
 	stepsRepo      steps.Repository
 	nutritionRepo  nutrition.Repository
@@ -55,7 +55,7 @@ type Handler struct {
 // NewHandler builds a dashboard Handler backed by the given read repositories.
 func NewHandler(
 	activityRepo activity.Repository,
-	workoutRepo workout.Repository,
+	workoutRepo strength.Repository,
 	exerciseRepo exercise.Repository,
 	stepsRepo steps.Repository,
 	nutritionRepo nutrition.Repository,
@@ -138,8 +138,8 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	runs := defer1(ctx, r, "running activities", func() ([]activity.Activity, error) {
 		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil)
 	})
-	workouts := defer1(ctx, r, "workouts", func() ([]workout.Workout, error) {
-		return h.workoutRepo.ListByUser(ctx, userID, workout.ListOptions{Since: &since53w})
+	workouts := defer1(ctx, r, "workouts", func() ([]strength.Workout, error) {
+		return h.workoutRepo.ListByUser(ctx, userID, strength.ListOptions{Since: &since53w})
 	})
 	stepEntries := defer1(ctx, r, "steps", func() ([]steps.Entry, error) {
 		entries, _, err := h.stepsRepo.List(ctx, userID, &since53wStr, &todayStr, 0, nil)
@@ -180,7 +180,7 @@ func (h *Handler) buildRunningSection(ctx context.Context, r *http.Request, user
 // the 53-week workout list, this-week PR count from the PR-event table, and the
 // headline 1RM from the user's PRs. A failure computing the PR count or headline
 // degrades that field (0 PRs / nil headline) without dropping the whole tile.
-func (h *Handler) buildLiftingSection(ctx context.Context, r *http.Request, userID string, workouts []workout.Workout, unit string, now time.Time, loc *time.Location) *LiftingSection {
+func (h *Handler) buildLiftingSection(ctx context.Context, r *http.Request, userID string, workouts []strength.Workout, unit string, now time.Time, loc *time.Location) *LiftingSection {
 	prCount := defer1(ctx, r, "lifting pr count", func() (int, error) {
 		ids := thisWeekWorkoutIDs(workouts, now, loc)
 		if len(ids) == 0 {
@@ -271,7 +271,7 @@ func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, use
 
 // thisWeekWorkoutIDs returns the IDs of workouts performed in the current local
 // week — the set whose PR events count toward the tile's "PRs this week".
-func thisWeekWorkoutIDs(workouts []workout.Workout, now time.Time, loc *time.Location) []string {
+func thisWeekWorkoutIDs(workouts []strength.Workout, now time.Time, loc *time.Location) []string {
 	current := localWeekStart(now, loc)
 	var ids []string
 	for i := range workouts {
@@ -298,7 +298,7 @@ func thisWeekWorkoutIDs(workouts []workout.Workout, now time.Time, loc *time.Loc
 //
 // Any domain that failed to load contributes nothing — the streak degrades
 // gracefully.
-func streakDates(runs []activity.Activity, workouts []workout.Workout, stepEntries []steps.Entry, stepGoal int, loc *time.Location) map[string]bool {
+func streakDates(runs []activity.Activity, workouts []strength.Workout, stepEntries []steps.Entry, stepGoal int, loc *time.Location) map[string]bool {
 	active := make(map[string]bool)
 	for i := range runs {
 		if runs[i].ActivityType == activity.ActivityStrengthTraining {
@@ -326,7 +326,7 @@ func streakDates(runs []activity.Activity, workouts []workout.Workout, stepEntri
 // the user ended the session (EndedAt set) AND logged at least one set. This
 // excludes the empty/abandoned rows that persist when a session is started but
 // never filled in.
-func workoutCompleted(w workout.Workout) bool {
+func workoutCompleted(w strength.Workout) bool {
 	if w.EndedAt == nil {
 		return false
 	}

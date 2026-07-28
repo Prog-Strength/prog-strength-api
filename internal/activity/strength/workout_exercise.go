@@ -1,4 +1,4 @@
-package workout
+package strength
 
 // WorkoutExercise represents one exercise performed within a workout —
 // e.g., "Back Squat" within today's session, containing all the sets

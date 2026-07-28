@@ -1,4 +1,4 @@
-package workout
+package strength
 
 import "time"
 

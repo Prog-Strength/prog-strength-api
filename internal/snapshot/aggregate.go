@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 const maxTopSetsPerSession = 3
@@ -30,8 +30,8 @@ type bodyweightReading struct {
 // section. Always returns a non-nil section (empty input → zeroed
 // section) so an empty-but-healthy domain renders, not nulls.
 func aggregateStrength(
-	workouts []workout.Workout,
-	prEvents []workout.PersonalRecordEvent,
+	workouts []strength.Workout,
+	prEvents []strength.PersonalRecordEvent,
 	exercises []exercise.Exercise,
 	unit string,
 	loc *time.Location,
@@ -42,7 +42,7 @@ func aggregateStrength(
 		muscleByExercise[e.ID] = e.MuscleGroups
 		nameByExercise[e.ID] = e.Name
 	}
-	prsByWorkout := map[string][]workout.PersonalRecordEvent{}
+	prsByWorkout := map[string][]strength.PersonalRecordEvent{}
 	for _, ev := range prEvents {
 		prsByWorkout[ev.WorkoutID] = append(prsByWorkout[ev.WorkoutID], ev)
 	}
@@ -71,7 +71,7 @@ func aggregateStrength(
 			for _, s := range we.Sets {
 				exVol += s.Weight * float64(s.Reps)
 				sec.TotalVolume += s.Weight * float64(s.Reps)
-				est := workout.EpleyOneRM(s.Weight, s.Reps)
+				est := strength.EpleyOneRM(s.Weight, s.Reps)
 				if !haveBest || est > best.Est1RM {
 					best = TopSet{Exercise: we.ExerciseID, Weight: s.Weight, Reps: s.Reps, Est1RM: roundTo(est, 0)}
 					haveBest = true

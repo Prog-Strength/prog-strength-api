@@ -5,22 +5,22 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 // liftSessionSource adapts the workout repository to user.LiftSessionSource so
 // the user package's profile-stats handler can read completed lift sessions
 // without importing workout (which would be a cross-domain import the user
 // package is kept free of). The adapter lives in the wiring layer and maps
-// workout.SessionDuration → user.LiftSession.
+// strength.SessionDuration → user.LiftSession.
 type liftSessionSource struct {
-	repo workout.Repository
+	repo strength.Repository
 }
 
 var _ user.LiftSessionSource = (*liftSessionSource)(nil)
 
-func newLiftSessionSource(repo workout.Repository) *liftSessionSource {
+func newLiftSessionSource(repo strength.Repository) *liftSessionSource {
 	return &liftSessionSource{repo: repo}
 }
 

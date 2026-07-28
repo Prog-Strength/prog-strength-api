@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
@@ -42,7 +43,6 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 type Server struct {
@@ -158,7 +158,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	// Initialize repositories based on config.
 	var exerciseRepo exercise.Repository
-	var workoutRepo workout.Repository
+	var workoutRepo strength.Repository
 	var userRepo user.Repository
 	var nutritionRepo nutrition.Repository
 	var bodyweightRepo bodyweight.Repository
@@ -209,7 +209,7 @@ func New(cfg config.Config) (*Server, error) {
 
 	// Create SQLite repositories.
 	exerciseRepo = exercise.NewSQLiteRepository(database)
-	sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
+	sqliteWorkoutRepo := strength.NewSQLiteRepository(database)
 	workoutRepo = sqliteWorkoutRepo
 	userRepo = user.NewSQLiteRepository(database)
 	nutritionRepo = nutrition.NewSQLiteRepository(database)
@@ -476,7 +476,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Capture the workout + activity handlers so the timeline publisher
 		// can be injected before mounting — best-effort publishing of
 		// workouts/PRs (workout) and runs/best efforts (activity).
-		workoutHandler := workout.NewHandler(workoutRepo, exerciseRepo, activityRepo)
+		workoutHandler := strength.NewHandler(workoutRepo, exerciseRepo, activityRepo)
 		workoutHandler.SetPublisher(timelinePublisher)
 		workoutHandler.Mount(r)
 		// Nutrition + pantry routes share the JWT-gated group with

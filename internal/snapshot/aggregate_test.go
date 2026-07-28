@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/workout"
 )
 
 func mustLoc(t *testing.T) *time.Location {
@@ -27,12 +27,12 @@ func TestAggregateStrength_VolumeMuscleGroupsTopSetsPRs(t *testing.T) {
 	at := time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)
 	bench := exercise.Exercise{ID: "barbell-bench-press", Name: "barbell bench press",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest, exercise.MuscleTriceps}}
-	w := workout.Workout{ID: "w1", Name: "Chest & Back", PerformedAt: at,
-		Exercises: []workout.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []workout.Set{
+	w := strength.Workout{ID: "w1", Name: "Chest & Back", PerformedAt: at,
+		Exercises: []strength.WorkoutExercise{{ExerciseID: "barbell-bench-press", Sets: []strength.Set{
 			{Reps: 8, Weight: 225}, {Reps: 8, Weight: 265},
 		}}}}
-	prs := []workout.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
-	got := aggregateStrength([]workout.Workout{w}, prs, []exercise.Exercise{bench}, "lb", loc)
+	prs := []strength.PersonalRecordEvent{{ExerciseID: "barbell-bench-press", Weight: 265, Reps: 8, WorkoutID: "w1"}}
+	got := aggregateStrength([]strength.Workout{w}, prs, []exercise.Exercise{bench}, "lb", loc)
 
 	if got.SessionCount != 1 {
 		t.Fatalf("session_count = %d, want 1", got.SessionCount)
@@ -83,13 +83,13 @@ func TestAggregateStrength_ByMuscleGroupTieOrderingDeterministic(t *testing.T) {
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleShoulders}}
 	bicepEx := exercise.Exercise{ID: "barbell-curl", Name: "barbell curl",
 		MuscleGroups: []exercise.MuscleGroup{exercise.MuscleBiceps}}
-	w := workout.Workout{ID: "w1", Name: "Push & Pull", PerformedAt: at,
-		Exercises: []workout.WorkoutExercise{
-			{ExerciseID: "shoulder-press", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
-			{ExerciseID: "barbell-curl", Sets: []workout.Set{{Reps: 10, Weight: 100}}},
+	w := strength.Workout{ID: "w1", Name: "Push & Pull", PerformedAt: at,
+		Exercises: []strength.WorkoutExercise{
+			{ExerciseID: "shoulder-press", Sets: []strength.Set{{Reps: 10, Weight: 100}}},
+			{ExerciseID: "barbell-curl", Sets: []strength.Set{{Reps: 10, Weight: 100}}},
 		}}
 	exs := []exercise.Exercise{shoulderEx, bicepEx}
-	got := aggregateStrength([]workout.Workout{w}, nil, exs, "lb", loc)
+	got := aggregateStrength([]strength.Workout{w}, nil, exs, "lb", loc)
 	if len(got.ByMuscleGroup) != 2 {
 		t.Fatalf("by_muscle_group = %+v", got.ByMuscleGroup)
 	}
@@ -110,14 +110,14 @@ func TestAggregateStrength_TopSetsRankedAndCapped(t *testing.T) {
 		return exercise.Exercise{ID: id, Name: id, MuscleGroups: []exercise.MuscleGroup{exercise.MuscleChest}}
 	}
 	exs := []exercise.Exercise{ex("a"), ex("b"), ex("c"), ex("d")}
-	we := func(id string, weight float64) workout.WorkoutExercise {
-		return workout.WorkoutExercise{ExerciseID: id, Sets: []workout.Set{{Reps: 1, Weight: weight}}}
+	we := func(id string, weight float64) strength.WorkoutExercise {
+		return strength.WorkoutExercise{ExerciseID: id, Sets: []strength.Set{{Reps: 1, Weight: weight}}}
 	}
 	// Est-1RM for a single rep equals weight, so ordering is by weight.
-	w := workout.Workout{ID: "w1", PerformedAt: at, Exercises: []workout.WorkoutExercise{
+	w := strength.Workout{ID: "w1", PerformedAt: at, Exercises: []strength.WorkoutExercise{
 		we("a", 100), we("b", 400), we("c", 200), we("d", 300),
 	}}
-	got := aggregateStrength([]workout.Workout{w}, nil, exs, "lb", loc)
+	got := aggregateStrength([]strength.Workout{w}, nil, exs, "lb", loc)
 	top := got.Sessions[0].TopSets
 	if len(top) != maxTopSetsPerSession {
 		t.Fatalf("top sets len = %d, want %d", len(top), maxTopSetsPerSession)

@@ -1,3 +1,10 @@
+## [0.83.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.1...v0.83.2) (2026-07-29)
+
+
+### Bug Fixes
+
+* **chat:** count messages in the listing query so GET /chat-sessions can't 500 ([#84](https://github.com/Prog-Strength/prog-strength-api/issues/84)) ([dcbe72f](https://github.com/Prog-Strength/prog-strength-api/commit/dcbe72f7edaca5dda4153fc4bcdad4358b0059a6)), closes [#77](https://github.com/Prog-Strength/prog-strength-api/issues/77) [#77](https://github.com/Prog-Strength/prog-strength-api/issues/77) [#77](https://github.com/Prog-Strength/prog-strength-api/issues/77)
+
 ## [0.83.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.0...v0.83.1) (2026-07-29)
 
 

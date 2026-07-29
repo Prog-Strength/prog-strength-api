@@ -1,3 +1,10 @@
+## [0.83.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.0...v0.83.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* stop vector memory distillation looping on units it can never distill ([#83](https://github.com/Prog-Strength/prog-strength-api/issues/83)) ([469f181](https://github.com/Prog-Strength/prog-strength-api/commit/469f1818e6c8a47a51d9763e351bdfb91b05cdd7)), closes [#78](https://github.com/Prog-Strength/prog-strength-api/issues/78) [#78](https://github.com/Prog-Strength/prog-strength-api/issues/78)
+
 # [0.83.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.82.0...v0.83.0) (2026-07-29)
 
 

@@ -43,13 +43,17 @@ func (f *fakeEmbedder) Configured() bool { return true }
 // fakeDistiller returns a preset observation list (possibly empty) and can be
 // switched to fail, simulating the LLM call erroring out. usage is the
 // DistillUsage it reports back for token-counter assertions.
+// calls counts Distill invocations so a test can assert the paid provider was
+// never reached.
 type fakeDistiller struct {
 	observations []string
 	errOn        bool
 	usage        DistillUsage
+	calls        int
 }
 
 func (f *fakeDistiller) Distill(_ context.Context, _, _ string) ([]string, DistillUsage, error) {
+	f.calls++
 	if f.errOn {
 		return nil, DistillUsage{}, errors.New("distill boom")
 	}
@@ -347,6 +351,62 @@ func TestServiceDistillUnitInserts(t *testing.T) {
 			t.Fatalf("expected empty store, got %d", len(dumped))
 		}
 	})
+}
+
+// TestServiceDistillUnitBlankContent pins the source-agnostic guard: a unit with
+// nothing to read never reaches the paid provider and is reported as a clean
+// zero-observation success so the job stamps it distilled instead of retrying it
+// forever.
+//
+// why: every provider rejects an empty message — Anthropic answers
+// "messages.0: user messages must have non-empty content" with a 400 — and the
+// job's mark-on-success-only policy turns that into an unbounded retry loop
+// (API issue #78). Each source filters blank units in its own selection query;
+// this is the backstop for any that doesn't.
+func TestServiceDistillUnitBlankContent(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "s1", "userA")
+
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{"empty transcript", ""},
+		{"whitespace-only content", "  \n\t "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			emb := &fakeEmbedder{}
+			dis := &fakeDistiller{observations: []string{"should never be recorded"}}
+			svc := NewService(repo, emb, dis, baseCfg(), testLogger())
+
+			sid := "s1"
+			n, err := svc.DistillUnit(ctx, DistillUnit{
+				UnitID: "s1",
+				UserID: "userA",
+				// A message-less chat session renders to exactly this.
+				Content: tc.content,
+				Source:  Provenance{SourceType: "chat_session", SessionID: &sid},
+			})
+			if err != nil {
+				t.Fatalf("DistillUnit: %v", err)
+			}
+			if n != 0 {
+				t.Fatalf("expected 0 inserts for blank content, got %d", n)
+			}
+			if dis.calls != 0 {
+				t.Fatalf("expected the distiller not to be called for blank content, got %d calls", dis.calls)
+			}
+			dumped, err := svc.Dump(ctx, "userA", 10, 0)
+			if err != nil {
+				t.Fatalf("dump: %v", err)
+			}
+			if len(dumped) != 0 {
+				t.Fatalf("expected empty store, got %d", len(dumped))
+			}
+		})
+	}
 }
 
 func TestRenderConversation(t *testing.T) {

@@ -3,10 +3,13 @@ package vectormemory
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -118,6 +121,54 @@ func TestAnthropicDistillNon200Errors(t *testing.T) {
 
 	if _, _, err := d.Distill(context.Background(), "x", ""); err == nil {
 		t.Fatal("Distill: expected error on 500, got nil")
+	}
+}
+
+// TestAnthropicDistillTerminalStatusClassification pins which provider failures
+// the job may retry. A rejection of the request itself will be rejected
+// identically forever, so it is tagged ErrUnitUnprocessable and the unit leaves
+// the queue; anything that can succeed on a later attempt must NOT carry the
+// tag, or a rate limit would silently discard real conversations.
+func TestAnthropicDistillTerminalStatusClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		status   int
+		body     string
+		terminal bool
+	}{
+		{"400 invalid request", http.StatusBadRequest, `{"error":{"type":"invalid_request_error","message":"messages.0: user messages must have non-empty content"}}`, true},
+		{"404 unknown model", http.StatusNotFound, `{"error":{"type":"not_found_error"}}`, true},
+		{"413 payload too large", http.StatusRequestEntityTooLarge, `{"error":{"type":"request_too_large"}}`, true},
+		{"401 bad credentials", http.StatusUnauthorized, `{"error":{"type":"authentication_error"}}`, false},
+		{"403 forbidden", http.StatusForbidden, `{"error":{"type":"permission_error"}}`, false},
+		{"408 request timeout", http.StatusRequestTimeout, `{"error":{"type":"timeout_error"}}`, false},
+		{"429 rate limited", http.StatusTooManyRequests, `{"error":{"type":"rate_limit_error"}}`, false},
+		{"500 server error", http.StatusInternalServerError, `{"error":{"type":"api_error"}}`, false},
+		{"529 overloaded", 529, `{"error":{"type":"overloaded_error"}}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(srv.Close)
+
+			d := NewAnthropicDistiller(srv.Client(), "key-123", "claude-test")
+			d.BaseURL = srv.URL
+
+			_, _, err := d.Distill(context.Background(), "x", "")
+			if err == nil {
+				t.Fatalf("Distill: expected an error on %d, got nil", tc.status)
+			}
+			if got := errors.Is(err, ErrUnitUnprocessable); got != tc.terminal {
+				t.Fatalf("errors.Is(err, ErrUnitUnprocessable) = %v, want %v (err: %v)", got, tc.terminal, err)
+			}
+			// The status and provider message must survive the wrapping — they
+			// are what an operator reads in CloudWatch.
+			if !strings.Contains(err.Error(), fmt.Sprintf("status %d", tc.status)) {
+				t.Fatalf("error lost the status code: %v", err)
+			}
+		})
 	}
 }
 

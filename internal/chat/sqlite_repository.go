@@ -371,9 +371,30 @@ func (r *SQLiteRepository) ListMessages(ctx context.Context, userID, sessionID s
 	return out, rows.Err()
 }
 
+// hasTranscript is the "this session has something to distill" predicate shared
+// by every distillation selection query, correlated on the outer chat_sessions
+// row aliased as s.
+//
+// why: the clients lazy-create the chat_sessions row immediately before
+// streaming the first turn, so a turn that never persists (stream aborted, agent
+// error) leaves a session with zero messages — and last_message_at is stamped at
+// creation, so it goes "idle" on schedule and is selected like any other. Its
+// rendered transcript is the empty string, which the distiller provider rejects
+// with 400 "messages.0: user messages must have non-empty content"; the job
+// marks on success only, so that session is re-selected and re-rejected on every
+// tick, forever (issue #78). Requiring a message with actual text is the same
+// guard the workout-note source already applies to its notes, and it leaves the
+// session eligible again the moment a real turn lands on it.
+const hasTranscript = `
+	EXISTS (
+		SELECT 1 FROM chat_messages m
+		WHERE m.session_id = s.id
+		  AND TRIM(m.content) <> ''
+	)`
+
 // IdleUndistilled returns sessions that have gone quiet (last_message_at
-// before cutoff) and have not yet been distilled, oldest-idle first, up
-// to limit.
+// before cutoff), carry a non-empty transcript, and have not yet been
+// distilled, oldest-idle first, up to limit.
 //
 // why: backs the vectormemory distillation job's batch selection. The
 // job runs cross-user (no caller user), so this is intentionally NOT
@@ -383,12 +404,13 @@ func (r *SQLiteRepository) ListMessages(ctx context.Context, userID, sessionID s
 // MarkDistilled stamps it.
 func (r *SQLiteRepository) IdleUndistilled(ctx context.Context, cutoff time.Time, limit int) ([]IdleSession, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id
-		FROM chat_sessions
-		WHERE last_message_at < ?
-		  AND memory_distilled_at IS NULL
-		  AND deleted_at IS NULL
-		ORDER BY last_message_at ASC
+		SELECT s.id, s.user_id
+		FROM chat_sessions s
+		WHERE s.last_message_at < ?
+		  AND s.memory_distilled_at IS NULL
+		  AND s.deleted_at IS NULL
+		  AND `+hasTranscript+`
+		ORDER BY s.last_message_at ASC
 		LIMIT ?
 	`, cutoff.UTC(), limit)
 	if err != nil {
@@ -406,8 +428,10 @@ func (r *SQLiteRepository) IdleUndistilled(ctx context.Context, cutoff time.Time
 	return out, rows.Err()
 }
 
-// CountIdleUndistilled returns the full count of idle, undistilled sessions —
-// the same WHERE clause as IdleUndistilled but without the batch LIMIT.
+// CountIdleUndistilled returns the full count of idle, undistilled sessions
+// carrying a transcript — the same WHERE clause as IdleUndistilled but without
+// the batch LIMIT. It must keep mirroring that clause exactly, transcript gate
+// included, or the gauge reports a backlog the job can never drain.
 //
 // why: the distillation job processes at most distillBatchSize sessions per
 // tick, so IdleUndistilled never reveals the true backlog. This one indexed
@@ -417,10 +441,11 @@ func (r *SQLiteRepository) CountIdleUndistilled(ctx context.Context, cutoff time
 	var count int
 	err := r.db.QueryRowContext(ctx, `
 		SELECT COUNT(*)
-		FROM chat_sessions
-		WHERE last_message_at < ?
-		  AND memory_distilled_at IS NULL
-		  AND deleted_at IS NULL
+		FROM chat_sessions s
+		WHERE s.last_message_at < ?
+		  AND s.memory_distilled_at IS NULL
+		  AND s.deleted_at IS NULL
+		  AND `+hasTranscript+`
 	`, cutoff.UTC()).Scan(&count)
 	if err != nil {
 		return 0, err
@@ -429,8 +454,8 @@ func (r *SQLiteRepository) CountIdleUndistilled(ctx context.Context, cutoff time
 }
 
 // AllUndistilledSessions returns a page of not-yet-distilled, non-deleted
-// sessions ordered by (last_message_at, id), ignoring any idle/settle window —
-// the full historical backlog for the one-time backfill. It is keyset-paginated
+// sessions carrying a transcript, ordered by (last_message_at, id), ignoring any
+// idle/settle window — the full historical backlog for the one-time backfill. It is keyset-paginated
 // on the opaque base64 cursor the caller threads through: an empty cursor starts
 // at the beginning, and an empty returned cursor means the set is exhausted.
 //
@@ -454,12 +479,13 @@ func (r *SQLiteRepository) AllUndistilledSessions(ctx context.Context, cursor st
 	// form. Binding a time.Time on both sides has the driver format the column
 	// and the cursor value identically.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, last_message_at
-		FROM chat_sessions
-		WHERE memory_distilled_at IS NULL
-		  AND deleted_at IS NULL
-		  AND (last_message_at > ? OR (last_message_at = ? AND id > ?))
-		ORDER BY last_message_at ASC, id ASC
+		SELECT s.id, s.user_id, s.last_message_at
+		FROM chat_sessions s
+		WHERE s.memory_distilled_at IS NULL
+		  AND s.deleted_at IS NULL
+		  AND (s.last_message_at > ? OR (s.last_message_at = ? AND s.id > ?))
+		  AND `+hasTranscript+`
+		ORDER BY s.last_message_at ASC, s.id ASC
 		LIMIT ?
 	`, afterLastMessageAt.UTC(), afterLastMessageAt.UTC(), afterID, limit)
 	if err != nil {

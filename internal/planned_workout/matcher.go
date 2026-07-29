@@ -2,16 +2,6 @@ package plannedworkout
 
 import "time"
 
-// kindToActivityKind maps a logged session's kind to the plan ActivityKind it
-// can complete: an activity (always a running activity at the hook site)
-// completes a "run" plan; a workout completes a "lift" plan.
-func kindToActivityKind(kind SessionKind) ActivityKind {
-	if kind == SessionKindActivity {
-		return ActivityKindRun
-	}
-	return ActivityKindLift
-}
-
 // sameLocalDay reports whether the plan's scheduled start and the session start
 // fall on the same calendar day rendered in the plan's own IANA timezone. A plan
 // with an unloadable timezone never matches.
@@ -27,13 +17,14 @@ func sameLocalDay(plan PlannedWorkout, sessionStartUTC time.Time) bool {
 	return py == sy && pm == sm && pd == sd
 }
 
-// selectPlan returns the candidate plan a session of the given kind/start
-// completes, or nil. Candidates are planned-status plans of the matching kind on
-// the same local day; the winner is the one whose ScheduledStartUTC is closest
-// to the session start, breaking ties by earliest ScheduledStartUTC then by ID
-// (fully deterministic; exact ties are effectively impossible in practice).
-func selectPlan(plans []PlannedWorkout, sessionStartUTC time.Time, kind SessionKind) *PlannedWorkout {
-	wantKind := kindToActivityKind(kind)
+// selectPlan returns the candidate plan of the wanted ActivityKind that the
+// session at sessionStartUTC completes, or nil. Candidates are planned-status
+// plans of the matching kind on the same local day; the winner is the one whose
+// ScheduledStartUTC is closest to the session start, breaking ties by earliest
+// ScheduledStartUTC then by ID (fully deterministic; exact ties are effectively
+// impossible in practice). The caller derives wantKind from the completing
+// activity's activity_type (strength_training → lift, endurance → run).
+func selectPlan(plans []PlannedWorkout, sessionStartUTC time.Time, wantKind ActivityKind) *PlannedWorkout {
 	var best *PlannedWorkout
 	var bestDelta time.Duration
 	for i := range plans {

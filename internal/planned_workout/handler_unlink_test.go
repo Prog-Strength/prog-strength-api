@@ -32,9 +32,6 @@ func TestUnlink_CompletedPlan200(t *testing.T) {
 	if got.CompletedSessionID != nil {
 		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
 	}
-	if got.CompletedSessionKind != nil {
-		t.Errorf("completed_session_kind = %v want nil", got.CompletedSessionKind)
-	}
 }
 
 func TestUnlink_SyncedResyncs(t *testing.T) {
@@ -77,25 +74,45 @@ func TestBySession_Found200(t *testing.T) {
 	}
 }
 
-func TestBySession_MissingParams400(t *testing.T) {
+// TestBySession_MissingSessionID400 proves session_id is still required (only
+// the session_kind param became optional).
+func TestBySession_MissingSessionID400(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
-	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=sess-1", "")
+	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_kind=workout", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
 	}
 }
 
-func TestBySession_InvalidKind400(t *testing.T) {
+// TestBySession_OmittedKindStillResolves proves the lookup works with no
+// session_kind param at all (the param is optional-and-ignored now).
+func TestBySession_OmittedKindStillResolves(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
+	id := seedPlan(t, repo, "u1")
+	completePlan(t, repo, "u1", id, "sess-1", "workout")
+	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=sess-1", "")
+	got := decodePlan(t, w, http.StatusOK)
+	if got.ID != id {
+		t.Errorf("id = %q want %q", got.ID, id)
+	}
+}
+
+// TestBySession_PresentKindIgnored proves a present (even nonsense) session_kind
+// is accepted and ignored rather than rejected — deployed clients still send it.
+func TestBySession_PresentKindIgnored(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	id := seedPlan(t, repo, "u1")
+	completePlan(t, repo, "u1", id, "sess-1", "workout")
 	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=sess-1&session_kind=bogus", "")
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
+	got := decodePlan(t, w, http.StatusOK)
+	if got.ID != id {
+		t.Errorf("id = %q want %q", got.ID, id)
 	}
 }
 
 func TestBySession_NoMatch404(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
-	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=ghost&session_kind=workout", "")
+	w := doCal(t, repo, nil, nil, "u1", "GET", "/planned-workouts/by-session?session_id=ghost", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d want 404, body=%s", w.Code, w.Body.String())
 	}

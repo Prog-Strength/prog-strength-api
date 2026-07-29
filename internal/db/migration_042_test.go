@@ -131,7 +131,9 @@ func TestMigrate042_UnifiedActivityModel(t *testing.T) {
 	t.Parallel()
 	db := newEmptyDB(t)
 	seed042Fixture(t, db)
-	if err := Migrate(db); err != nil {
+	// Pin at 042: this test asserts 042's own end state, including the
+	// completed_session_kind normalization that migration 043 later drops.
+	if err := migrateUpTo(db, 42); err != nil {
 		t.Fatalf("migrate through 042: %v", err)
 	}
 

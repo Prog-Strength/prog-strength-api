@@ -2,11 +2,9 @@ package strength
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -82,15 +80,6 @@ func (h *Handler) matchSession(ctx context.Context, userID string, ref SessionRe
 	h.planMatcher.OnSessionLogged(ctx, userID, ref)
 }
 
-// unmatchSession best-effort-notifies the plan matcher that sessionID was
-// deleted so any plan link is reverted. Nil matcher is a no-op.
-func (h *Handler) unmatchSession(ctx context.Context, userID, sessionID string) {
-	if h.planMatcher == nil {
-		return
-	}
-	h.planMatcher.OnSessionDeleted(ctx, userID, sessionID)
-}
-
 // publish best-effort-publishes ref into the timeline feed index. It NEVER
 // affects the HTTP response: a nil publisher is a no-op, and the publisher
 // itself logs + meters any EnsurePost error and swallows it. The backfill
@@ -134,26 +123,15 @@ func (h *Handler) publishWorkoutPosts(ctx context.Context, w *Workout) {
 	}
 }
 
-// Mount registers workout routes on the given router. Callers are expected
-// to have already wrapped the router in auth.RequireUser middleware — these
-// handlers read the user ID from request context and assume it is present.
+// Mount registers the strength surfaces that are NOT part of the unified
+// /activities create/read/update path: the personal-records endpoints and the
+// per-user headline-exercise customization. The former /workouts CRUD +
+// progression + imports + TCX routes were removed in the stage-5 cleanup
+// (unified-activity-model SOW); those handlers now mount only under /activities
+// via MountActivityRoutes and the strength descriptor's Create/Update seams.
+// Callers must already have wrapped the router in auth.RequireUser middleware —
+// these handlers read the user ID from request context and assume it is present.
 func (h *Handler) Mount(r chi.Router) {
-	r.Route("/workouts", func(r chi.Router) {
-		r.Get("/", h.list)
-		// Registered before any /{id} routes so chi matches literal
-		// path segments instead of trying to interpret them as workout IDs.
-		r.Get("/progression", h.progression)
-		// Create-from-TCX: mint an empty workout from a Garmin TCX. Literal
-		// segment, so it's registered before /{id} routes for the same reason.
-		r.Post("/imports", h.importFromTCX)
-		r.Get("/{id}", h.get)
-		r.Post("/", h.create)
-		r.Put("/{id}", h.update)
-		r.Delete("/{id}", h.delete)
-		// TCX enrichment attach/detach on an existing workout.
-		r.Post("/{id}/tcx", h.attachTCX)
-		r.Delete("/{id}/tcx", h.detachTCX)
-	})
 	r.Get("/personal-records", h.personalRecords)
 	r.Get("/personal-records/{exercise_id}/history", h.exerciseOneRMHistory)
 
@@ -167,13 +145,11 @@ func (h *Handler) Mount(r chi.Router) {
 }
 
 // MountActivityRoutes is the strength descriptor's MountRoutes: the
-// type-specific endpoints on the /activities subrouter. Progression keeps
-// its /workouts/progression response shape at its new canonical path, the
-// TCX enrichment pair gains its /activities/{id}/tcx home alongside the
-// /workouts/{id}/tcx alias, and the stage-3 parity aliases relocate the
-// create-from-TCX import and the per-exercise 1RM history under /activities
-// (same handlers, same response shapes — chi matches these literal segments
-// ahead of the /{id} params). Assigned to the descriptor in server.go.
+// type-specific endpoints on the /activities subrouter — progression, the TCX
+// enrichment pair (POST|DELETE /activities/{id}/tcx), the create-from-TCX
+// import, and the per-exercise 1RM history. These keep the same response shapes
+// they had under the removed /workouts shims; chi matches the literal segments
+// ahead of the /{id} params. Assigned to the descriptor in server.go.
 func (h *Handler) MountActivityRoutes(r chi.Router) {
 	r.Get("/progression", h.progression)
 	r.Post("/imports", h.importFromTCX)
@@ -280,170 +256,9 @@ func translateWorkoutError(err error) error {
 	return err
 }
 
-// workoutListResponse is the data envelope for GET /workouts. Wraps
-// the page of workouts in pagination metadata so the frontend can
-// render "showing N–M of TOTAL" and disable Previous/Next at the
-// edges of the result set.
-type workoutListResponse struct {
-	Items   []workoutWithEvents `json:"items"`
-	Total   int                 `json:"total"`
-	Limit   int                 `json:"limit"`
-	Offset  int                 `json:"offset"`
-	HasMore bool                `json:"has_more"`
-}
-
-// list handles GET /workouts. Returns a page of the authed user's
-// workouts, most recent first.
-//
-// Query params (all optional):
-//   - since (RFC3339): only workouts performed at or after this time
-//   - until (RFC3339): only workouts performed at or before this time
-//   - limit (1–100): page size, default 50
-//   - offset (≥0): rows to skip, default 0
-//
-// Each workout in the response carries any PR events it produced via
-// `personal_records_set`, so the frontend can badge sessions inline
-// without a second round trip.
-func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-
-	opts, err := parseWorkoutListOptions(r)
-	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	workouts, err := h.repo.ListByUser(r.Context(), userID, opts)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "list workouts", err)
-		return
-	}
-	total, err := h.repo.CountByUser(r.Context(), userID, opts)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "count workouts", err)
-		return
-	}
-
-	wrapped, err := h.attachPersonalRecordEvents(r.Context(), workouts)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "fetch personal record events", err)
-		return
-	}
-	if wrapped == nil {
-		wrapped = []workoutWithEvents{}
-	}
-	// List load: embed each workout's lightweight enrichment summary
-	// (HR/calories) but NOT the per-second trackpoints array.
-	if err := h.attachEnrichment(r.Context(), wrapped, false); err != nil {
-		httpresp.ServerError(w, r.Context(), "load workout enrichment", err)
-		return
-	}
-
-	// Echo the effective limit/offset so the caller doesn't have to
-	// remember what defaults the server applied.
-	effectiveLimit := opts.Limit
-	if effectiveLimit <= 0 {
-		effectiveLimit = 50
-	}
-	resp := workoutListResponse{
-		Items:   wrapped,
-		Total:   total,
-		Limit:   effectiveLimit,
-		Offset:  opts.Offset,
-		HasMore: opts.Offset+len(wrapped) < total,
-	}
-	httpresp.OK(w, "listed workouts", resp)
-}
-
-// parseWorkoutListOptions reads pagination + timeframe query params
-// off the request, validating ranges and timestamp formats. Returns
-// a 400-shaped error message on bad input — the caller surfaces it.
-func parseWorkoutListOptions(r *http.Request) (ListOptions, error) {
-	q := r.URL.Query()
-	opts := ListOptions{}
-
-	if s := q.Get("since"); s != "" {
-		t, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			return opts, errors.New("invalid since: must be RFC3339 format")
-		}
-		opts.Since = &t
-	}
-	if s := q.Get("until"); s != "" {
-		t, err := time.Parse(time.RFC3339, s)
-		if err != nil {
-			return opts, errors.New("invalid until: must be RFC3339 format")
-		}
-		opts.Until = &t
-	}
-	if s := q.Get("limit"); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < 1 || n > 100 {
-			return opts, errors.New("invalid limit: must be 1–100")
-		}
-		opts.Limit = n
-	}
-	if s := q.Get("offset"); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < 0 {
-			return opts, errors.New("invalid offset: must be ≥ 0")
-		}
-		opts.Offset = n
-	}
-
-	return opts, nil
-}
-
-// get handles GET /workouts/{id}. Returns a single workout owned by
-// the authed user, with any PR events it produced embedded as
-// `personal_records_set`. Ownership mismatches return 404 (not 403)
-// so workout IDs cannot be enumerated.
-func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-	workoutID := chi.URLParam(r, "id")
-	if workoutID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "workout id is required")
-		return
-	}
-
-	existing, err := h.repo.GetByID(r.Context(), workoutID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusNotFound, "workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "get workout", err)
-		return
-	}
-	if existing.UserID != userID {
-		httpresp.Error(w, http.StatusNotFound, "workout not found")
-		return
-	}
-
-	wrapped, err := h.attachPersonalRecordEvents(r.Context(), []Workout{*existing})
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "fetch personal record events", err)
-		return
-	}
-	// Detail load: embed the linked activity's enrichment WITH its
-	// downsampled HR trackpoints.
-	if err := h.attachEnrichment(r.Context(), wrapped, true); err != nil {
-		httpresp.ServerError(w, r.Context(), "load workout enrichment", err)
-		return
-	}
-	httpresp.OK(w, "fetched workout", wrapped[0])
-}
-
-// progression handles GET /workouts/progression — the muscle-group
-// view that powers the Progress page.
+// progression handles GET /activities/progression — the muscle-group
+// view that powers the Progress page. (Formerly GET /workouts/progression;
+// same response shape at its canonical path since the stage-5 cleanup.)
 //
 // Query params (exactly one of movement_pattern / muscle_group required):
 //   - movement_pattern: one of push | pull | legs | core | all. The
@@ -589,267 +404,16 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "computed progression", result)
 }
 
-// create handles POST /workouts.
-func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		// Reaching this branch means the route was mounted without
-		// RequireUser middleware — a wiring bug, not a user-facing error.
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-
-	var req createWorkoutRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	name := req.Name
-	if name == "" {
-		name = fmt.Sprintf("Workout - %s", time.Now().Format("Jan 02, 2006"))
-	}
-
-	var performedAt time.Time
-	var err error
-	if req.PerformedAt == "" {
-		performedAt = time.Now()
-	} else {
-		performedAt, err = time.Parse(time.RFC3339, req.PerformedAt)
-		if err != nil {
-			httpresp.Error(w, http.StatusBadRequest, "invalid performed_at: must be RFC3339 format")
-			return
-		}
-	}
-
-	endedAt, err := parseOptionalRFC3339(req.EndedAt)
-	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid ended_at: must be RFC3339 format")
-		return
-	}
-
-	workout := &Workout{
-		UserID:      userID,
-		Name:        name,
-		PerformedAt: performedAt,
-		EndedAt:     endedAt,
-		Notes:       req.Notes,
-		Exercises:   make([]WorkoutExercise, len(req.Exercises)),
-	}
-	for i, exReq := range req.Exercises {
-		workout.Exercises[i] = WorkoutExercise{
-			ExerciseID:    exReq.ExerciseID,
-			Order:         i,
-			SupersetGroup: exReq.SupersetGroup,
-			Sets:          exReq.Sets,
-			Notes:         exReq.Notes,
-		}
-	}
-
-	if err := h.repo.Create(r.Context(), workout); err != nil {
-		if mapWorkoutValidationError(w, err) {
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "create workout", err)
-		return
-	}
-
-	// Best-effort: publish the workout post and any PR posts it set into
-	// the timeline. Never affects this response.
-	h.publishWorkoutPosts(r.Context(), workout)
-
-	// Best-effort: link this lift to the planned workout it completes. Never
-	// affects this response.
-	h.matchSession(r.Context(), workout.UserID, SessionRef{SessionID: workout.ID, StartUTC: workout.PerformedAt})
-
-	httpresp.Created(w, "created workout", workout)
-}
-
-// update handles PUT /workouts/{id}. Full-replacement semantics: the body
-// contains the complete workout state (same shape as POST), and we replace
-// the existing record. ID and UserID are sourced from the URL and the
-// authed user respectively — values in the body are ignored.
-//
-// Unlike create, no convenience defaults are applied. An update means the
-// caller is intentionally setting state; silently substituting a date-stamped
-// name or "now" for performed_at would let a small omission clobber data
-// the user didn't intend to touch. Required fields (performed_at, exercises)
-// must be present.
-//
-// Ownership is enforced by loading the existing workout first and comparing
-// UserID. Mismatches return 404 (not 403) so attackers can't enumerate
-// workout IDs to discover other users' data.
-func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-
-	workoutID := chi.URLParam(r, "id")
-	if workoutID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "workout id is required")
-		return
-	}
-
-	// Verify ownership before accepting the body. Treat "not yours" as 404.
-	existing, err := h.repo.GetByID(r.Context(), workoutID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusNotFound, "workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "get workout", err)
-		return
-	}
-	if existing.UserID != userID {
-		httpresp.Error(w, http.StatusNotFound, "workout not found")
-		return
-	}
-
-	var req createWorkoutRequest
-	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.PerformedAt == "" {
-		httpresp.Error(w, http.StatusBadRequest, "performed_at is required")
-		return
-	}
-	performedAt, err := time.Parse(time.RFC3339, req.PerformedAt)
-	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid performed_at: must be RFC3339 format")
-		return
-	}
-
-	endedAt, err := parseOptionalRFC3339(req.EndedAt)
-	if err != nil {
-		httpresp.Error(w, http.StatusBadRequest, "invalid ended_at: must be RFC3339 format")
-		return
-	}
-
-	workout := &Workout{
-		ID:          workoutID,
-		UserID:      userID,
-		Name:        req.Name,
-		PerformedAt: performedAt,
-		EndedAt:     endedAt,
-		Notes:       req.Notes,
-		// Carry the existing TCX link through: a workout edit never changes
-		// activity_id (the repo's UPDATE doesn't touch the column), so the
-		// returned DTO must reflect the link the DB still holds rather than a
-		// stale null.
-		ActivityID: existing.ActivityID,
-		Exercises:  make([]WorkoutExercise, len(req.Exercises)),
-	}
-	for i, exReq := range req.Exercises {
-		workout.Exercises[i] = WorkoutExercise{
-			ExerciseID:    exReq.ExerciseID,
-			Order:         i,
-			SupersetGroup: exReq.SupersetGroup,
-			Sets:          exReq.Sets,
-			Notes:         exReq.Notes,
-		}
-	}
-
-	if err := h.repo.Update(r.Context(), workout); err != nil {
-		if mapWorkoutValidationError(w, err) {
-			return
-		}
-		if errors.Is(err, ErrNotFound) {
-			// Race: deleted between our GetByID and Update.
-			httpresp.Error(w, http.StatusNotFound, "workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "update workout", err)
-		return
-	}
-
-	// Best-effort: an edit can newly set PRs (and EnsurePost is idempotent
-	// for the workout post itself), so republish. Never affects this response.
-	h.publishWorkoutPosts(r.Context(), workout)
-
-	httpresp.OK(w, "updated workout", workout)
-}
-
-// delete handles DELETE /workouts/{id}. Soft-deletes the workout via the
-// repo (sets DeletedAt); subsequent reads treat the row as gone. Ownership
-// is enforced with a GetByID-then-compare pattern that returns 404 on
-// mismatch, matching update — never reveal the existence of other users'
-// workouts to ID enumeration.
-func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-
-	workoutID := chi.URLParam(r, "id")
-	if workoutID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "workout id is required")
-		return
-	}
-
-	existing, err := h.repo.GetByID(r.Context(), workoutID)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			httpresp.Error(w, http.StatusNotFound, "workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "get workout", err)
-		return
-	}
-	if existing.UserID != userID {
-		httpresp.Error(w, http.StatusNotFound, "workout not found")
-		return
-	}
-
-	if err := h.repo.Delete(r.Context(), workoutID); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			// Race: deleted between our GetByID and Delete.
-			httpresp.Error(w, http.StatusNotFound, "workout not found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "delete workout", err)
-		return
-	}
-
-	// Best-effort: revert any plan link for the deleted workout. Never
-	// affects this response.
-	h.unmatchSession(r.Context(), userID, workoutID)
-
-	httpresp.OK(w, "deleted workout", nil)
-}
-
-// createWorkoutRequest is the request body for POST /workouts (and PUT).
-type createWorkoutRequest struct {
-	Name        string                  `json:"name"`
-	PerformedAt string                  `json:"performed_at"` // RFC3339
-	EndedAt     string                  `json:"ended_at"`     // RFC3339, optional
-	Notes       string                  `json:"notes"`
-	Exercises   []createWorkoutExercise `json:"exercises"`
-}
-
+// createWorkoutExercise is the strength descriptor's details-decode DTO: one
+// exercise entry in the `details.exercises` payload of the unified POST/PUT
+// /activities body (decoded via descriptor.go's detailsPayload → parseDetails;
+// slice position becomes Order). Not a legacy POST /workouts leftover — the
+// shims are gone, but this shape is the live wire format for strength details.
 type createWorkoutExercise struct {
 	ExerciseID    string `json:"exercise_id"`
 	SupersetGroup *int   `json:"superset_group"` // optional; nil = standalone
 	Notes         string `json:"notes"`
 	Sets          []Set  `json:"sets"`
-}
-
-// parseOptionalRFC3339 parses an RFC3339 timestamp string, returning nil for
-// an empty string. Used for optional timestamp fields like ended_at where
-// "field absent" and "field present but invalid" must be distinguished.
-func parseOptionalRFC3339(s string) (*time.Time, error) {
-	if s == "" {
-		return nil, nil
-	}
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return nil, err
-	}
-	return &t, nil
 }
 
 // isWorkoutValidationError reports whether err is one of the workout
@@ -862,18 +426,6 @@ func isWorkoutValidationError(err error) bool {
 		errors.Is(err, ErrExercisesRequired) || errors.Is(err, ErrExerciseIDRequired) ||
 		errors.Is(err, ErrInvalidOrder) || errors.Is(err, ErrSetsRequired) ||
 		errors.Is(err, ErrInvalidReps) || errors.Is(err, ErrInvalidWeight)
-}
-
-// mapWorkoutValidationError writes a 400 response if err is a known workout
-// validation error and returns true. Returns false for unknown errors so the
-// caller can decide (typically: log and respond 500). Centralized so create
-// and update don't duplicate the long error chain.
-func mapWorkoutValidationError(w http.ResponseWriter, err error) bool {
-	if isWorkoutValidationError(err) {
-		httpresp.Error(w, http.StatusBadRequest, err.Error())
-		return true
-	}
-	return false
 }
 
 // --- Personal Records --------------------------------------------------

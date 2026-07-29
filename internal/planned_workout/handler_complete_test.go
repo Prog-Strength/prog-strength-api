@@ -20,9 +20,6 @@ func TestComplete_Workout200(t *testing.T) {
 	if got.CompletedSessionID == nil || *got.CompletedSessionID != "sess-1" {
 		t.Errorf("completed_session_id = %v want sess-1", got.CompletedSessionID)
 	}
-	if got.CompletedSessionKind == nil || *got.CompletedSessionKind != "workout" {
-		t.Errorf("completed_session_kind = %v want workout", got.CompletedSessionKind)
-	}
 }
 
 func TestComplete_Activity200(t *testing.T) {
@@ -34,8 +31,8 @@ func TestComplete_Activity200(t *testing.T) {
 	if got.Status != "completed" {
 		t.Errorf("status = %q want completed", got.Status)
 	}
-	if got.CompletedSessionKind == nil || *got.CompletedSessionKind != "activity" {
-		t.Errorf("completed_session_kind = %v want activity", got.CompletedSessionKind)
+	if got.CompletedSessionID == nil || *got.CompletedSessionID != "act-9" {
+		t.Errorf("completed_session_id = %v want act-9", got.CompletedSessionID)
 	}
 }
 
@@ -48,21 +45,28 @@ func TestComplete_MissingSessionID400(t *testing.T) {
 	}
 }
 
-func TestComplete_MissingSessionKind400(t *testing.T) {
+// TestComplete_OmittedSessionKindAccepted proves session_kind is now optional:
+// omitting it succeeds (the discriminator was dropped in stage 5).
+func TestComplete_OmittedSessionKindAccepted(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1"}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
+	got := decodePlan(t, w, http.StatusOK)
+	if got.Status != "completed" {
+		t.Errorf("status = %q want completed", got.Status)
 	}
 }
 
-func TestComplete_InvalidSessionKind400(t *testing.T) {
+// TestComplete_PresentSessionKindIgnored proves a present session_kind (even a
+// nonsense one) is accepted and ignored rather than rejected — kept for backward
+// compat with deployed clients and MCP, which still send it.
+func TestComplete_PresentSessionKindIgnored(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	w := doCal(t, repo, nil, nil, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1","session_kind":"bogus"}`)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d want 400, body=%s", w.Code, w.Body.String())
+	got := decodePlan(t, w, http.StatusOK)
+	if got.Status != "completed" {
+		t.Errorf("status = %q want completed", got.Status)
 	}
 }
 

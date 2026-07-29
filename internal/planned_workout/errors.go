@@ -42,11 +42,6 @@ var (
 	// isn't time_block/full_agenda.
 	ErrInvalidCalendarDetail = errors.New("plannedworkout: calendar_detail must be 'time_block' or 'full_agenda'")
 
-	// ErrInvalidCompletionLink is returned when the completion link is
-	// half-populated (only one of session id / kind set) or the kind isn't
-	// workout/activity. The two columns are written together or not at all.
-	ErrInvalidCompletionLink = errors.New("plannedworkout: completion link requires both session id and a valid kind")
-
 	// ErrInvalidExercise is returned when a planned exercise is missing its
 	// exercise_id.
 	ErrInvalidExercise = errors.New("plannedworkout: exercise_id is required")
@@ -86,7 +81,6 @@ func isValidationError(err error) bool {
 		errors.Is(err, ErrInvalidTimezone),
 		errors.Is(err, ErrInvalidStatus),
 		errors.Is(err, ErrInvalidCalendarDetail),
-		errors.Is(err, ErrInvalidCompletionLink),
 		errors.Is(err, ErrInvalidExercise),
 		errors.Is(err, ErrInvalidSet),
 		errors.Is(err, ErrInvalidRPE):

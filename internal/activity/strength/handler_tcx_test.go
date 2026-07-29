@@ -95,7 +95,7 @@ type dupEnvelope struct {
 func doTCXImport(t *testing.T, h *Handler, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	body, ct := tcxMultipart(t, data)
-	req := httptest.NewRequest("POST", "/workouts/imports", body)
+	req := httptest.NewRequest("POST", "/activities/imports", body)
 	req.Header.Set("Content-Type", ct)
 	req = req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser))
 	w := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func doTCXImport(t *testing.T, h *Handler, data []byte) *httptest.ResponseRecord
 func doTCXAttach(t *testing.T, h *Handler, workoutID string, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	body, ct := tcxMultipart(t, data)
-	req := httptest.NewRequest("POST", "/workouts/"+workoutID+"/tcx", body)
+	req := httptest.NewRequest("POST", "/activities/"+workoutID+"/tcx", body)
 	req.Header.Set("Content-Type", ct)
 	req = withURLParam(req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser)), "id", workoutID)
 	w := httptest.NewRecorder()
@@ -116,7 +116,7 @@ func doTCXAttach(t *testing.T, h *Handler, workoutID string, data []byte) *httpt
 
 func doTCXDetach(t *testing.T, h *Handler, workoutID string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("DELETE", "/workouts/"+workoutID+"/tcx", nil)
+	req := httptest.NewRequest("DELETE", "/activities/"+workoutID+"/tcx", nil)
 	req = withURLParam(req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser)), "id", workoutID)
 	w := httptest.NewRecorder()
 	h.detachTCX(w, req)
@@ -297,45 +297,6 @@ func TestDetachTCX_ClearsEnrichment(t *testing.T) {
 	w2 := doTCXDetach(t, h, workoutID)
 	if w2.Code != http.StatusNoContent {
 		t.Errorf("second detach status = %d, want 204", w2.Code)
-	}
-}
-
-func TestWorkoutList_EnrichmentOmitsTrackpoints(t *testing.T) {
-	h, _, _ := newTCXHandler(t)
-	if imp := doTCXImport(t, h, strengthFixture(t, "strength_session.tcx")); imp.Code != http.StatusCreated {
-		t.Fatalf("import status = %d, want 201", imp.Code)
-	}
-
-	req := httptest.NewRequest("GET", "/workouts", nil)
-	req = req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser))
-	rec := httptest.NewRecorder()
-	h.list(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("list status = %d, want 200; body=%s", rec.Code, rec.Body.String())
-	}
-	var env struct {
-		Data struct {
-			Items []struct {
-				Enrichment *enrichmentEnvelope `json:"enrichment"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
-	if len(env.Data.Items) != 1 {
-		t.Fatalf("items = %d, want 1", len(env.Data.Items))
-	}
-	e := env.Data.Items[0].Enrichment
-	if e == nil {
-		t.Fatal("list enrichment = nil, want summary present")
-		return
-	}
-	if e.AvgHeartRateBpm == nil || *e.AvgHeartRateBpm != 140 {
-		t.Errorf("list avg_heart_rate_bpm = %v, want 140", e.AvgHeartRateBpm)
-	}
-	if len(e.Trackpoints) != 0 {
-		t.Errorf("list enrichment.trackpoints = %d, want 0 (omitted on list)", len(e.Trackpoints))
 	}
 }
 

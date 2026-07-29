@@ -42,15 +42,6 @@ const (
 	RunTypeIntervals RunType = "intervals"
 )
 
-// SessionKind distinguishes the two session tables a completed plan can
-// point at: a strength workout or a cardio/other activity.
-type SessionKind string
-
-const (
-	SessionKindWorkout  SessionKind = "workout"
-	SessionKindActivity SessionKind = "activity"
-)
-
 // CalendarDetail controls how much of the agenda is written into the Google
 // Calendar event body.
 type CalendarDetail string
@@ -118,8 +109,13 @@ type PlannedWorkout struct {
 	Status Status
 	Notes  *string
 
-	CompletedSessionID   *string
-	CompletedSessionKind *SessionKind
+	// CompletedSessionID links a completed plan to the activity that fulfilled
+	// it. Every training session — lift or run — is one row in the unified
+	// activities base table with a globally-unique id, so this id alone
+	// identifies the completing session; the plan kind it can complete derives
+	// from that activity's activity_type (see the plan matcher). There is no
+	// longer a session-kind discriminator (dropped in migration 043).
+	CompletedSessionID *string
 
 	CalendarDetail *CalendarDetail
 
@@ -192,18 +188,6 @@ func (pw *PlannedWorkout) Validate() error {
 		case DetailTimeBlock, DetailFullAgenda:
 		default:
 			return ErrInvalidCalendarDetail
-		}
-	}
-	// Completion link is all-or-nothing: either both id and kind are set
-	// (with a valid kind) or neither is.
-	if pw.CompletedSessionID != nil || pw.CompletedSessionKind != nil {
-		if pw.CompletedSessionID == nil || pw.CompletedSessionKind == nil {
-			return ErrInvalidCompletionLink
-		}
-		switch *pw.CompletedSessionKind {
-		case SessionKindWorkout, SessionKindActivity:
-		default:
-			return ErrInvalidCompletionLink
 		}
 	}
 	for _, ex := range pw.Exercises {

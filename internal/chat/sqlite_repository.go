@@ -119,24 +119,33 @@ func (r *SQLiteRepository) GetSession(ctx context.Context, userID, sessionID str
 	return &s, nil
 }
 
-func (r *SQLiteRepository) ListSessions(ctx context.Context, userID string) ([]Session, error) {
+// ListSessions is the LEFT JOIN ... COUNT single statement the SOW
+// specifies. The join is what keeps message_count consistent with the
+// session set it's reported against — see SessionSummary for why the
+// per-row alternative was a bug rather than just a slow path.
+func (r *SQLiteRepository) ListSessions(ctx context.Context, userID string) ([]SessionSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, user_id, title, created_at, updated_at, last_message_at, deleted_at
-		FROM chat_sessions
-		WHERE user_id = ? AND deleted_at IS NULL
-		ORDER BY last_message_at DESC
+		SELECT s.id, s.user_id, s.title,
+		       s.created_at, s.updated_at, s.last_message_at, s.deleted_at,
+		       COUNT(m.id) AS message_count
+		FROM chat_sessions s
+		LEFT JOIN chat_messages m ON m.session_id = s.id
+		WHERE s.user_id = ? AND s.deleted_at IS NULL
+		GROUP BY s.id
+		ORDER BY s.last_message_at DESC
 		LIMIT ?
 	`, userID, MaxSessionsPerUser)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Session
+	var out []SessionSummary
 	for rows.Next() {
-		var s Session
+		var s SessionSummary
 		if err := rows.Scan(
 			&s.ID, &s.UserID, &s.Title,
 			&s.CreatedAt, &s.UpdatedAt, &s.LastMessageAt, &s.DeletedAt,
+			&s.MessageCount,
 		); err != nil {
 			return nil, err
 		}

@@ -71,7 +71,14 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, inputs []string) ([][]float3
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		return nil, EmbedUsage{}, fmt.Errorf("openai embeddings: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		statusErr := fmt.Errorf("openai embeddings: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		// Same terminal/retryable split as the distiller: an observation the
+		// embeddings endpoint rejects outright (e.g. over the token limit) would
+		// otherwise re-fail on every tick forever. See ErrUnitUnprocessable.
+		if terminalStatus(resp.StatusCode) {
+			return nil, EmbedUsage{}, fmt.Errorf("%w: %w", ErrUnitUnprocessable, statusErr)
+		}
+		return nil, EmbedUsage{}, statusErr
 	}
 
 	// usage.total_tokens is parsed for cost metrics; an absent usage block

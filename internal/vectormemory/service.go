@@ -125,6 +125,26 @@ func (s *Service) Retrieve(ctx context.Context, userID, query string, k int, thr
 // hiccup) should not throw away the rest of a hard-won, paid distillation; the
 // job re-runs idempotently anyway and dedup catches re-inserts next time.
 func (s *Service) DistillUnit(ctx context.Context, unit DistillUnit) (int, error) {
+	// A unit with nothing to read is a clean zero-observation success, not a
+	// provider call.
+	//
+	// why: every provider rejects an empty message — Anthropic answers 400
+	// "messages.0: user messages must have non-empty content" — and the job's
+	// mark-on-success-only retry policy turns that rejection into an unbounded
+	// retry loop: the unit is never stamped, so it is re-selected and
+	// re-rejected on every tick, forever (issue #78). Each source already
+	// filters blank units out of its own selection query; this is the
+	// source-agnostic backstop for any that doesn't, and it keeps the paid call
+	// from being made at all.
+	if strings.TrimSpace(unit.Content) == "" {
+		s.log.InfoContext(ctx, "vectormemory distillation: skipping unit with no content",
+			slog.String("user_id", unit.UserID),
+			slog.String("source_type", unit.Source.SourceType),
+			slog.String("unit_id", unit.UnitID),
+		)
+		return 0, nil
+	}
+
 	distillStart := s.now()
 	observations, distillUsage, err := s.distiller.Distill(ctx, unit.Content, unit.PromptHint)
 	distillDuration.Observe(s.now().Sub(distillStart).Seconds())

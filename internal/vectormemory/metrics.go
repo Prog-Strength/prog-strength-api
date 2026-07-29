@@ -84,6 +84,19 @@ var observationsDedupedTotal = prometheus.NewCounter(prometheus.CounterOpts{
 	Help: "Observations skipped as near-duplicates of an existing memory.",
 })
 
+// unitsDroppedTotal counts units the provider permanently rejected — marked
+// distilled without producing memories, purely to stop them being retried on
+// every tick (see ErrUnitUnprocessable). Each increment is real, silent memory
+// loss for that unit, so this should sit flat at zero: any sustained rate means
+// a class of content the pipeline cannot handle.
+var unitsDroppedTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "api_vectormemory_units_dropped_total",
+		Help: "Units marked distilled after a permanent provider rejection, by source type.",
+	},
+	[]string{"source_type"},
+)
+
 // stageErrorsTotal counts failures at each point in the pipeline, mapped to
 // the existing WARN/ERROR sites: select | load | distill | embed | dedup |
 // insert | mark. The label points straight at the failing dependency.
@@ -146,6 +159,7 @@ func init() {
 		observationsDistilledTotal,
 		observationsInsertedTotal,
 		observationsDedupedTotal,
+		unitsDroppedTotal,
 		stageErrorsTotal,
 		sweepDuration,
 		distillDuration,

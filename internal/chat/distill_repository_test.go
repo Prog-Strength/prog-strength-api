@@ -7,10 +7,21 @@ import (
 )
 
 // seedDistillSession inserts a chat_sessions row with explicit
-// last_message_at / memory_distilled_at / deleted_at so the distillation
-// selection query can be exercised against known state. memory_distilled_at
-// and deleted_at are written as nullable timestamps (nil ⇒ SQL NULL).
+// last_message_at / memory_distilled_at / deleted_at, plus one non-empty
+// message so the session carries a real transcript — the distillation
+// selection queries require one. memory_distilled_at and deleted_at are
+// written as nullable timestamps (nil ⇒ SQL NULL). Use
+// seedMessagelessDistillSession for the transcript-less counterpart.
 func seedDistillSession(t *testing.T, repo *SQLiteRepository, id, userID string, lastMsg time.Time, distilledAt, deletedAt *time.Time) {
+	t.Helper()
+	seedMessagelessDistillSession(t, repo, id, userID, lastMsg, distilledAt, deletedAt)
+	seedDistillMessage(t, repo, id, "how heavy should I go today?", lastMsg)
+}
+
+// seedMessagelessDistillSession inserts the chat_sessions row alone — no
+// messages — reproducing the session the client lazy-creates whose first turn
+// never persisted.
+func seedMessagelessDistillSession(t *testing.T, repo *SQLiteRepository, id, userID string, lastMsg time.Time, distilledAt, deletedAt *time.Time) {
 	t.Helper()
 	_, err := repo.db.ExecContext(context.Background(), `
 		INSERT INTO chat_sessions (
@@ -20,6 +31,24 @@ func seedDistillSession(t *testing.T, repo *SQLiteRepository, id, userID string,
 	`, id, userID, lastMsg.UTC(), lastMsg.UTC(), lastMsg.UTC(), deletedAt, distilledAt)
 	if err != nil {
 		t.Fatalf("seed distill session %s: %v", id, err)
+	}
+}
+
+// seedDistillMessage appends one user message to a seeded session, taking the
+// next position so repeated calls stay within the (session_id, position)
+// unique index.
+func seedDistillMessage(t *testing.T, repo *SQLiteRepository, sessionID, content string, at time.Time) {
+	t.Helper()
+	_, err := repo.db.ExecContext(context.Background(), `
+		INSERT INTO chat_messages (session_id, position, role, content, model, tools_json, created_at)
+		VALUES (
+			?,
+			(SELECT COALESCE(MAX(position), 0) + 1 FROM chat_messages WHERE session_id = ?),
+			'user', ?, NULL, NULL, ?
+		)
+	`, sessionID, sessionID, content, at.UTC())
+	if err != nil {
+		t.Fatalf("seed distill message for %s: %v", sessionID, err)
 	}
 }
 
@@ -104,6 +133,62 @@ func TestSQLite_CountIdleUndistilled(t *testing.T) {
 	}
 	if got != 3 {
 		t.Fatalf("expected backlog of 3 idle undistilled sessions, got %d", got)
+	}
+}
+
+// TestSQLite_DistillSelection_RequiresATranscript pins the guard that keeps the
+// distillation job off sessions with nothing to distill.
+//
+// why: the clients lazy-create the chat_sessions row immediately before
+// streaming the first turn, so a turn that never persists (stream aborted, agent
+// error) leaves a session row with zero messages. Selecting it renders an empty
+// transcript, which the Anthropic Messages API rejects with
+// "messages.0: user messages must have non-empty content" — and because the job
+// marks on success only, that session is re-selected and re-rejected on every
+// five-minute tick, forever (API issue #78). Sessions whose every message is
+// whitespace are the same non-unit and are excluded for the same reason.
+func TestSQLite_DistillSelection_RequiresATranscript(t *testing.T) {
+	repo, _ := newSQLiteRepo(t)
+	ctx := context.Background()
+
+	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-2 * time.Hour)
+	cutoff := now.Add(-30 * time.Minute)
+
+	// Selected: idle, undistilled, live, and carries a real transcript.
+	seedDistillSession(t, repo, uuid(1), "u1", old, nil, nil)
+	// Excluded: no messages at all.
+	seedMessagelessDistillSession(t, repo, uuid(2), "u2", old, nil, nil)
+	// Excluded: messages exist but hold no text.
+	seedMessagelessDistillSession(t, repo, uuid(3), "u3", old, nil, nil)
+	seedDistillMessage(t, repo, uuid(3), "   ", old)
+
+	got, err := repo.IdleUndistilled(ctx, cutoff, 10)
+	if err != nil {
+		t.Fatalf("IdleUndistilled: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != uuid(1) {
+		t.Fatalf("expected only the session with a transcript (%s), got %+v", uuid(1), got)
+	}
+
+	// The backlog gauge must agree with the selection, or it reports a backlog
+	// the job can never drain.
+	count, err := repo.CountIdleUndistilled(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("CountIdleUndistilled: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected backlog of 1, got %d", count)
+	}
+
+	// The backfill drains the same set minus the settle window, so it needs the
+	// same guard.
+	page, _, err := repo.AllUndistilledSessions(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("AllUndistilledSessions: %v", err)
+	}
+	if len(page) != 1 || page[0].ID != uuid(1) {
+		t.Fatalf("expected only the session with a transcript (%s), got %+v", uuid(1), page)
 	}
 }
 

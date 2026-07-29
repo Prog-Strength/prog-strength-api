@@ -3,6 +3,7 @@ package vectormemory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -253,6 +254,82 @@ func TestDistillOnce_PerUnitDistillerError_SkipsAndContinues(t *testing.T) {
 		t.Fatalf("expected B's memory persisted, got %d", len(dumped))
 	}
 }
+
+// TestDistillOnce_TerminalDistillerError_MarksToBreakTheRetryLoop pins the
+// poison-pill guard: a unit the provider will never accept is marked distilled
+// so it leaves the queue, while a transient failure on the very next unit is
+// still left unmarked for retry.
+//
+// why: the job stamps a unit only on success, so a deterministically-failing
+// unit is re-selected and re-rejected on every tick, forever — a permanent error
+// rate on the dashboard and a queue that never drains (issue #78, where seven
+// message-less sessions 400'd on every sweep for days). A provider 4xx on the
+// content itself will fail identically no matter how many times it is retried,
+// so it drops out; 5xx/429/timeouts stay retryable.
+func TestDistillOnce_TerminalDistillerError_MarksToBreakTheRetryLoop(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "sPoison", "userA")
+	seedSession(t, db, "sFlaky", "userB")
+
+	poison := []ConversationMessage{{Role: "user", Content: "permanently rejected"}}
+	flaky := []ConversationMessage{{Role: "user", Content: "temporarily unavailable"}}
+
+	dis := &errByContent{
+		errs: map[string]error{
+			// What an Anthropic 400 on the request itself now looks like.
+			RenderConversation(poison): fmt.Errorf("%w: anthropic distill: unexpected status 400: invalid_request_error", ErrUnitUnprocessable),
+			// A 529 overloaded — retrying the same content can still succeed.
+			RenderConversation(flaky): errors.New("anthropic distill: unexpected status 529: overloaded_error"),
+		},
+	}
+	svc := NewService(repo, &fakeEmbedder{}, dis, baseCfg(), testLogger())
+
+	src := &fakeMemorySource{
+		sourceType: "chat_session",
+		pending: []DistillUnit{
+			chatUnit("userA", "sPoison", poison),
+			chatUnit("userB", "sFlaky", flaky),
+		},
+	}
+
+	if err := svc.distillOnce(ctx, []MemorySource{src}); err != nil {
+		t.Fatalf("distillOnce: %v", err)
+	}
+
+	if src.marked["sPoison"] != 1 {
+		t.Fatalf("a permanently-rejected unit must be marked once to leave the queue, got %d", src.marked["sPoison"])
+	}
+	if src.marked["sFlaky"] != 0 {
+		t.Fatalf("a transiently-failed unit must stay unmarked for retry, got %d", src.marked["sFlaky"])
+	}
+
+	// Dropping the unit is a loss, not a distillation: it must not inflate the
+	// distilled counter that the dashboard reads as throughput.
+	dumped, err := svc.Dump(ctx, "userA", 10, 0)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	if len(dumped) != 0 {
+		t.Fatalf("expected no memories from a rejected unit, got %d", len(dumped))
+	}
+}
+
+// errByContent is a Distiller that fails with a content-keyed error, so one tick
+// can mix a terminal rejection with a retryable one.
+type errByContent struct {
+	errs map[string]error
+}
+
+func (d *errByContent) Distill(_ context.Context, content, _ string) ([]string, DistillUsage, error) {
+	if err, ok := d.errs[content]; ok {
+		return nil, DistillUsage{}, err
+	}
+	return nil, DistillUsage{}, nil
+}
+
+func (d *errByContent) Configured() bool { return true }
 
 // perContentDistiller returns a content-keyed observation list, so a test with
 // multiple units in one tick can give each a distinct, embeddable observation.

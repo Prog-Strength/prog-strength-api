@@ -146,7 +146,14 @@ func (d *AnthropicDistiller) Distill(ctx context.Context, content, promptHint st
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, errBodyLimit))
-		return nil, DistillUsage{}, fmt.Errorf("anthropic distill: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		statusErr := fmt.Errorf("anthropic distill: unexpected status %d: %s", resp.StatusCode, bytes.TrimSpace(snippet))
+		// A rejection of the request itself is tagged so the job drops the unit
+		// rather than retrying it on every tick forever; retryable statuses are
+		// returned bare. See ErrUnitUnprocessable.
+		if terminalStatus(resp.StatusCode) {
+			return nil, DistillUsage{}, fmt.Errorf("%w: %w", ErrUnitUnprocessable, statusErr)
+		}
+		return nil, DistillUsage{}, statusErr
 	}
 
 	// Usage is parsed alongside the content so the distillation job can meter

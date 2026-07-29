@@ -2,6 +2,7 @@ package vectormemory
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -185,22 +186,41 @@ func (s *Service) distillOnce(ctx context.Context, sources []MemorySource) error
 		sessionsSelectedTotal.Add(float64(len(units)))
 
 		for _, unit := range units {
+			// dropped distinguishes "marked to break a retry loop" from "marked
+			// because it worked": both stamp the unit, only the latter counts as
+			// throughput.
+			dropped := false
 			if _, err := s.DistillUnit(ctx, unit); err != nil {
 				// DistillUnit already incremented the specific stage error
-				// (distill/embed/dedup). Leave unmarked so the next sweep
-				// retries the paid distillation.
+				// (distill/embed/dedup).
 				sawStageError = true
-				s.log.WarnContext(ctx, "vectormemory distillation: distill unit failed, leaving unmarked for retry",
+
+				// A unit the provider will never accept must leave the queue:
+				// left unmarked it is re-selected and re-rejected on every tick,
+				// forever. Log at ERROR (this is silent memory loss for that
+				// unit, not a blip) and fall through to the mark.
+				if !errors.Is(err, ErrUnitUnprocessable) {
+					// Retryable: leave unmarked so the next sweep tries again.
+					s.log.WarnContext(ctx, "vectormemory distillation: distill unit failed, leaving unmarked for retry",
+						slog.String("source_type", src.SourceType()),
+						slog.String("unit_id", unit.UnitID),
+						slog.String("user_id", unit.UserID),
+						slog.Any("error", err),
+					)
+					continue
+				}
+				dropped = true
+				unitsDroppedTotal.WithLabelValues(src.SourceType()).Inc()
+				s.log.ErrorContext(ctx, "vectormemory distillation: unit permanently rejected by provider, marking distilled to break the retry loop",
 					slog.String("source_type", src.SourceType()),
 					slog.String("unit_id", unit.UnitID),
 					slog.String("user_id", unit.UserID),
 					slog.Any("error", err),
 				)
-				continue
 			}
 
-			// Success (including the zero-observation case): stamp it so it
-			// stops showing up in PendingUnits.
+			// Success (including the zero-observation case) or a permanent
+			// rejection: stamp it so it stops showing up in PendingUnits.
 			if err := src.MarkDistilled(ctx, unit.UnitID, now); err != nil {
 				stageErrorsTotal.WithLabelValues("mark").Inc()
 				sawStageError = true
@@ -210,6 +230,11 @@ func (s *Service) distillOnce(ctx context.Context, sources []MemorySource) error
 					slog.String("user_id", unit.UserID),
 					slog.Any("error", err),
 				)
+				continue
+			}
+			if dropped {
+				// Marked, but nothing was distilled — don't inflate the
+				// throughput counter the dashboard reads.
 				continue
 			}
 			sessionsDistilledTotal.Inc()

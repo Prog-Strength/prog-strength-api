@@ -275,9 +275,11 @@ type activityDTO struct {
 	// unregistered (degrade, don't fail).
 	Summary *Summary `json:"summary,omitempty"`
 	// Details is the type-keyed detail payload (registry DetailStore.Load):
-	// exercises/sets for strength, the detail-table fields for endurance.
-	// Detail reads only; omitted on lists, for base-only shaped sessions
-	// (no detail row), and when no registry is wired.
+	// exercises/sets + personal_records_set for strength, the detail-table
+	// fields for endurance. Present on detail reads and, for types whose
+	// store implements BulkDetailLoader (strength — /workouts list parity),
+	// on list items too; omitted otherwise (endurance lists, base-only
+	// shaped sessions, no registry wired).
 	Details any `json:"details,omitempty"`
 }
 

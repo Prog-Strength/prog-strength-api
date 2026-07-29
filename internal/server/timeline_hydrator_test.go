@@ -20,10 +20,11 @@ import (
 // hydration is a single batch query (no N+1).
 type fakeWorkoutRepo struct {
 	strength.Repository
-	exercises       map[string][]strength.WorkoutExercise
-	prEvents        map[string]strength.PersonalRecordEvent
-	listExCalls     int
-	getPREventCalls int
+	exercises            map[string][]strength.WorkoutExercise
+	prEvents             map[string]strength.PersonalRecordEvent
+	listExCalls          int
+	getPREventCalls      int
+	listPREventsByWkCall int
 }
 
 func (f *fakeWorkoutRepo) ListExercisesByWorkoutIDs(_ context.Context, ids []string) (map[string][]strength.WorkoutExercise, error) {
@@ -32,6 +33,23 @@ func (f *fakeWorkoutRepo) ListExercisesByWorkoutIDs(_ context.Context, ids []str
 	for _, id := range ids {
 		if ex, ok := f.exercises[id]; ok {
 			out[id] = ex
+		}
+	}
+	return out, nil
+}
+
+// ListPersonalRecordEventsByWorkouts backs the strength detail store's
+// LoadMany, which since the stage-3 parity work bulk-loads PR events
+// alongside exercises (one batched query — the summary path discards them,
+// the unified list embeds them).
+func (f *fakeWorkoutRepo) ListPersonalRecordEventsByWorkouts(_ context.Context, workoutIDs []string) ([]strength.PersonalRecordEvent, error) {
+	f.listPREventsByWkCall++
+	var out []strength.PersonalRecordEvent
+	for _, wid := range workoutIDs {
+		for _, e := range f.prEvents {
+			if e.WorkoutID == wid {
+				out = append(out, e)
+			}
 		}
 	}
 	return out, nil
@@ -303,5 +321,10 @@ func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
 	}
 	if wRepo.listExCalls != 1 {
 		t.Errorf("ListExercisesByWorkoutIDs called %d times, want 1 (one per type across the page)", wRepo.listExCalls)
+	}
+	// The stage-3 PR-event embed rides the same LoadMany: the hydrator pays
+	// exactly one bulk PR-event query per page — never per post.
+	if wRepo.listPREventsByWkCall != 1 {
+		t.Errorf("ListPersonalRecordEventsByWorkouts called %d times, want 1 (one per type across the page)", wRepo.listPREventsByWkCall)
 	}
 }

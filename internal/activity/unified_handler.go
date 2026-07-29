@@ -23,16 +23,22 @@ import (
 )
 
 // toListDTOs renders one page of unified list items: the base DTO (no
-// trackpoints) plus each type's Summary via the shared RenderSummaries
-// helper (see summary.go for the batching + degradation semantics).
+// trackpoints) plus each type's Summary, and — for types whose store bulk-
+// loads details (strength) — the typed details payload itself. Attaching
+// the already-loaded details gives the list /workouts parity (exercises +
+// personal_records_set per item) for free: the same single bulk read powers
+// both the summary render and the embed (see summary.go).
 func (h *Handler) toListDTOs(ctx context.Context, userID string, activities []Activity) []activityDTO {
 	out := make([]activityDTO, 0, len(activities))
 	for _, a := range activities {
 		out = append(out, toActivityDTO(a, false))
 	}
-	summaries := RenderSummaries(ctx, h.registry, userID, activities)
+	details := LoadDetailsBulk(ctx, h.registry, userID, activities)
 	for i, a := range activities {
-		if s, ok := summaries[a.ID]; ok {
+		if d, ok := details[a.ID]; ok {
+			out[i].Details = d
+		}
+		if s, ok := RenderSummary(h.registry, a, details[a.ID]); ok {
 			out[i].Summary = &s
 		}
 	}

@@ -34,8 +34,15 @@ func NewDescriptor(repo Repository) *activity.Descriptor {
 // writes: the same exercises shape POST /workouts accepts (order assigned
 // from slice position, like the workout handler does). One struct for both
 // directions so what a client POSTs as `details` is what GET returns.
+//
+// PersonalRecordsSet is read-only enrichment (stage-3 parity with the
+// /workouts DTOs): the PR break events this session produced, in the exact
+// legacy personalRecordEventDTO shape so web maps 1:1. The store's Load/
+// LoadMany populate it (never nil — [] when no PRs, like the legacy list);
+// the write decode path ignores it (writes carry only exercises).
 type Details struct {
-	Exercises []WorkoutExercise `json:"exercises"`
+	Exercises          []WorkoutExercise        `json:"exercises"`
+	PersonalRecordsSet []personalRecordEventDTO `json:"personal_records_set"`
 }
 
 // detailsPayload is the decode shape for the Details blob (the create-
@@ -134,27 +141,59 @@ func (s *detailStore) owned(ctx context.Context, userID, activityID string) (*Wo
 	return w, nil
 }
 
+// Load returns the full strength detail payload for one owned session:
+// the exercises off the hydrated workout plus its PR break events (stage-3
+// /workouts parity) — so a detail read costs the ownership read plus one
+// PR-event query, exactly like the legacy GET /workouts/{id}.
 func (s *detailStore) Load(ctx context.Context, userID, activityID string) (any, error) {
 	w, err := s.owned(ctx, userID, activityID)
 	if err != nil {
 		return nil, err
 	}
-	return &Details{Exercises: w.Exercises}, nil
+	events, err := s.prEventsByWorkout(ctx, []string{activityID})
+	if err != nil {
+		return nil, err
+	}
+	return &Details{Exercises: w.Exercises, PersonalRecordsSet: events[activityID]}, nil
 }
 
 // LoadMany is the BulkDetailLoader capability the unified list uses: one
-// batched read (the repository's two-statement exercise hydration) for a
-// whole page of lifts. Per the seam's contract the ids are already
-// user-scoped by the caller's base list read, so no per-id ownership check
-// re-runs here.
+// batched read (the repository's two-statement exercise hydration) plus one
+// bulk PR-event read for a whole page of lifts — never a per-row query. Per
+// the seam's contract the ids are already user-scoped by the caller's base
+// list read, so no per-id ownership check re-runs here.
 func (s *detailStore) LoadMany(ctx context.Context, _ string, ids []string) (map[string]any, error) {
 	byWorkout, err := s.repo.ListExercisesByWorkoutIDs(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
+	events, err := s.prEventsByWorkout(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	out := make(map[string]any, len(byWorkout))
 	for id, exercises := range byWorkout {
-		out[id] = &Details{Exercises: exercises}
+		out[id] = &Details{Exercises: exercises, PersonalRecordsSet: events[id]}
+	}
+	return out, nil
+}
+
+// prEventsByWorkout bulk-loads the PR break events for a set of workout ids
+// (the same ListPersonalRecordEventsByWorkouts query the legacy /workouts
+// list uses), rendered as the legacy DTO and keyed by workout id. Every
+// requested id gets a non-nil slice so the wire shape is always [] — the
+// legacy DTOs never emit null here.
+func (s *detailStore) prEventsByWorkout(ctx context.Context, ids []string) (map[string][]personalRecordEventDTO, error) {
+	events, err := s.repo.ListPersonalRecordEventsByWorkouts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]personalRecordEventDTO, len(ids))
+	for _, id := range ids {
+		out[id] = []personalRecordEventDTO{}
+	}
+	for _, e := range events {
+		out[e.WorkoutID] = append(out[e.WorkoutID], eventToDTO(e))
 	}
 	return out, nil
 }

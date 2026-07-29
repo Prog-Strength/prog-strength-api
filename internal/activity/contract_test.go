@@ -362,8 +362,9 @@ func TestContract_BaseOnlyType_RendersTimelineCard(t *testing.T) {
 		t.Errorf("card = %+v, want title 'Sparring prep' subtitle '30:00'", s)
 	}
 
-	// Batch path (what both the hydrator and the unified list call): a nil
-	// DetailStore means no bulk load; the card renders from the base row.
+	// Batch path (the timeline hydrator's entry point; the unified list
+	// composes LoadDetailsBulk + RenderSummary itself): a nil DetailStore
+	// means no bulk load; the card renders from the base row.
 	sums := activity.RenderSummaries(context.Background(), env.registry, env.userID, []activity.Activity{a})
 	got, ok := sums["sb1"]
 	if !ok {

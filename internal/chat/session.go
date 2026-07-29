@@ -39,6 +39,17 @@ type Session struct {
 	LastIntentAt *time.Time `json:"-"`
 }
 
+// SessionSummary is a session row plus its message count — the shape
+// GET /chat-sessions renders. The count rides along on the listing
+// query rather than being fetched per row: a second read per session
+// can observe a concurrent delete or eviction and fail with
+// ErrNotFound halfway through an otherwise-fine list request (issue
+// #77), and it was an N+1 the SOW never asked for.
+type SessionSummary struct {
+	Session
+	MessageCount int `json:"message_count"`
+}
+
 // IdleSession is the minimal session identity the vectormemory
 // distillation job needs to pull a transcript and stamp progress: the
 // session id and its owning user. The job runs cross-user (no caller

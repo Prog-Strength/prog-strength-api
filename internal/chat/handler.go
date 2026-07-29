@@ -133,19 +133,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "list chat sessions", err)
 		return
 	}
-	// MessageCount denorm: one ListMessages call per session is
-	// acceptable at MaxSessionsPerUser=50 worst case, and the
-	// page-level fix to make it a single COUNT-grouped query is a
-	// follow-up if it ever shows up on a perf trace. The SOW
-	// promises this is a single statement via JOIN — leaving as
-	// follow-up is a known short-cut from that promise.
+	// MessageCount rides along on ListSessions (single COUNT-grouped
+	// statement, as the SOW specifies) rather than a ListMessages call
+	// per row. The per-row version 500'd the whole listing whenever a
+	// session was deleted or evicted between the two reads — issue #77.
 	out := make([]sessionListItem, 0, len(sessions))
 	for _, s := range sessions {
-		msgs, err := h.repo.ListMessages(r.Context(), userID, s.ID)
-		if err != nil {
-			httpresp.ServerError(w, r.Context(), "count chat messages", err)
-			return
-		}
 		out = append(out, sessionListItem{
 			ID:            s.ID,
 			UserID:        s.UserID,
@@ -153,7 +146,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			CreatedAt:     s.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			UpdatedAt:     s.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			LastMessageAt: s.LastMessageAt.Format("2006-01-02T15:04:05Z07:00"),
-			MessageCount:  len(msgs),
+			MessageCount:  s.MessageCount,
 		})
 	}
 	httpresp.OK(w, "listed chat sessions", out)
@@ -208,6 +201,13 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	}
 	msgs, err := h.repo.ListMessages(r.Context(), userID, id)
 	if err != nil {
+		// The session was there a statement ago, so ErrNotFound here
+		// means a concurrent delete or eviction landed between the two
+		// reads. That's the client's answer (404), not a server fault.
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "chat session not found")
+			return
+		}
 		httpresp.ServerError(w, r.Context(), "list chat messages", err)
 		return
 	}
@@ -249,6 +249,12 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.repo.GetSession(r.Context(), userID, id)
 	if err != nil {
+		// Same race as `get`: the title write succeeded, then the row
+		// went away. 404 rather than 500 — nothing failed server-side.
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "chat session not found")
+			return
+		}
 		httpresp.ServerError(w, r.Context(), "reload chat session", err)
 		return
 	}

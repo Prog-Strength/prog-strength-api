@@ -34,11 +34,16 @@ type Repository interface {
 	// deliberately indistinguishable.
 	GetSession(ctx context.Context, userID, sessionID string) (*Session, error)
 
-	// ListSessions returns the user's non-deleted sessions, sorted
-	// last_message_at DESC. Capped at MaxSessionsPerUser because
-	// the eviction policy guarantees the user never has more than
-	// that.
-	ListSessions(ctx context.Context, userID string) ([]Session, error)
+	// ListSessions returns the user's non-deleted sessions with their
+	// message counts, sorted last_message_at DESC. Capped at
+	// MaxSessionsPerUser because the eviction policy guarantees the
+	// user never has more than that.
+	//
+	// Counts come back on this call by contract, not as a follow-up
+	// per row: the returned slice is one consistent snapshot, so a
+	// session deleted or evicted mid-request can't turn the listing
+	// into an error.
+	ListSessions(ctx context.Context, userID string) ([]SessionSummary, error)
 
 	// SetTitle updates a session's title and bumps updated_at.
 	// Returns ErrNotFound for missing / soft-deleted / wrong-user

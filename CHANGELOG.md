@@ -1,3 +1,10 @@
+# [0.82.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.81.0...v0.82.0) (2026-07-29)
+
+
+### Features
+
+* strength parity additions for unified surface ([#80](https://github.com/Prog-Strength/prog-strength-api/issues/80)) ([7751660](https://github.com/Prog-Strength/prog-strength-api/commit/7751660d13c0f5147ca7a4c8629e5e43ab7edbf7))
+
 # [0.81.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.80.1...v0.81.0) (2026-07-28)
 
 

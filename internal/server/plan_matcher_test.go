@@ -10,19 +10,16 @@ import (
 )
 
 // These tests lock the completion-REVERT symmetry between the two plan-matcher
-// wrappers. Strength sessions can be deleted through either surface — DELETE
-// /workouts/{id} fires workoutPlanMatcher, DELETE /activities/{id} fires
-// activityPlanMatcher — and the stored completed_session_kind for the same
-// lift differs by era: migration 042 normalized pre-existing links to
-// 'activity' while the live workout write path still records 'workout'. The
-// revert lookup is therefore keyed by session id alone (ids are globally
-// unique in the unified activities base), so every wrapper reverts every
-// completion regardless of which kind value was recorded.
+// wrappers. A session can be deleted through either surface — the strength
+// handler fires workoutPlanMatcher, the activity handler fires
+// activityPlanMatcher — and the revert lookup is keyed by session id alone (ids
+// are globally unique in the unified activities base), so every wrapper reverts
+// every completion. The two wrappers are now identical in body (no session
+// kind); these tests are what guarantee they stay symmetric.
 
 // newPlanEnv builds a real planned-workout repo + service over a migrated
-// SQLite DB and returns them with a seeded plan completed by sessionID with
-// the given recorded kind.
-func newPlanEnv(t *testing.T, kind plannedworkout.ActivityKind, sessionKind plannedworkout.SessionKind, sessionID string) (*plannedworkout.Service, plannedworkout.Repository, string) {
+// SQLite DB and returns them with a seeded plan completed by sessionID.
+func newPlanEnv(t *testing.T, kind plannedworkout.ActivityKind, sessionID string) (*plannedworkout.Service, plannedworkout.Repository, string) {
 	t.Helper()
 	repo := plannedworkout.NewSQLiteRepository(dbtest.New(t))
 	svc := plannedworkout.NewService(repo)
@@ -38,7 +35,7 @@ func newPlanEnv(t *testing.T, kind plannedworkout.ActivityKind, sessionKind plan
 	if err := repo.Create(context.Background(), pw); err != nil {
 		t.Fatalf("create plan: %v", err)
 	}
-	if err := repo.SetCompletion(context.Background(), "u1", pw.ID, sessionID, sessionKind); err != nil {
+	if err := repo.SetCompletion(context.Background(), "u1", pw.ID, sessionID); err != nil {
 		t.Fatalf("set completion: %v", err)
 	}
 	return svc, repo, pw.ID
@@ -55,16 +52,15 @@ func assertReverted(t *testing.T, repo plannedworkout.Repository, planID string)
 	if got.Status != plannedworkout.StatusPlanned {
 		t.Errorf("status = %q, want planned (reverted)", got.Status)
 	}
-	if got.CompletedSessionID != nil || got.CompletedSessionKind != nil {
-		t.Errorf("completion link = (%v, %v), want cleared", got.CompletedSessionID, got.CompletedSessionKind)
+	if got.CompletedSessionID != nil {
+		t.Errorf("completion link = %v, want cleared", got.CompletedSessionID)
 	}
 }
 
-// A lift completion recorded as kind='activity' (what migration 042
-// normalized every pre-unification link to) must still revert when the lift
-// is deleted via DELETE /workouts/{id} — the workout matcher path.
-func TestPlanRevert_MigratedLiftCompletion_ViaWorkoutDelete(t *testing.T) {
-	svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindLift, plannedworkout.SessionKindActivity, "lift-1")
+// A lift completion must revert when the lift is deleted via the workout matcher
+// path.
+func TestPlanRevert_LiftCompletion_ViaWorkoutDelete(t *testing.T) {
+	svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindLift, "lift-1")
 
 	m := &workoutPlanMatcher{svc: svc}
 	m.OnSessionDeleted(context.Background(), "u1", "lift-1")
@@ -72,11 +68,10 @@ func TestPlanRevert_MigratedLiftCompletion_ViaWorkoutDelete(t *testing.T) {
 	assertReverted(t, repo, planID)
 }
 
-// A lift completion recorded as kind='workout' (what the live workout write
-// path records) must still revert when the lift is deleted via DELETE
-// /activities/{id} — the activity matcher path.
-func TestPlanRevert_NewLiftCompletion_ViaActivityDelete(t *testing.T) {
-	svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindLift, plannedworkout.SessionKindWorkout, "lift-2")
+// A lift completion must also revert when the delete comes through the activity
+// matcher path — the lookup is keyed by session id alone.
+func TestPlanRevert_LiftCompletion_ViaActivityDelete(t *testing.T) {
+	svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindLift, "lift-2")
 
 	m := &activityPlanMatcher{svc: svc}
 	m.OnSessionDeleted(context.Background(), "u1", "lift-2")
@@ -84,18 +79,18 @@ func TestPlanRevert_NewLiftCompletion_ViaActivityDelete(t *testing.T) {
 	assertReverted(t, repo, planID)
 }
 
-// A run completion (always recorded kind='activity') reverts through the
-// activity matcher — its own delete path — and, because the lookup is keyed
-// by session id alone, through the workout matcher too.
+// A run completion reverts through the activity matcher — its own delete path —
+// and, because the lookup is keyed by session id alone, through the workout
+// matcher too.
 func TestPlanRevert_RunCompletion_BothPaths(t *testing.T) {
 	t.Run("activity delete path", func(t *testing.T) {
-		svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindRun, plannedworkout.SessionKindActivity, "run-1")
+		svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindRun, "run-1")
 		m := &activityPlanMatcher{svc: svc}
 		m.OnSessionDeleted(context.Background(), "u1", "run-1")
 		assertReverted(t, repo, planID)
 	})
 	t.Run("workout delete path", func(t *testing.T) {
-		svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindRun, plannedworkout.SessionKindActivity, "run-2")
+		svc, repo, planID := newPlanEnv(t, plannedworkout.ActivityKindRun, "run-2")
 		m := &workoutPlanMatcher{svc: svc}
 		m.OnSessionDeleted(context.Background(), "u1", "run-2")
 		assertReverted(t, repo, planID)

@@ -1,22 +1,22 @@
 package strength
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
 // fakePlanMatcher records the OnSessionLogged refs and OnSessionDeleted ids it
-// receives so handler tests can assert the create/delete hooks fired.
+// receives so handler tests can assert the log hook fired. It still implements
+// the full PlanMatcher port (OnSessionDeleted included) even though the strength
+// path no longer deletes — deletes flow through the unified /activities handler,
+// whose own matcher reverts the plan.
 type fakePlanMatcher struct {
 	logged  []loggedCall
 	deleted []deletedCall
@@ -42,13 +42,11 @@ func (f *fakePlanMatcher) OnSessionDeleted(_ context.Context, userID, sessionID 
 
 var _ PlanMatcher = (*fakePlanMatcher)(nil)
 
-// doCreate drives the create handler with a JSON body for testUserID and
-// returns the recorder plus the decoded created workout.
-func doCreate(t *testing.T, h *Handler, performedAt time.Time) (*httptest.ResponseRecorder, *Workout) {
+// doCreate logs a strength session through CreateSession — the descriptor seam
+// the unified POST /activities drives — and returns the new activity id.
+func doCreate(t *testing.T, h *Handler, performedAt time.Time) string {
 	t.Helper()
-	body := map[string]any{
-		"name":         "session",
-		"performed_at": performedAt.Format(time.RFC3339),
+	details, err := json.Marshal(map[string]any{
 		"exercises": []map[string]any{
 			{
 				"exercise_id": "barbell-bench-press",
@@ -57,30 +55,25 @@ func doCreate(t *testing.T, h *Handler, performedAt time.Time) (*httptest.Respon
 				},
 			},
 		},
-	}
-	raw, err := json.Marshal(body)
+	})
 	if err != nil {
-		t.Fatalf("marshal body: %v", err)
+		t.Fatalf("marshal details: %v", err)
 	}
-	req := httptest.NewRequest("POST", "/workouts", bytes.NewReader(raw))
-	req = req.WithContext(authctx.WithUserID(req.Context(), "u1"))
-	w := httptest.NewRecorder()
-	h.create(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, want 201; body=%s", w.Code, w.Body.String())
+	name := "session"
+	id, err := h.CreateSession(context.Background(), "u1", activity.CreateRequest{
+		Type:      activity.ActivityStrengthTraining,
+		StartTime: performedAt,
+		Name:      &name,
+		Details:   details,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
 	}
-	var env struct {
-		Data Workout `json:"data"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode create: %v", err)
-	}
-	return w, &env.Data
+	return id
 }
 
-// TestPlanMatcher_CreateFiresOnSessionLogged proves creating a workout calls
-// OnSessionLogged once with the new workout id and its PerformedAt.
+// TestPlanMatcher_CreateFiresOnSessionLogged proves logging a workout calls
+// OnSessionLogged once with the new activity id and its start time.
 func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
 	d := dbtest.New(t)
 	seedExerciseCatalog(t, d, "barbell-bench-press")
@@ -89,7 +82,7 @@ func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
 	h.SetPlanMatcher(fake)
 
 	performedAt := time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC)
-	_, created := doCreate(t, h, performedAt)
+	id := doCreate(t, h, performedAt)
 
 	if len(fake.logged) != 1 {
 		t.Fatalf("OnSessionLogged calls = %d, want 1", len(fake.logged))
@@ -98,76 +91,21 @@ func TestPlanMatcher_CreateFiresOnSessionLogged(t *testing.T) {
 	if call.userID != "u1" {
 		t.Errorf("logged userID = %q, want u1", call.userID)
 	}
-	if call.ref.SessionID != created.ID {
-		t.Errorf("logged SessionID = %q, want %q", call.ref.SessionID, created.ID)
+	if call.ref.SessionID != id {
+		t.Errorf("logged SessionID = %q, want %q", call.ref.SessionID, id)
 	}
 	if !call.ref.StartUTC.Equal(performedAt) {
 		t.Errorf("logged StartUTC = %v, want %v", call.ref.StartUTC, performedAt)
 	}
 }
 
-// TestPlanMatcher_DeleteFiresOnSessionDeleted proves deleting a workout calls
-// OnSessionDeleted with that workout id and the owning user.
-func TestPlanMatcher_DeleteFiresOnSessionDeleted(t *testing.T) {
-	d := dbtest.New(t)
-	seedExerciseCatalog(t, d, "barbell-bench-press")
-	repo := NewSQLiteRepository(d)
-	h := NewHandler(repo, exercise.NewSQLiteRepository(d), testActivityRepo(d))
-	fake := &fakePlanMatcher{}
-	h.SetPlanMatcher(fake)
-
-	w := &Workout{
-		UserID:      "u1",
-		Name:        "session",
-		PerformedAt: time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC),
-		Exercises: []WorkoutExercise{
-			{
-				ExerciseID: "barbell-bench-press",
-				Order:      0,
-				Sets:       []Set{{Reps: 5, Weight: 135, Unit: user.WeightUnitPounds}},
-			},
-		},
-	}
-	if err := repo.Create(context.Background(), w); err != nil {
-		t.Fatalf("seed workout: %v", err)
-	}
-
-	del := httptest.NewRequest("DELETE", "/workouts/"+w.ID, nil)
-	del = withURLParam(del.WithContext(authctx.WithUserID(del.Context(), "u1")), "id", w.ID)
-	wd := httptest.NewRecorder()
-	h.delete(wd, del)
-	if wd.Code != http.StatusOK {
-		t.Fatalf("delete status = %d, want 200; body=%s", wd.Code, wd.Body.String())
-	}
-
-	if len(fake.deleted) != 1 {
-		t.Fatalf("OnSessionDeleted calls = %d, want 1", len(fake.deleted))
-	}
-	call := fake.deleted[0]
-	if call.userID != "u1" {
-		t.Errorf("deleted userID = %q, want u1", call.userID)
-	}
-	if call.sessionID != w.ID {
-		t.Errorf("deleted sessionID = %q, want %q", call.sessionID, w.ID)
-	}
-}
-
-// TestPlanMatcher_NilIsNoOp proves the nil-safe path: create + delete with no
+// TestPlanMatcher_NilIsNoOp proves the nil-safe path: logging a workout with no
 // matcher set must not panic.
 func TestPlanMatcher_NilIsNoOp(t *testing.T) {
 	d := dbtest.New(t)
 	seedExerciseCatalog(t, d, "barbell-bench-press")
-	repo := NewSQLiteRepository(d)
-	h := NewHandler(repo, exercise.NewSQLiteRepository(d), testActivityRepo(d))
+	h := NewHandler(NewSQLiteRepository(d), exercise.NewSQLiteRepository(d), testActivityRepo(d))
 	// no SetPlanMatcher call — planMatcher stays nil.
 
-	_, created := doCreate(t, h, time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC))
-
-	del := httptest.NewRequest("DELETE", "/workouts/"+created.ID, nil)
-	del = withURLParam(del.WithContext(authctx.WithUserID(del.Context(), "u1")), "id", created.ID)
-	wd := httptest.NewRecorder()
-	h.delete(wd, del)
-	if wd.Code != http.StatusOK {
-		t.Fatalf("delete status = %d, want 200; body=%s", wd.Code, wd.Body.String())
-	}
+	_ = doCreate(t, h, time.Date(2026, 6, 1, 17, 0, 0, 0, time.UTC))
 }

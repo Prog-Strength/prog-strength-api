@@ -8,23 +8,23 @@ import (
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
 )
 
-// The two wrappers differ only on the LOGGED side: the SessionKind they pass
-// routes which plan kind (run vs lift) a fresh session completes, and stamps
-// completed_session_kind. The DELETED side is kind-agnostic — the revert
-// lookup keys on session id alone (see plannedworkout.Service.OnSessionDeleted)
-// because the same strength session can carry either recorded kind during the
-// unified-model shim period ('workout' from the live write path, 'activity'
-// from migration 042's normalization) and be deleted through either surface.
+// The two adapters below bridge the activity and strength packages' PlanMatcher
+// ports (each with its own SessionRef type) onto the one shared planned-workout
+// service. They are now identical in body: neither passes a session kind. Which
+// plan kind (lift vs run) a logged session completes is derived inside the
+// service from the completing activity's activity_type (see the
+// activityKindResolver below), so the logged-side no longer needs to say. Two
+// adapters remain only because Go can't have one struct satisfy two interface
+// types whose method shares a name but differs in parameter type.
 
 // activityPlanMatcher adapts the shared planned-workout service to the
-// activity.PlanMatcher port. A logged activity is always a running activity at
-// the hook site, so it completes an "activity"-kind plan.
+// activity.PlanMatcher port.
 type activityPlanMatcher struct{ svc *plannedworkout.Service }
 
 var _ activity.PlanMatcher = (*activityPlanMatcher)(nil)
 
 func (m *activityPlanMatcher) OnSessionLogged(ctx context.Context, userID string, ref activity.SessionRef) {
-	m.svc.OnSessionLogged(ctx, userID, ref.SessionID, plannedworkout.SessionKindActivity, ref.StartUTC)
+	m.svc.OnSessionLogged(ctx, userID, ref.SessionID, ref.StartUTC)
 }
 
 func (m *activityPlanMatcher) OnSessionDeleted(ctx context.Context, userID, sessionID string) {
@@ -32,15 +32,35 @@ func (m *activityPlanMatcher) OnSessionDeleted(ctx context.Context, userID, sess
 }
 
 // workoutPlanMatcher adapts the shared planned-workout service to the
-// strength.PlanMatcher port. A logged workout completes a "workout"-kind plan.
+// strength.PlanMatcher port.
 type workoutPlanMatcher struct{ svc *plannedworkout.Service }
 
 var _ strength.PlanMatcher = (*workoutPlanMatcher)(nil)
 
 func (m *workoutPlanMatcher) OnSessionLogged(ctx context.Context, userID string, ref strength.SessionRef) {
-	m.svc.OnSessionLogged(ctx, userID, ref.SessionID, plannedworkout.SessionKindWorkout, ref.StartUTC)
+	m.svc.OnSessionLogged(ctx, userID, ref.SessionID, ref.StartUTC)
 }
 
 func (m *workoutPlanMatcher) OnSessionDeleted(ctx context.Context, userID, sessionID string) {
 	m.svc.OnSessionDeleted(ctx, userID, sessionID)
+}
+
+// activityKindResolver implements plannedworkout.ActivityKindResolver over the
+// activities base repository: it looks up the completing session by id and maps
+// its activity_type to the plan kind it can complete — strength_training → lift,
+// every endurance type → run. This is what lets the auto-matcher route a logged
+// session to a lift or run plan without a session-kind discriminator.
+type activityKindResolver struct{ repo activity.Repository }
+
+var _ plannedworkout.ActivityKindResolver = (*activityKindResolver)(nil)
+
+func (r *activityKindResolver) ResolvePlanKind(ctx context.Context, userID, sessionID string) (plannedworkout.ActivityKind, error) {
+	a, err := r.repo.Get(ctx, userID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if a.ActivityType == activity.ActivityStrengthTraining {
+		return plannedworkout.ActivityKindLift, nil
+	}
+	return plannedworkout.ActivityKindRun, nil
 }

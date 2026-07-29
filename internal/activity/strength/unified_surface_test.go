@@ -20,9 +20,11 @@ import (
 
 // newUnifiedStack wires the unified /activities surface exactly like
 // server.go does: activity handler + registry whose strength descriptor is
-// bound to the workout handler's create/update/route machinery, with the
-// legacy /workouts shims mounted alongside. These tests live here (not in
-// internal/activity) because the parent package must not import this child.
+// bound to the workout handler's create/update/route machinery. The strength
+// handler's Mount now registers only /personal-records* and headline-exercise
+// routes — the legacy /workouts shims were removed in stage 5. These tests live
+// here (not in internal/activity) because the parent package must not import
+// this child.
 func newUnifiedStack(t *testing.T) (http.Handler, *SQLiteRepository, *activity.SQLiteRepository) {
 	t.Helper()
 	d := dbtest.New(t)
@@ -207,8 +209,7 @@ func TestUnifiedGet_StrengthDetails(t *testing.T) {
 
 // TestUnifiedCreate_Strength covers scenario (d): POST /activities with a
 // strength payload routes through the strength repo path, so the session is
-// readable via both surfaces and the PR/1RM side effects fire exactly as
-// POST /workouts.
+// readable via the strength repo and the PR/1RM side effects fire.
 func TestUnifiedCreate_Strength(t *testing.T) {
 	srv, repo, _ := newUnifiedStack(t)
 	ctx := context.Background()
@@ -238,7 +239,7 @@ func TestUnifiedCreate_Strength(t *testing.T) {
 		t.Errorf("details = %s, want the bench press", string(item.Details))
 	}
 
-	// The session is a real workout: the /workouts shim reads it...
+	// The session is a real workout: the strength repo reads it...
 	wkt, err := repo.GetByID(ctx, created.ID)
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
@@ -312,20 +313,21 @@ func TestUnifiedPutDelete_Strength(t *testing.T) {
 }
 
 // TestUnifiedStrengthRoutes: the strength descriptor mounts its
-// type-specific routes under /activities — progression and TCX enrichment —
-// while the /workouts shims stay live.
+// type-specific routes under /activities — progression and TCX enrichment.
+// The legacy /workouts aliases were removed in the stage-5 cleanup, so the
+// canonical /activities path is the only one that answers.
 func TestUnifiedStrengthRoutes(t *testing.T) {
 	srv, _, _ := newUnifiedStack(t)
 
-	// Progression relocates under /activities (shape unchanged)...
+	// Progression lives under /activities (shape unchanged)...
 	w := doReq(t, srv, "GET", "/activities/progression?movement_pattern=push", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /activities/progression = %d; body=%s", w.Code, w.Body.String())
 	}
-	// ...and the /workouts alias keeps working.
+	// ...and the removed /workouts alias is gone (404, not routed).
 	w = doReq(t, srv, "GET", "/workouts/progression?movement_pattern=push", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("GET /workouts/progression = %d; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("GET /workouts/progression = %d, want 404 (shim removed); body=%s", w.Code, w.Body.String())
 	}
 
 	// TCX enrichment is mounted at /activities/{id}/tcx: a bogus id without a

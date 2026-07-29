@@ -2,6 +2,7 @@ package plannedworkout
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,6 +29,21 @@ func seedRunPlan(t *testing.T, repo Repository, userID string, startUTC time.Tim
 	return pw.ID
 }
 
+// fakeKindResolver stubs ActivityKindResolver, returning a fixed plan kind (or
+// error) for every session id so OnSessionLogged routing is deterministic in
+// unit tests.
+type fakeKindResolver struct {
+	kind ActivityKind
+	err  error
+}
+
+func (f fakeKindResolver) ResolvePlanKind(context.Context, string, string) (ActivityKind, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.kind, nil
+}
+
 // markSynced gives the seeded plan a non-empty Google event id so the
 // service's best-effort calendar branch fires.
 func markSynced(t *testing.T, repo Repository, userID, planID string) {
@@ -47,7 +63,7 @@ func TestService_LinkCompletion_SyncedRewrites(t *testing.T) {
 	sched := &fakeScheduler{}
 	svc.SetCalendar(sched)
 
-	got, err := svc.LinkCompletion(context.Background(), "u1", id, "sess-1", SessionKindWorkout)
+	got, err := svc.LinkCompletion(context.Background(), "u1", id, "sess-1")
 	if err != nil {
 		t.Fatalf("LinkCompletion: %v", err)
 	}
@@ -56,9 +72,6 @@ func TestService_LinkCompletion_SyncedRewrites(t *testing.T) {
 	}
 	if got.CompletedSessionID == nil || *got.CompletedSessionID != "sess-1" {
 		t.Errorf("completed_session_id = %v want sess-1", got.CompletedSessionID)
-	}
-	if got.CompletedSessionKind == nil || *got.CompletedSessionKind != SessionKindWorkout {
-		t.Errorf("completed_session_kind = %v want workout", got.CompletedSessionKind)
 	}
 	if sched.rewriteCall != 1 {
 		t.Fatalf("RewriteCompleted called %d times want 1", sched.rewriteCall)
@@ -77,7 +90,7 @@ func TestService_Unlink_RevertsAndResyncs(t *testing.T) {
 	sched := &fakeScheduler{}
 	svc.SetCalendar(sched)
 
-	if _, err := svc.LinkCompletion(context.Background(), "u1", id, "sess-1", SessionKindWorkout); err != nil {
+	if _, err := svc.LinkCompletion(context.Background(), "u1", id, "sess-1"); err != nil {
 		t.Fatalf("LinkCompletion: %v", err)
 	}
 
@@ -90,9 +103,6 @@ func TestService_Unlink_RevertsAndResyncs(t *testing.T) {
 	}
 	if got.CompletedSessionID != nil {
 		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
-	}
-	if got.CompletedSessionKind != nil {
-		t.Errorf("completed_session_kind = %v want nil", got.CompletedSessionKind)
 	}
 	if sched.resyncCall != 1 {
 		t.Errorf("Resync called %d times want 1", sched.resyncCall)
@@ -107,9 +117,10 @@ func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
 
 	svc := NewService(repo)
 	svc.SetCalendar(&fakeScheduler{})
+	svc.SetKindResolver(fakeKindResolver{kind: ActivityKindRun})
 
 	sessionStart := time.Date(2026, 6, 15, 18, 0, 0, 0, time.UTC) // 2pm NY, same NY day
-	svc.OnSessionLogged(context.Background(), "u1", "act-1", SessionKindActivity, sessionStart)
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", sessionStart)
 
 	got, err := repo.Get(context.Background(), "u1", id)
 	if err != nil {
@@ -120,9 +131,6 @@ func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
 	}
 	if got.CompletedSessionID == nil || *got.CompletedSessionID != "act-1" {
 		t.Errorf("completed_session_id = %v want act-1", got.CompletedSessionID)
-	}
-	if got.CompletedSessionKind == nil || *got.CompletedSessionKind != SessionKindActivity {
-		t.Errorf("completed_session_kind = %v want activity", got.CompletedSessionKind)
 	}
 
 	// Deleting the session reverts the plan back to planned and clears the link.
@@ -138,9 +146,6 @@ func TestService_OnSessionLogged_MatchesAndLinks(t *testing.T) {
 	if got.CompletedSessionID != nil {
 		t.Errorf("completed_session_id after delete = %v want nil", got.CompletedSessionID)
 	}
-	if got.CompletedSessionKind != nil {
-		t.Errorf("completed_session_kind after delete = %v want nil", got.CompletedSessionKind)
-	}
 }
 
 func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
@@ -151,10 +156,11 @@ func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
 
 	svc := NewService(repo)
 	svc.SetCalendar(&fakeScheduler{})
+	svc.SetKindResolver(fakeKindResolver{kind: ActivityKindRun})
 
 	// Session on a different day (within the ±36h window but different NY day).
 	sessionStart := time.Date(2026, 6, 16, 18, 0, 0, 0, time.UTC)
-	svc.OnSessionLogged(context.Background(), "u1", "act-1", SessionKindActivity, sessionStart)
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", sessionStart)
 
 	got, err := repo.Get(context.Background(), "u1", id)
 	if err != nil {
@@ -162,6 +168,58 @@ func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
 	}
 	if got.Status != StatusPlanned {
 		t.Errorf("status = %q want planned (no-op)", got.Status)
+	}
+	if got.CompletedSessionID != nil {
+		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
+	}
+}
+
+// TestService_OnSessionLogged_NilResolverIsNoOp locks the nil-resolver branch:
+// with no SetKindResolver call, a logged session is a silent no-op — no panic,
+// no link written — because the service can't route the session to a plan kind.
+func TestService_OnSessionLogged_NilResolverIsNoOp(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC)
+	id := seedRunPlan(t, repo, "u1", planStart, "UTC")
+
+	svc := NewService(repo)
+	svc.SetCalendar(&fakeScheduler{})
+	// no SetKindResolver call — kinds stays nil.
+
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", planStart)
+
+	got, err := repo.Get(context.Background(), "u1", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusPlanned {
+		t.Errorf("status = %q want planned (nil resolver must not link)", got.Status)
+	}
+	if got.CompletedSessionID != nil {
+		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
+	}
+}
+
+// TestService_OnSessionLogged_ResolverErrorIsNoOp locks the resolver-error
+// branch: a failed activity-kind lookup is logged and swallowed — the session
+// ingest is unaffected and no plan link is written.
+func TestService_OnSessionLogged_ResolverErrorIsNoOp(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC)
+	id := seedRunPlan(t, repo, "u1", planStart, "UTC")
+
+	svc := NewService(repo)
+	svc.SetCalendar(&fakeScheduler{})
+	svc.SetKindResolver(fakeKindResolver{err: errors.New("activity lookup failed")})
+
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", planStart)
+
+	got, err := repo.Get(context.Background(), "u1", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusPlanned {
+		t.Errorf("status = %q want planned (resolver error must not link)", got.Status)
 	}
 	if got.CompletedSessionID != nil {
 		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)

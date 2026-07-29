@@ -130,7 +130,7 @@ func TestDescriptor_DetailStoreRoundTrip(t *testing.T) {
 	}
 
 	// Save replaces the exercise list wholesale (full-replacement semantics,
-	// same as PUT /workouts).
+	// same as the unified PUT /activities update path).
 	replacement := &Details{Exercises: []WorkoutExercise{{ExerciseID: "leg-press", Order: 0, Sets: nSets(2, 8, 180)}}}
 	if saveErr := d.Details.Save(ctx, "u1", w.ID, replacement); saveErr != nil {
 		t.Fatalf("Save: %v", saveErr)

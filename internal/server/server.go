@@ -477,10 +477,11 @@ func New(cfg config.Config) (*Server, error) {
 		// workouts/PRs (workout) and runs/best efforts (activity).
 		workoutHandler := strength.NewHandler(workoutRepo, exerciseRepo, activityRepo)
 		workoutHandler.SetPublisher(timelinePublisher)
-		// Deprecated: stage-5 cleanup removes these /workouts shims once MCP,
-		// web, and mobile are on /activities; see the unified-activity-model
-		// SOW. They are thin mounts over the same unified store, kept for
-		// rollout sequencing only.
+		// The legacy /workouts shims were removed in the stage-5 cleanup
+		// (unified-activity-model SOW): all of workout CRUD now lives under
+		// /activities, driven by the strength descriptor. Mount still registers
+		// the strength surfaces that never lived under /workouts —
+		// /personal-records* and the headline-exercise endpoints.
 		workoutHandler.Mount(r)
 		// Nutrition + pantry routes share the JWT-gated group with
 		// workouts. Phase 1 mounts pantry items and the nutrition
@@ -584,6 +585,10 @@ func New(cfg config.Config) (*Server, error) {
 		// SetCalendarSync above (if configured) already set the calendar on the
 		// same struct, so plan-completion calendar pushes flow through it.
 		planService := plannedWorkoutHandler.Service()
+		// The auto-matcher derives the plan kind (lift/run) a logged session
+		// completes from that session's activity_type, read out of the unified
+		// activities base repo — no session-kind discriminator (stage-5 cleanup).
+		planService.SetKindResolver(&activityKindResolver{repo: activityRepo})
 		activityHandler.SetPlanMatcher(&activityPlanMatcher{svc: planService})
 		workoutHandler.SetPlanMatcher(&workoutPlanMatcher{svc: planService})
 		// Chat session persistence. Agent stays stateless; this

@@ -27,21 +27,21 @@ func TestSelectPlan(t *testing.T) {
 		name   string
 		plans  []PlannedWorkout
 		start  time.Time
-		kind   SessionKind
+		kind   ActivityKind
 		wantID string
 	}{
 		{
 			name:   "same-day match",
 			plans:  []PlannedWorkout{mkPlan("p1", ActivityKindRun, StatusPlanned, utc(2026, 6, 15, 17, 30), ny)},
 			start:  utc(2026, 6, 15, 18, 0),
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "p1",
 		},
 		{
 			name:   "off-schedule same local day still matches",
 			plans:  []PlannedWorkout{mkPlan("p1", ActivityKindRun, StatusPlanned, utc(2026, 6, 15, 13, 0), ny)},
 			start:  utc(2026, 6, 15, 23, 0), // 7pm NY, same NY day as 9am NY plan
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "p1",
 		},
 		{
@@ -51,35 +51,35 @@ func TestSelectPlan(t *testing.T) {
 				mkPlan("late", ActivityKindRun, StatusPlanned, utc(2026, 6, 15, 22, 0), ny),
 			},
 			start:  utc(2026, 6, 15, 21, 30),
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "late",
 		},
 		{
 			name:   "wrong kind lift plan vs run session no match",
 			plans:  []PlannedWorkout{mkPlan("p1", ActivityKindLift, StatusPlanned, utc(2026, 6, 15, 17, 30), ny)},
 			start:  utc(2026, 6, 15, 18, 0),
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "",
 		},
 		{
 			name:   "already completed plan not a candidate",
 			plans:  []PlannedWorkout{mkPlan("p1", ActivityKindRun, StatusCompleted, utc(2026, 6, 15, 17, 30), ny)},
 			start:  utc(2026, 6, 15, 18, 0),
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "",
 		},
 		{
 			name:   "timezone boundary different local day no match",
 			plans:  []PlannedWorkout{mkPlan("p1", ActivityKindRun, StatusPlanned, utc(2026, 6, 15, 2, 0), ny)}, // 10pm Jun 14 NY
 			start:  utc(2026, 6, 15, 20, 0),                                                                    // 4pm Jun 15 NY
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "",
 		},
 		{
 			name:   "no candidates nil plans",
 			plans:  nil,
 			start:  utc(2026, 6, 15, 18, 0),
-			kind:   SessionKindActivity,
+			kind:   ActivityKindRun,
 			wantID: "",
 		},
 	}

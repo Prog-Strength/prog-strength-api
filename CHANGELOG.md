@@ -1,3 +1,10 @@
+# [0.83.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.82.0...v0.83.0) (2026-07-29)
+
+
+### Features
+
+* remove /workouts shims and collapse completed_session_kind (stage 5) ([#81](https://github.com/Prog-Strength/prog-strength-api/issues/81)) ([#82](https://github.com/Prog-Strength/prog-strength-api/issues/82)) ([5683b98](https://github.com/Prog-Strength/prog-strength-api/commit/5683b981434c648159db29f1b97739ec692fdfd8))
+
 # [0.82.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.81.0...v0.82.0) (2026-07-29)
 
 

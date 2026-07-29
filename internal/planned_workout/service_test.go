@@ -2,6 +2,7 @@ package plannedworkout
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,11 +29,18 @@ func seedRunPlan(t *testing.T, repo Repository, userID string, startUTC time.Tim
 	return pw.ID
 }
 
-// fakeKindResolver stubs ActivityKindResolver, returning a fixed plan kind for
-// every session id so OnSessionLogged routing is deterministic in unit tests.
-type fakeKindResolver struct{ kind ActivityKind }
+// fakeKindResolver stubs ActivityKindResolver, returning a fixed plan kind (or
+// error) for every session id so OnSessionLogged routing is deterministic in
+// unit tests.
+type fakeKindResolver struct {
+	kind ActivityKind
+	err  error
+}
 
 func (f fakeKindResolver) ResolvePlanKind(context.Context, string, string) (ActivityKind, error) {
+	if f.err != nil {
+		return "", f.err
+	}
 	return f.kind, nil
 }
 
@@ -160,6 +168,58 @@ func TestService_OnSessionLogged_NoCandidateIsNoOp(t *testing.T) {
 	}
 	if got.Status != StatusPlanned {
 		t.Errorf("status = %q want planned (no-op)", got.Status)
+	}
+	if got.CompletedSessionID != nil {
+		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
+	}
+}
+
+// TestService_OnSessionLogged_NilResolverIsNoOp locks the nil-resolver branch:
+// with no SetKindResolver call, a logged session is a silent no-op — no panic,
+// no link written — because the service can't route the session to a plan kind.
+func TestService_OnSessionLogged_NilResolverIsNoOp(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC)
+	id := seedRunPlan(t, repo, "u1", planStart, "UTC")
+
+	svc := NewService(repo)
+	svc.SetCalendar(&fakeScheduler{})
+	// no SetKindResolver call — kinds stays nil.
+
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", planStart)
+
+	got, err := repo.Get(context.Background(), "u1", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusPlanned {
+		t.Errorf("status = %q want planned (nil resolver must not link)", got.Status)
+	}
+	if got.CompletedSessionID != nil {
+		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)
+	}
+}
+
+// TestService_OnSessionLogged_ResolverErrorIsNoOp locks the resolver-error
+// branch: a failed activity-kind lookup is logged and swallowed — the session
+// ingest is unaffected and no plan link is written.
+func TestService_OnSessionLogged_ResolverErrorIsNoOp(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	planStart := time.Date(2026, 6, 15, 17, 30, 0, 0, time.UTC)
+	id := seedRunPlan(t, repo, "u1", planStart, "UTC")
+
+	svc := NewService(repo)
+	svc.SetCalendar(&fakeScheduler{})
+	svc.SetKindResolver(fakeKindResolver{err: errors.New("activity lookup failed")})
+
+	svc.OnSessionLogged(context.Background(), "u1", "act-1", planStart)
+
+	got, err := repo.Get(context.Background(), "u1", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != StatusPlanned {
+		t.Errorf("status = %q want planned (resolver error must not link)", got.Status)
 	}
 	if got.CompletedSessionID != nil {
 		t.Errorf("completed_session_id = %v want nil", got.CompletedSessionID)

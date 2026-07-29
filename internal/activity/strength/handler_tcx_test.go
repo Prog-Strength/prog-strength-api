@@ -95,7 +95,7 @@ type dupEnvelope struct {
 func doTCXImport(t *testing.T, h *Handler, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	body, ct := tcxMultipart(t, data)
-	req := httptest.NewRequest("POST", "/workouts/imports", body)
+	req := httptest.NewRequest("POST", "/activities/imports", body)
 	req.Header.Set("Content-Type", ct)
 	req = req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser))
 	w := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func doTCXImport(t *testing.T, h *Handler, data []byte) *httptest.ResponseRecord
 func doTCXAttach(t *testing.T, h *Handler, workoutID string, data []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	body, ct := tcxMultipart(t, data)
-	req := httptest.NewRequest("POST", "/workouts/"+workoutID+"/tcx", body)
+	req := httptest.NewRequest("POST", "/activities/"+workoutID+"/tcx", body)
 	req.Header.Set("Content-Type", ct)
 	req = withURLParam(req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser)), "id", workoutID)
 	w := httptest.NewRecorder()
@@ -116,7 +116,7 @@ func doTCXAttach(t *testing.T, h *Handler, workoutID string, data []byte) *httpt
 
 func doTCXDetach(t *testing.T, h *Handler, workoutID string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("DELETE", "/workouts/"+workoutID+"/tcx", nil)
+	req := httptest.NewRequest("DELETE", "/activities/"+workoutID+"/tcx", nil)
 	req = withURLParam(req.WithContext(authctx.WithUserID(req.Context(), tcxTestUser)), "id", workoutID)
 	w := httptest.NewRecorder()
 	h.detachTCX(w, req)

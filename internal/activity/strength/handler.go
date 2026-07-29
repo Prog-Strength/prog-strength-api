@@ -404,6 +404,11 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "computed progression", result)
 }
 
+// createWorkoutExercise is the strength descriptor's details-decode DTO: one
+// exercise entry in the `details.exercises` payload of the unified POST/PUT
+// /activities body (decoded via descriptor.go's detailsPayload → parseDetails;
+// slice position becomes Order). Not a legacy POST /workouts leftover — the
+// shims are gone, but this shape is the live wire format for strength details.
 type createWorkoutExercise struct {
 	ExerciseID    string `json:"exercise_id"`
 	SupersetGroup *int   `json:"superset_group"` // optional; nil = standalone

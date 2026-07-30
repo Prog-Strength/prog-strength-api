@@ -1,0 +1,63 @@
+# Codecov configuration.
+#
+# Coverage is uploaded by the "Test (race + cover)" job in
+# .github/workflows/ci.yml on every PR and every push to main. This file
+# turns those uploads into two PR status checks:
+#
+#   codecov/project — total repo coverage, must not regress
+#   codecov/patch   — coverage of the lines this PR added or changed
+#
+# NOTE: these checks are advisory to GitHub until they are added as
+# required status checks in branch protection for main. Codecov reports
+# pass/fail; only branch protection can block the merge button.
+
+coverage:
+  # Round toward the lower bucket so a "79.6%" patch does not silently
+  # satisfy an 80% target.
+  round: down
+  precision: 1
+
+  status:
+    project:
+      default:
+        # Compare against the PR's base commit rather than a fixed
+        # number. The repo sits at ~71% today; a hardcoded floor would
+        # either be set so low it never fires or so high it blocks every
+        # PR. "auto" ratchets: whatever main reaches becomes the new bar.
+        target: auto
+        # Allow a 1% dip. Small PRs that add a chunk of hard-to-test
+        # wiring shouldn't fail on rounding noise, but a real regression
+        # still trips the check.
+        threshold: 1%
+        # A red CI run means the profile is missing or partial — treat
+        # that as an error rather than reporting a bogus coverage drop.
+        if_ci_failed: error
+
+    patch:
+      default:
+        # The actual enforcement lever: new and modified lines must be
+        # 70% covered. Set just below the current repo total (~71%) so
+        # the bar is "new code is at least as tested as what's already
+        # here" — strict enough to stop coverage sliding, loose enough
+        # that a PR of mostly wiring or error-path plumbing isn't
+        # blocked. Existing gaps (internal/telemetry at 22.7%,
+        # internal/auth at 37.0%) are untouched; only changed lines
+        # count. Raise this as the total climbs.
+        target: 70%
+        threshold: 0%
+        # Docs-only and config-only PRs touch no coverable lines, so
+        # Codecov finds nothing to measure. Pass instead of failing.
+        if_not_found: success
+        if_ci_failed: error
+
+comment:
+  layout: "condensed_header, diff, files"
+  # Post the coverage comment even when the number is unchanged, so the
+  # patch figure is always visible during review.
+  require_changes: false
+  behavior: default
+
+ignore:
+  # Test infrastructure, not product code. Its own coverage number is
+  # noise and would dilute both statuses.
+  - "internal/testutil/**"

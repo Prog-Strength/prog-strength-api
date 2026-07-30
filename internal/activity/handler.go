@@ -450,6 +450,35 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional activity_type field pins the type instead of deriving it from
+	// the TCX <Sport> tag (which can only say Running/Biking/Other). Validate
+	// it up front so a bad value fails before we archive anything.
+	var override ActivityType
+	if raw := strings.TrimSpace(r.FormValue("activity_type")); raw != "" {
+		t := ActivityType(raw)
+		// A nil registry is a wiring bug, not a client error — matching the
+		// other registry consumers in this package (unified_handler.go), fail
+		// hard rather than silently misclassifying an unknown type as a 400.
+		if h.registry == nil {
+			httpresp.ServerError(w, r.Context(), "activity registry not wired", errors.New("SetRegistry not called"))
+			return
+		}
+		if _, err := h.registry.Lookup(t); err != nil {
+			// Unknown type: 422 listing the valid set (Lookup's message).
+			httpresp.Error(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		// Registered but non-endurance (e.g. strength_training): routing it
+		// through the endurance summarizer would write a garbage detail row.
+		// Strength ingest has its own path. detailTable(t) == "" marks base-only.
+		if detailTable(t) == "" {
+			httpresp.ErrorWithCode(w, http.StatusBadRequest,
+				"activity_type "+raw+" cannot be ingested from a TCX file", "invalid_activity_type")
+			return
+		}
+		override = t
+	}
+
 	file, _, err := r.FormFile("file")
 	if err != nil {
 		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "missing file field in multipart upload", "unsupported_media_type")
@@ -458,7 +487,7 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	rid := requestid.FromContext(r.Context())
-	a, err := IngestTCX(r.Context(), h.repo, userID, IngestManualTCX, file)
+	a, err := IngestTCX(r.Context(), h.repo, userID, IngestManualTCX, file, override)
 	switch {
 	case err == nil:
 		log.Printf("activity import: request_id=%s user_id=%s source=%s source_activity_id=%s activity_type=%s outcome=imported",

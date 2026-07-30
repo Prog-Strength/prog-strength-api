@@ -224,6 +224,22 @@ type trackpointDTO struct {
 	// slower than the dropout threshold). The chart draws a gap where false;
 	// the server owns the threshold so client and strip summary can't drift.
 	CleanPace bool `json:"clean_pace"`
+	// Latitude/Longitude are the WGS84 coordinates of this sample, or null
+	// where the source trackpoint had no <Position>.
+	//
+	// These exist so the elevation profile and the route map can be ONE
+	// instrument: the client's elevation strip is a straight map over this
+	// array, so strip index i is trackpoint i, and scrubbing the profile to i
+	// puts a marker at these coordinates. The simplified Route geometry cannot
+	// serve that — it is RDP-reduced and deliberately not index-aligned with
+	// anything. Answers sows/sow-trail-map.md Open Question 2.
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+	// GradePercent is the signed slope at this sample, measured over a
+	// smoothing window (see deriveGrades). Null where it cannot be measured
+	// honestly. Derived on read, so it needs no migration and every historical
+	// activity carries it immediately.
+	GradePercent *float64 `json:"grade_percent"`
 }
 
 // activityDTO is the wire shape of an activity. Nullable numerics are
@@ -374,8 +390,12 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		CreatedAt:           a.CreatedAt,
 	}
 	if withTrackpoints {
+		// One pass for the whole series, not one per point — grade at a sample
+		// is a function of its neighbors, so it cannot be computed inside the
+		// projection loop.
+		grades := deriveGrades(a.Trackpoints)
 		dto.Trackpoints = make([]trackpointDTO, 0, len(a.Trackpoints))
-		for _, tp := range a.Trackpoints {
+		for i, tp := range a.Trackpoints {
 			dto.Trackpoints = append(dto.Trackpoints, trackpointDTO{
 				Sequence:        tp.Sequence,
 				ElapsedSeconds:  tp.ElapsedSeconds,
@@ -384,6 +404,9 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 				PaceSecPerKm:    tp.PaceSecPerKm,
 				ElevationMeters: tp.ElevationMeters,
 				CleanPace:       isCleanTrackpointPace(tp.PaceSecPerKm),
+				Latitude:        tp.Latitude,
+				Longitude:       tp.Longitude,
+				GradePercent:    grades[i],
 			})
 		}
 	}

@@ -470,3 +470,66 @@ func labelBouts(bouts []bout, bucketMeters float64) []IntervalSegment {
 	}
 	return out
 }
+
+// --- grade ----------------------------------------------------------
+
+// gradeWindowMeters is the MINIMUM horizontal span a grade sample is measured
+// over. Adjacent-sample grade on a ~300-point downsample of a multi-hour hike
+// is dominated by barometric noise: 1 m of altimeter jitter across a 4 m step
+// reads as a 25% wall. Thirty meters is roughly a switchback's worth of trail
+// and is empirically stable without flattening real pitch changes.
+const gradeWindowMeters = 30.0
+
+// maxGradeWindowMeters caps how far back the window may stretch while looking
+// for an endpoint that carries elevation. Beyond this the two samples are too
+// far apart for "the grade here" to mean anything, so the answer is nil rather
+// than a number averaged across a quarter-kilometer — the same refusal to
+// bridge a gap that the route geometry makes (sows/sow-trail-map.md) and that
+// the recap charts make when they never bridge a null.
+const maxGradeWindowMeters = 200.0
+
+// deriveGrades returns the signed grade in percent at each trackpoint, INDEX-
+// ALIGNED with tps so the client can pair it with the elevation strip it
+// already builds by index.
+//
+// Grade is derived here, on read, rather than stored: it is a pure function of
+// a trackpoint series the detail read has already loaded, so projecting it
+// costs one O(n) pass, needs no migration, gives every historical activity the
+// value immediately, and cannot go stale against a recalibrated distance.
+//
+// It lives on the server for the reason this whole file exists: the moment
+// grade appears on both the profile tooltip and (later) a splits table or the
+// agent's session summary, two client implementations disagree and the user
+// does the arithmetic. Same policy as isCleanTrackpointPace.
+//
+// nil — never a fabricated 0 — when the sample cannot be measured honestly:
+// the leading points before any window spans gradeWindowMeters, either
+// endpoint missing elevation within maxGradeWindowMeters, or a non-positive
+// horizontal denominator (a stationary or non-monotonic sample).
+func deriveGrades(tps []Trackpoint) []*float64 {
+	out := make([]*float64, len(tps))
+	for i := range tps {
+		if tps[i].ElevationMeters == nil {
+			continue
+		}
+		// Walk back to the NEAREST earlier sample at least gradeWindowMeters
+		// away that also carries elevation — the smallest honest window.
+		for j := i - 1; j >= 0; j-- {
+			run := tps[i].DistanceMeters - tps[j].DistanceMeters
+			if run > maxGradeWindowMeters {
+				break // too far to still describe "here"
+			}
+			if run < gradeWindowMeters {
+				continue // window not yet wide enough
+			}
+			if tps[j].ElevationMeters == nil {
+				continue // keep looking; a gap must not end the search
+			}
+			rise := *tps[i].ElevationMeters - *tps[j].ElevationMeters
+			g := 100 * rise / run
+			out[i] = &g
+			break
+		}
+	}
+	return out
+}

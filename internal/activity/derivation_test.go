@@ -366,3 +366,137 @@ func TestDeriveRunning_StationaryTailPaceNil(t *testing.T) {
 		t.Errorf("stationary tail pace = %v, want nil", *tail.PaceSecPerUnit)
 	}
 }
+
+// --- grade ----------------------------------------------------------
+
+// gradeTrack builds n+1 points stepMeters apart, each rising risePerStep
+// meters. A nil entry in noElev suppresses that index's elevation.
+func gradeTrack(n int, stepMeters, risePerStep float64, noElev map[int]bool) []Trackpoint {
+	tps := make([]Trackpoint, 0, n+1)
+	for i := 0; i <= n; i++ {
+		var elev *float64
+		if !noElev[i] {
+			elev = fp(1000 + float64(i)*risePerStep)
+		}
+		tps = append(tps, tp(i, i*10, float64(i)*stepMeters, nil, nil, elev))
+	}
+	return tps
+}
+
+func TestDeriveGradesSteadyClimb(t *testing.T) {
+	// 10 m steps rising 1 m each = a 10% grade. The first window that spans
+	// gradeWindowMeters (30 m) is three steps, so index 3 is the first sample
+	// that can be measured.
+	grades := deriveGrades(gradeTrack(10, 10, 1, nil))
+
+	for i := 0; i < 3; i++ {
+		if grades[i] != nil {
+			t.Fatalf("index %d: got %v, want nil (no window spans %.0fm yet)",
+				i, *grades[i], gradeWindowMeters)
+		}
+	}
+	for i := 3; i <= 10; i++ {
+		if grades[i] == nil {
+			t.Fatalf("index %d: got nil, want a grade", i)
+		}
+		if math.Abs(*grades[i]-10) > 1e-9 {
+			t.Fatalf("index %d: got %v%%, want 10%%", i, *grades[i])
+		}
+	}
+}
+
+func TestDeriveGradesDescentIsNegative(t *testing.T) {
+	grades := deriveGrades(gradeTrack(10, 10, -1, nil))
+	if grades[5] == nil || *grades[5] >= 0 {
+		t.Fatalf("descent grade = %v, want negative", grades[5])
+	}
+	if math.Abs(*grades[5]+10) > 1e-9 {
+		t.Fatalf("descent grade = %v%%, want -10%%", *grades[5])
+	}
+}
+
+func TestDeriveGradesFlatIsZeroNotNil(t *testing.T) {
+	grades := deriveGrades(gradeTrack(10, 10, 0, nil))
+	// A genuinely flat trail is 0%, which is a measurement — distinct from
+	// nil, which means "not measurable".
+	if grades[5] == nil {
+		t.Fatal("flat grade = nil, want 0")
+	}
+	if *grades[5] != 0 {
+		t.Fatalf("flat grade = %v%%, want 0%%", *grades[5])
+	}
+}
+
+func TestDeriveGradesNilWhenSampleHasNoElevation(t *testing.T) {
+	grades := deriveGrades(gradeTrack(10, 10, 1, map[int]bool{5: true}))
+	if grades[5] != nil {
+		t.Fatalf("index 5 has no elevation, got %v, want nil", *grades[5])
+	}
+}
+
+func TestDeriveGradesWalksPastAnElevationGap(t *testing.T) {
+	// Indices 6 and 7 carry no elevation. Index 8 must still be measurable by
+	// reaching further back to index 5 — a gap suppresses its OWN samples, it
+	// does not blind everything downstream of it.
+	grades := deriveGrades(gradeTrack(12, 10, 1, map[int]bool{6: true, 7: true}))
+	if grades[8] == nil {
+		t.Fatal("index 8 after a gap = nil, want a grade measured across it")
+	}
+	// index 8 → index 5 is 30 m of run and 3 m of rise.
+	if math.Abs(*grades[8]-10) > 1e-9 {
+		t.Fatalf("index 8 grade = %v%%, want 10%%", *grades[8])
+	}
+}
+
+func TestDeriveGradesNilWhenGapExceedsMaxWindow(t *testing.T) {
+	// A long elevation dropout: everything from index 1 to 24 is missing, so
+	// index 25's only elevation-bearing predecessor is 250 m back — past
+	// maxGradeWindowMeters. Better to say nothing than to average a grade
+	// across a quarter-kilometer and call it "here".
+	noElev := map[int]bool{}
+	for i := 1; i <= 24; i++ {
+		noElev[i] = true
+	}
+	grades := deriveGrades(gradeTrack(26, 10, 1, noElev))
+	if grades[25] != nil {
+		t.Fatalf("index 25 across a %.0fm gap = %v, want nil",
+			maxGradeWindowMeters, *grades[25])
+	}
+}
+
+func TestDeriveGradesNilWhenStationary(t *testing.T) {
+	// Distance never advances: the horizontal denominator is zero at every
+	// pair, so no window ever spans gradeWindowMeters. No divide-by-zero, no
+	// infinite grade.
+	grades := deriveGrades(gradeTrack(10, 0, 1, nil))
+	for i, g := range grades {
+		if g != nil {
+			t.Fatalf("stationary index %d = %v, want nil", i, *g)
+		}
+	}
+}
+
+func TestDeriveGradesNilWhenNoElevationAtAll(t *testing.T) {
+	// An indoor activity: every sample lacks elevation, so every grade is nil
+	// — and the keys still ship, rendered null.
+	grades := deriveGrades(steadyTrack(20, 10, 5))
+	if len(grades) != 21 {
+		t.Fatalf("len = %d, want 21 (index-aligned with trackpoints)", len(grades))
+	}
+	for i, g := range grades {
+		if g != nil {
+			t.Fatalf("index %d = %v, want nil", i, *g)
+		}
+	}
+}
+
+func TestDeriveGradesIsIndexAlignedWithTrackpoints(t *testing.T) {
+	// The whole contract the client depends on: strip index i IS trackpoint i
+	// IS grade i.
+	for _, n := range []int{0, 1, 5, 300} {
+		tps := gradeTrack(n, 10, 1, nil)
+		if got := len(deriveGrades(tps)); got != len(tps) {
+			t.Fatalf("n=%d: len(grades) = %d, want %d", n, got, len(tps))
+		}
+	}
+}

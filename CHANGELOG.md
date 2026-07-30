@@ -1,3 +1,10 @@
+# [0.84.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.2...v0.84.0) (2026-07-30)
+
+
+### Features
+
+* register hiking as a fifth endurance activity type ([#86](https://github.com/Prog-Strength/prog-strength-api/issues/86)) ([05ddd25](https://github.com/Prog-Strength/prog-strength-api/commit/05ddd2525b6b7dcecb41685e5e388a50ec44fd91))
+
 ## [0.83.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.1...v0.83.2) (2026-07-29)
 
 

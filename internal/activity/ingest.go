@@ -12,6 +12,11 @@ import (
 // pipeline so a future ingest path (Garmin Connect sync, Strava webhook,
 // etc.) can reuse it without rewriting the middle.
 //
+// typeOverride pins the resulting activity type; the empty string derives it
+// from the TCX <Sport> tag via normalizeActivityType (the historical
+// behavior). Callers that let the user pick a type (e.g. the manual upload's
+// activity_type field) pass it here after validating it against the registry.
+//
 // The function returns the persisted Activity (with generated ID, S3 key,
 // and timestamps) on success. It returns:
 //
@@ -31,7 +36,7 @@ import (
 // DB. We accept that for now (the user is single, the bucket is private,
 // no reconciler is worth building yet) but it's the obvious next thing
 // to address if this gets multi-tenant.
-func IngestTCX(ctx context.Context, repo Repository, userID string, source IngestSource, r io.Reader) (Activity, error) {
+func IngestTCX(ctx context.Context, repo Repository, userID string, source IngestSource, r io.Reader, typeOverride ActivityType) (Activity, error) {
 	if !source.Valid() {
 		return Activity{}, fmt.Errorf("activity: invalid ingest source %q", source)
 	}
@@ -49,7 +54,10 @@ func IngestTCX(ctx context.Context, repo Repository, userID string, source Inges
 		return Activity{}, err
 	}
 
-	actType := normalizeActivityType(parsed.Sport, source)
+	actType := typeOverride
+	if actType == "" {
+		actType = normalizeActivityType(parsed.Sport, source)
+	}
 	a := summarize(parsed, actType)
 	a.UserID = userID
 	a.IngestSource = source

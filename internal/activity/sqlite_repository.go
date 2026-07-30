@@ -28,7 +28,8 @@ const activityJoins = `
 	LEFT JOIN activity_run_details rd ON rd.activity_id = a.id
 	LEFT JOIN activity_walk_details wd ON wd.activity_id = a.id
 	LEFT JOIN activity_cycle_details cd ON cd.activity_id = a.id
-	LEFT JOIN activity_other_details od ON od.activity_id = a.id`
+	LEFT JOIN activity_other_details od ON od.activity_id = a.id
+	LEFT JOIN activity_hike_details hd ON hd.activity_id = a.id`
 
 // detailCoalesce projects one endurance column across the four detail tables
 // joined by activityJoins: at most one detail row exists per activity, so the
@@ -37,7 +38,7 @@ const activityJoins = `
 // detail-column projection must go through this builder — a future fifth
 // detail table then only needs its alias added here and in activityJoins.
 func detailCoalesce(col, fallback string) string {
-	expr := "rd." + col + ", wd." + col + ", cd." + col + ", od." + col
+	expr := "rd." + col + ", wd." + col + ", cd." + col + ", od." + col + ", hd." + col
 	if fallback != "" {
 		expr += ", " + fallback
 	}
@@ -57,7 +58,10 @@ var activityColumns = `
 	` + detailCoalesce("elevation_gain_meters", "") + `,
 	COALESCE(a.tcx_s3_key, ''), a.created_at, a.deleted_at,
 	` + detailCoalesce("environment", "'outdoor'") + `,
-	` + detailCoalesce("raw_distance_meters", "0")
+	` + detailCoalesce("raw_distance_meters", "0") + `,
+	` + detailCoalesce("elevation_loss_meters", "") + `,
+	` + detailCoalesce("elevation_high_meters", "") + `,
+	` + detailCoalesce("elevation_low_meters", "")
 
 // detailTable maps an activity type to its detail table, or "" for base-only
 // types (strength_training keeps its details in activity_exercises/sets,
@@ -70,6 +74,8 @@ func detailTable(t ActivityType) string {
 		return "activity_walk_details"
 	case ActivityCycling:
 		return "activity_cycle_details"
+	case ActivityHiking:
+		return "activity_hike_details"
 	case ActivityOther:
 		return "activity_other_details"
 	}
@@ -146,10 +152,12 @@ func (r *SQLiteRepository) Create(ctx context.Context, a *Activity, tcx []byte) 
 			INSERT INTO `+table+` (
 				activity_id, distance_meters, raw_distance_meters,
 				avg_pace_sec_per_km, best_pace_sec_per_km, elevation_gain_meters,
+				elevation_loss_meters, elevation_high_meters, elevation_low_meters,
 				environment, route_geojson
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, a.ID, a.DistanceMeters, a.RawDistanceMeters,
 			a.AvgPaceSecPerKm, a.BestPaceSecPerKm, a.ElevationGainMeters,
+			a.ElevationLossMeters, a.ElevationHighMeters, a.ElevationLowMeters,
 			a.Environment, a.RouteGeoJSON); err != nil {
 			return err
 		}
@@ -1039,6 +1047,9 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 		maxHR     sql.NullInt64
 		calories  sql.NullInt64
 		elevation sql.NullFloat64
+		elevLoss  sql.NullFloat64
+		elevHigh  sql.NullFloat64
+		elevLow   sql.NullFloat64
 		deletedAt sql.NullTime
 	)
 	if err := s.Scan(
@@ -1047,6 +1058,7 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 		&avgPace, &bestPace,
 		&avgHR, &maxHR, &calories, &elevation,
 		&act.TCXS3Key, &act.CreatedAt, &deletedAt, &act.Environment, &act.RawDistanceMeters,
+		&elevLoss, &elevHigh, &elevLow,
 	); err != nil {
 		return nil, err
 	}
@@ -1081,6 +1093,18 @@ func scanActivity(s interface{ Scan(...any) error }) (*Activity, error) {
 	if elevation.Valid {
 		v := elevation.Float64
 		act.ElevationGainMeters = &v
+	}
+	if elevLoss.Valid {
+		v := elevLoss.Float64
+		act.ElevationLossMeters = &v
+	}
+	if elevHigh.Valid {
+		v := elevHigh.Float64
+		act.ElevationHighMeters = &v
+	}
+	if elevLow.Valid {
+		v := elevLow.Float64
+		act.ElevationLowMeters = &v
 	}
 	if deletedAt.Valid {
 		t := deletedAt.Time

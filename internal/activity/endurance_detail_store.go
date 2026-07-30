@@ -35,14 +35,18 @@ func NewSQLiteEnduranceDetailStore(db *sql.DB, t ActivityType) DetailStore {
 func (s *sqliteEnduranceDetailStore) Load(ctx context.Context, userID, activityID string) (any, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT d.distance_meters, d.raw_distance_meters, d.avg_pace_sec_per_km,
-		       d.best_pace_sec_per_km, d.elevation_gain_meters, d.environment, d.route_geojson
+		       d.best_pace_sec_per_km, d.elevation_gain_meters,
+		       d.elevation_loss_meters, d.elevation_high_meters, d.elevation_low_meters,
+		       d.environment, d.route_geojson
 		FROM `+s.table+` d
 		JOIN activities a ON a.id = d.activity_id
 		WHERE d.activity_id = ? AND a.user_id = ? AND a.deleted_at IS NULL
 	`, activityID, userID)
 	var d EnduranceDetails
 	if err := row.Scan(&d.DistanceMeters, &d.RawDistanceMeters, &d.AvgPaceSecPerKm,
-		&d.BestPaceSecPerKm, &d.ElevationGainMeters, &d.Environment, &d.RouteGeoJSON); err != nil {
+		&d.BestPaceSecPerKm, &d.ElevationGainMeters,
+		&d.ElevationLossMeters, &d.ElevationHighMeters, &d.ElevationLowMeters,
+		&d.Environment, &d.RouteGeoJSON); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
@@ -78,18 +82,23 @@ func (s *sqliteEnduranceDetailStore) Save(ctx context.Context, userID, activityI
 		INSERT INTO `+s.table+` (
 			activity_id, distance_meters, raw_distance_meters,
 			avg_pace_sec_per_km, best_pace_sec_per_km, elevation_gain_meters,
+			elevation_loss_meters, elevation_high_meters, elevation_low_meters,
 			environment, route_geojson
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(activity_id) DO UPDATE SET
 			distance_meters = excluded.distance_meters,
 			raw_distance_meters = excluded.raw_distance_meters,
 			avg_pace_sec_per_km = excluded.avg_pace_sec_per_km,
 			best_pace_sec_per_km = excluded.best_pace_sec_per_km,
 			elevation_gain_meters = excluded.elevation_gain_meters,
+			elevation_loss_meters = excluded.elevation_loss_meters,
+			elevation_high_meters = excluded.elevation_high_meters,
+			elevation_low_meters = excluded.elevation_low_meters,
 			environment = excluded.environment,
 			route_geojson = excluded.route_geojson
 	`, activityID, d.DistanceMeters, d.RawDistanceMeters,
 		d.AvgPaceSecPerKm, d.BestPaceSecPerKm, d.ElevationGainMeters,
+		d.ElevationLossMeters, d.ElevationHighMeters, d.ElevationLowMeters,
 		env, d.RouteGeoJSON); err != nil {
 		return err
 	}

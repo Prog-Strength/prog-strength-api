@@ -273,6 +273,129 @@ func TestImportBikingClassifiesAsCycling(t *testing.T) {
 	}
 }
 
+// --- activity_type override ----------------------------------------
+
+// newTestRegistry mirrors server.go's endurance registrations (running,
+// walking, cycling, hiking, other) plus a base-only strength_training
+// descriptor so the "registered but non-endurance" 400 path is reachable.
+func newTestRegistry(t *testing.T, repo *SQLiteRepository) *Registry {
+	t.Helper()
+	db := repo.db
+	return NewRegistry(
+		NewEnduranceDescriptor(ActivityRunning, NewSQLiteEnduranceDetailStore(db, ActivityRunning)),
+		NewEnduranceDescriptor(ActivityWalking, NewSQLiteEnduranceDetailStore(db, ActivityWalking)),
+		NewEnduranceDescriptor(ActivityCycling, NewSQLiteEnduranceDetailStore(db, ActivityCycling)),
+		NewEnduranceDescriptor(ActivityHiking, NewSQLiteEnduranceDetailStore(db, ActivityHiking)),
+		NewEnduranceDescriptor(ActivityOther, NewSQLiteEnduranceDetailStore(db, ActivityOther)),
+		// strength_training is base-only (detailTable == ""): reachable so the
+		// TCX-can't-ingest-this 400 branch has a registered target.
+		&Descriptor{Type: ActivityStrengthTraining},
+	)
+}
+
+// doImportTyped drives uploadTCX with a multipart upload of data and, when
+// activityType is non-empty, an activity_type form field alongside the file.
+func doImportTyped(t *testing.T, h *Handler, data []byte, activityType string) *httptest.ResponseRecorder {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "activity.tcx")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if activityType != "" {
+		if err := mw.WriteField("activity_type", activityType); err != nil {
+			t.Fatalf("write activity_type: %v", err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	req := httptest.NewRequest("POST", "/activities/tcx", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req = req.WithContext(authctx.WithUserID(req.Context(), testUserID))
+	w := httptest.NewRecorder()
+	h.uploadTCX(w, req)
+	return w
+}
+
+func TestUploadTCX_ActivityTypeOverride(t *testing.T) {
+	cases := []struct {
+		name         string
+		activityType string
+		wantStatus   int
+		wantType     ActivityType // asserted on 201
+		wantCode     string       // asserted on error responses
+		wantErrHas   string       // substring the error body must contain
+	}{
+		{
+			name:         "absent derives from sport",
+			activityType: "",
+			wantStatus:   http.StatusCreated,
+			wantType:     ActivityRunning,
+		},
+		{
+			name:         "hiking override",
+			activityType: "hiking",
+			wantStatus:   http.StatusCreated,
+			wantType:     ActivityHiking,
+		},
+		{
+			name:         "unregistered type is 422",
+			activityType: "kickboxing",
+			wantStatus:   http.StatusUnprocessableEntity,
+			wantErrHas:   "hiking", // Lookup lists the valid set
+		},
+		{
+			name:         "registered non-endurance is 400",
+			activityType: "strength_training",
+			wantStatus:   http.StatusBadRequest,
+			wantCode:     "invalid_activity_type",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, repo := newTestHandler(t)
+			h.SetRegistry(newTestRegistry(t, repo))
+
+			w := doImportTyped(t, h, readFixture(t, "typical_5k.tcx"), tc.activityType)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tc.wantStatus, w.Body.String())
+			}
+
+			switch tc.wantStatus {
+			case http.StatusCreated:
+				var env activityEnvelope
+				if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if env.Data.ActivityType != tc.wantType {
+					t.Errorf("activity_type = %q, want %q", env.Data.ActivityType, tc.wantType)
+				}
+				// The 5k fixture carries altitude, so an endurance ingest
+				// populates the elevation rollups regardless of type.
+				if env.Data.ElevationGainMeters == nil {
+					t.Error("expected elevation_gain_meters populated for altitude-bearing fixture")
+				}
+			default:
+				var env codeEnvelope
+				if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				if tc.wantCode != "" && env.Code != tc.wantCode {
+					t.Errorf("code = %q, want %q", env.Code, tc.wantCode)
+				}
+				if tc.wantErrHas != "" && !strings.Contains(env.Error, tc.wantErrHas) {
+					t.Errorf("error body = %q, want to contain %q", env.Error, tc.wantErrHas)
+				}
+			}
+		})
+	}
+}
+
 func TestImportDuplicate(t *testing.T) {
 	h, _, _ := newTestHandler(t)
 	first := doImport(t, h, readFixture(t, "typical_5k.tcx"))

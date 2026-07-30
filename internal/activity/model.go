@@ -55,6 +55,13 @@ type Activity struct {
 	MaxHeartRateBpm     *int
 	TotalCalories       *int
 	ElevationGainMeters *float64
+	// The rest of the elevation profile, all derived in one pass with gain
+	// (see tcx_summarizer.go). Loss is total descent stored positive; high/low
+	// are the track's peak and trough altitude. nil when the source carried no
+	// altitude, distinct from a flat route's 0.
+	ElevationLossMeters *float64
+	ElevationHighMeters *float64
+	ElevationLowMeters  *float64
 	// RouteGeoJSON is the serialized GeoJSON Feature (MultiLineString +
 	// bounds) for the simplified GPS route, computed at ingest from the raw
 	// positioned series. nil when the activity had fewer than two positioned

@@ -26,6 +26,10 @@ const (
 
 const metersPerMile = 1609.344
 
+// feetPerMeter converts meters to feet, used by display-only formatters
+// (e.g. hiking's elevation-gain chip). The API itself stays metric.
+const feetPerMeter = 3.28084
+
 func (u DistanceUnit) Valid() bool { return u == UnitMiles || u == UnitKm }
 
 // BucketMeters is one display unit expressed in meters.

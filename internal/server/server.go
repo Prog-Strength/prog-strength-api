@@ -544,6 +544,7 @@ func New(cfg config.Config) (*Server, error) {
 			runDesc,
 			activity.NewEnduranceDescriptor(activity.ActivityWalking, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityWalking)),
 			activity.NewEnduranceDescriptor(activity.ActivityCycling, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityCycling)),
+			activity.NewEnduranceDescriptor(activity.ActivityHiking, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityHiking)),
 			activity.NewEnduranceDescriptor(activity.ActivityOther, activity.NewSQLiteEnduranceDetailStore(database, activity.ActivityOther)),
 			strengthDesc,
 		)

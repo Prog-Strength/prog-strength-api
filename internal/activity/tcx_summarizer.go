@@ -39,6 +39,9 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 	distance := last.DistanceMeters
 	duration := int(last.Time.Sub(first.Time).Seconds())
 
+	// One pass yields the full elevation profile; every endurance type gets
+	// loss/high/low for free alongside the gain the card already showed.
+	gain, loss, high, low := elevationProfile(tps)
 	a := Activity{
 		SourceActivityID:    p.ActivityID,
 		ActivityType:        actType,
@@ -50,7 +53,10 @@ func summarize(p *parsedTCX, actType ActivityType) Activity {
 		DurationSeconds:     duration,
 		AvgHeartRateBpm:     avgHeartRate(tps),
 		MaxHeartRateBpm:     maxHeartRate(tps),
-		ElevationGainMeters: elevationGain(tps),
+		ElevationGainMeters: gain,
+		ElevationLossMeters: loss,
+		ElevationHighMeters: high,
+		ElevationLowMeters:  low,
 	}
 
 	if actType == ActivityRunning {
@@ -122,29 +128,44 @@ func maxHeartRate(tps []parsedTrackpoint) *int {
 	return hi
 }
 
-// elevationGain sums only the positive consecutive altitude deltas (total
-// ascent). Returns nil when no trackpoint had altitude at all — distinct
-// from a flat activity, which legitimately gains 0.
-func elevationGain(tps []parsedTrackpoint) *float64 {
+// elevationProfile derives total ascent, total descent (stored positive),
+// high point, and low point from consecutive trackpoint altitudes in one
+// pass. Points with no altitude are skipped and the previous-altitude cursor
+// only advances on a point that has one, so a gap in the altitude stream does
+// not manufacture a cliff. All four are nil when NO trackpoint carried
+// altitude — distinct from a genuinely flat route, which returns 0/0/alt/alt.
+func elevationProfile(tps []parsedTrackpoint) (gain, loss, high, low *float64) {
 	var prev *float64
-	gain := 0.0
+	var g, l float64
+	var hi, lo float64
 	seen := false
 	for _, tp := range tps {
 		if tp.AltitudeMeters == nil {
 			continue
 		}
-		seen = true
-		if prev != nil {
-			if d := *tp.AltitudeMeters - *prev; d > 0 {
-				gain += d
+		alt := *tp.AltitudeMeters
+		if !seen {
+			hi, lo = alt, alt
+			seen = true
+		} else {
+			if d := alt - *prev; d > 0 {
+				g += d
+			} else {
+				l += -d
+			}
+			if alt > hi {
+				hi = alt
+			}
+			if alt < lo {
+				lo = alt
 			}
 		}
 		prev = tp.AltitudeMeters
 	}
 	if !seen {
-		return nil
+		return nil, nil, nil, nil
 	}
-	return &gain
+	return &g, &l, &hi, &lo
 }
 
 // bestPace finds the fastest 1-km split using a distance-anchored sliding

@@ -444,8 +444,14 @@ func TestMigrate042_UnifiedActivityModel(t *testing.T) {
 
 	t.Run("schema identical to a fresh database", func(t *testing.T) {
 		// A DB migrated over live data and a DB built from scratch must end
-		// at byte-identical DDL for every table 042 touches.
-		fresh := newMigratedDB(t)
+		// at byte-identical DDL for every table 042 touches. Both are pinned at
+		// 042 (like the enclosing test): later migrations that ALTER these
+		// tables — e.g. 044's elevation triple — legitimately change their
+		// stored DDL, so the comparison must be against 042's own end state.
+		fresh := newEmptyDB(t)
+		if err := migrateUpTo(fresh, 42); err != nil {
+			t.Fatalf("migrate fresh through 042: %v", err)
+		}
 		tables := []string{
 			"activities", "activity_trackpoints", "activity_best_efforts",
 			"activity_run_details", "activity_walk_details", "activity_cycle_details",

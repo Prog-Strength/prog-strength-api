@@ -17,6 +17,9 @@ type EnduranceDetails struct {
 	AvgPaceSecPerKm     *float64    `json:"avg_pace_sec_per_km,omitempty"`
 	BestPaceSecPerKm    *float64    `json:"best_pace_sec_per_km,omitempty"`
 	ElevationGainMeters *float64    `json:"elevation_gain_meters,omitempty"`
+	ElevationLossMeters *float64    `json:"elevation_loss_meters,omitempty"`
+	ElevationHighMeters *float64    `json:"elevation_high_meters,omitempty"`
+	ElevationLowMeters  *float64    `json:"elevation_low_meters,omitempty"`
 	Environment         Environment `json:"environment,omitempty"`
 	RouteGeoJSON        *string     `json:"route_geojson,omitempty"`
 }
@@ -31,6 +34,8 @@ func enduranceLabel(t ActivityType) string {
 		return "Walk"
 	case ActivityCycling:
 		return "Ride"
+	case ActivityHiking:
+		return "Hike"
 	}
 	return "Activity"
 }
@@ -151,10 +156,36 @@ func enduranceSummarize(t ActivityType) func(a Activity, details any) Summary {
 			}
 		}
 		distance := FormatMiles(meters)
+		// Hiking is the one deviation from the shared two-chip card: when the
+		// hike carries an elevation gain, it renders a third chip so ascent —
+		// the metric a hike is judged by — sits alongside distance and time.
+		// Gain prefers the loaded details, falling back to the joined base row;
+		// with no gain at all the card degrades to the standard two chips.
+		if t == ActivityHiking {
+			gain := a.ElevationGainMeters
+			if d, ok := details.(*EnduranceDetails); ok && d != nil && d.ElevationGainMeters != nil {
+				gain = d.ElevationGainMeters
+			}
+			if gain != nil {
+				feet := formatGainFeet(*gain)
+				return Summary{
+					Title:    title,
+					Subtitle: distance + " · " + feet + " · " + duration,
+					Metrics:  []string{distance, feet, duration},
+				}
+			}
+		}
 		return Summary{
 			Title:    title,
 			Subtitle: distance + " · " + duration,
 			Metrics:  []string{distance, duration},
 		}
 	}
+}
+
+// formatGainFeet renders an ascent in meters as whole feet with a thousands
+// separator and an up-arrow, e.g. 1051.6 m → "3,450 ft ↑". Hiking's card chip;
+// the API itself stays metric.
+func formatGainFeet(meters float64) string {
+	return FormatThousands(meters*feetPerMeter) + " ft ↑"
 }

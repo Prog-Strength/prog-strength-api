@@ -51,6 +51,44 @@ func TestEnduranceDescriptor_SummarizeDefaultTitlePerSport(t *testing.T) {
 	}
 }
 
+func TestEnduranceDescriptor_SummarizeHikingThreeChipWithGain(t *testing.T) {
+	d := NewEnduranceDescriptor(ActivityHiking, nil)
+	// 6.7 mi, 1051.56 m gain (== 3450 ft), 5:12:40. Hiking gains a third chip:
+	// distance · gain · duration.
+	a := Activity{
+		DistanceMeters:      6.7 * 1609.344,
+		DurationSeconds:     5*3600 + 12*60 + 40,
+		ElevationGainMeters: ptrF(3450 / feetPerMeter),
+	}
+	got := d.Summarize(a, nil)
+	want := Summary{
+		Title:    "Hike",
+		Subtitle: "6.7 mi · 3,450 ft ↑ · 5:12:40",
+		Metrics:  []string{"6.7 mi", "3,450 ft ↑", "5:12:40"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Summarize(hiking with gain) = %+v, want %+v", got, want)
+	}
+}
+
+func TestEnduranceDescriptor_SummarizeHikingNilGainDegradesToTwoChip(t *testing.T) {
+	d := NewEnduranceDescriptor(ActivityHiking, nil)
+	// No elevation gain anywhere: degrade to the standard two-chip card.
+	a := Activity{
+		DistanceMeters:  5 * 1609.344,
+		DurationSeconds: 2472,
+	}
+	got := d.Summarize(a, nil)
+	want := Summary{
+		Title:    "Hike",
+		Subtitle: "5.0 mi · 41:12",
+		Metrics:  []string{"5.0 mi", "41:12"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Summarize(hiking nil gain) = %+v, want %+v", got, want)
+	}
+}
+
 func TestEnduranceDescriptor_SummarizeOmitsZeroDistance(t *testing.T) {
 	// A duration-only "other" activity (base-only create, no details) must
 	// render just its duration — "1:00:00", not "0.0 mi · 1:00:00".

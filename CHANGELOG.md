@@ -1,3 +1,10 @@
+# [0.85.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.84.0...v0.85.0) (2026-07-30)
+
+
+### Features
+
+* **activities:** expose trackpoint position and grade on detail reads ([#87](https://github.com/Prog-Strength/prog-strength-api/issues/87)) ([df46939](https://github.com/Prog-Strength/prog-strength-api/commit/df469394394feabf7b522896a11bb048a01ed2bf))
+
 # [0.84.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.83.2...v0.84.0) (2026-07-30)
 
 

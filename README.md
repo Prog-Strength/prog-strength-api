@@ -2,16 +2,16 @@
 
 [![Release and Deploy](https://github.com/Prog-Strength/prog-strength-api/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/Prog-Strength/prog-strength-api/actions/workflows/release.yml)
 [![Latest release](https://img.shields.io/github/v/release/Prog-Strength/prog-strength-api?logo=github&label=release)](https://github.com/Prog-Strength/prog-strength-api/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/Prog-Strength/prog-strength-api?logo=go)](./go.mod)
-[![semantic-release](https://img.shields.io/badge/semantic--release-conventional-e10079?logo=semantic-release&logoColor=white)](https://github.com/semantic-release/semantic-release)
-[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-yellow.svg)](https://www.conventionalcommits.org)
 [![Last commit](https://img.shields.io/github/last-commit/Prog-Strength/prog-strength-api?logo=github)](https://github.com/Prog-Strength/prog-strength-api/commits/main)
+[![Test coverage](https://codecov.io/gh/Prog-Strength/prog-strength-api/branch/main/graph/badge.svg)](https://codecov.io/gh/Prog-Strength/prog-strength-api)
 
 The backend service for [Prog Strength](https://api.progstrength.fitness), a
-weightlifting tracker that helps lifters see whether their strength is
-actually progressing over time. The API owns the exercise catalog, workout
-log, bodyweight + nutrition history, and user/auth surface that the web,
-mobile, and agent clients build on top of.
+fitness tracker that pulls training, nutrition, and biometric data out of the
+apps and wearables it already lives in and organizes it into one queryable
+history. The API owns the exercise catalog, activity log, nutrition and
+bodyweight history, wearable integrations, social graph, and the structured
+data surface the Prog Strength AI agent reads — the web, mobile, and agent
+clients all build on top of it.
 
 ## Table of Contents
 
@@ -29,18 +29,50 @@ mobile, and agent clients build on top of.
 
 ## Overview
 
-Prog Strength is a side project focused on a single user problem: *am I
-getting stronger?* Workouts are logged as `reps × weight` sets against a
-curated, slug-keyed exercise catalog, and clients query that data to render
-progressive-overload metrics and dashboards.
+Prog Strength began as an answer to one question — *am I getting stronger?* —
+and grew into the system of record for everything that answer depends on.
+Training load, recovery, nutrition, bodyweight, and daily movement all land in
+one place under a shared schema, so they can be read together instead of one
+app at a time.
 
-The API is intentionally small in scope:
+The aim is to integrate with as many wearables and data sources as possible,
+ingest as much biometric telemetry as they will give up, and turn it into
+something legible: dashboards and timelines for the user, and structured,
+queryable history for an AI agent that helps shape programs, dial in
+nutrition, and keep the whole picture in view.
 
-- **Single-user** logging across weightlifting, running (Garmin TCX import),
-  nutrition, and bodyweight. AMRAP and distance-based weightlifting sets
-  are still deferred — see `AGENTS.md` for the full list.
+### What it tracks
+
+- **Strength training.** Sets logged as `reps × weight` against a curated,
+  slug-keyed exercise catalog, with personal-record detection, estimated-1RM
+  progression history, and planned workouts you can schedule, calibrate,
+  complete, or skip.
+- **Endurance activities.** Running, walking, and cycling under one
+  sport-agnostic activity model, with Garmin TCX file import, best efforts
+  and max effort by distance, and heart-rate-zone time accumulation.
+- **Nutrition.** Daily macro logging backed by a food lookup service, so
+  hitting a macro target doesn't mean hand-entering every gram.
+- **Bodyweight and steps.** Bodyweight history and daily step counts, either
+  entered directly or batched in from a connected source.
+- **Wearables and connections.** Whoop via OAuth plus webhooks for recovery
+  and activity data, Google Calendar sync for scheduled activity, and Garmin
+  through TCX import. New sources plug into the same activity taxonomy rather
+  than getting a bespoke pipeline.
+- **A social layer.** Follow requests, public profiles with stats, user
+  search, and a timeline feed with comments and reactions.
+- **The AI agent surface.** Chat sessions, messages, turns, and tool-call
+  telemetry; a vector memory store the agent writes to and retrieves from;
+  and a usage ledger enforcing a daily spend cap.
+
+Dashboard and timeline endpoints assemble these into per-day summaries so
+clients don't have to fan out across every domain to render a screen.
+
+### Still intentionally narrow
+
 - **Admin-curated exercise catalog** (no user-created exercises).
-- **Cheap single-host deployment** on one EC2 instance.
+- **OAuth-only auth**, currently gated behind a closed-beta email allowlist.
+- **Cheap single-host deployment** on one EC2 instance — one SQLite file,
+  Litestream to S3. Multi-tenant or horizontally-scaled deployment is out.
 
 For the full scope boundary (including what is explicitly *not* in scope),
 see [`AGENTS.md`](./AGENTS.md).
@@ -48,32 +80,69 @@ see [`AGENTS.md`](./AGENTS.md).
 ## Architecture
 
 ```
-              ┌──────────────────────────────────────────────┐
-              │  api.progstrength.fitness  (Let's Encrypt)   │
-              └───────────────────┬──────────────────────────┘
-                                  │ HTTPS
-                                  ▼
-                ┌────────────────────────────────────┐
-                │  Caddy  (TLS + reverse proxy)      │
-                └─────────────────┬──────────────────┘
-                                  │ HTTP, docker network
-                                  ▼
-        ┌─────────────────────────────────────────────────────┐
-        │  api  (Go / Chi, this repo)                         │
-        │  ┌───────────────┐  ┌─────────────────────────────┐ │
-        │  │ JWT (HS256)   │  │ Domain packages             │ │
-        │  │ Google OAuth  │  │ exercise / workout / user / │ │
-        │  └───────────────┘  │ bodyweight / nutrition /    │ │
-        │                     │ chat / auth / ...           │ │
-        │                     └─────────────────────────────┘ │
-        └──────────────┬──────────────────────────┬───────────┘
-                       │                          │
-                       ▼                          ▼
-              ┌─────────────────┐         ┌────────────────┐
-              │  SQLite         │ ◀────── │  Litestream    │ ──► S3
-              │  /data/app.db   │  WAL    │  (sidecar)     │
-              └─────────────────┘         └────────────────┘
+      Garmin device                              Whoop cloud
+    (.tcx export file)                        (OAuth + webhooks)
+            │                                         │
+            ▼                                         │
+Web client / Mobile client                            │
+            │                                         │
+            │ HTTPS                                   │ HTTPS
+            ▼                                         ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │  api.progstrength.fitness   (Let's Encrypt)                      │
+ │  Caddy — TLS + reverse proxy; refuses to proxy /internal/*       │
+ └──────────┬─────────────────────────────────────────┬─────────────┘
+            │ /chat                                   │ REST
+════════════╪═════════════════════════════════════════╪══════════════  single EC2 host
+            ▼                                         ▼
+ ┌──────────────────────┐    tool-use    ┌──────────────────────────┐
+ │ agent  (FastAPI)     │───────────────▶│ mcp  (FastMCP)           │
+ │ prog-strength-agent  │                │ prog-strength-mcp        │
+ │ natural-language     │                │ wraps API endpoints as   │
+ │ entry point          │                │ agent-callable tools     │
+ └──────────┬───────────┘                └────────────┬─────────────┘
+            │ telemetry writes                        │ REST
+            │ /internal/telemetry/*                   │
+            ▼                                         ▼
+ ┌──────────────────────────────────────────────────────────────────┐
+ │  api   (Go / Chi — this repo)                                    │
+ │  JWT HS256 · Google OAuth · closed-beta allowlist gate           │
+ │  domain packages under internal/: activity, exercise,            │
+ │  nutrition, bodyweight, steps, timeline, follow, chat,           │
+ │  vectormemory, whoop*, calendar*, usage, ...                     │
+ └────────┬─────────────────────┬───────────────────────┬───────────┘
+          │                     │                       │
+          ▼                     ▼                       ▼
+ ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────────┐
+ │ SQLite           │  │ Litestream       │  │ External APIs        │
+ │  app.db          │◀─│  (sidecar)       │  │ Google OAuth ·       │
+ │  telemetry.db    │  │  reads WAL       │  │ Google Calendar ·    │
+ └──────────────────┘  └────────┬─────────┘  │ Whoop · FatSecret ·  │
+                                │            │ USDA · OpenAI ·      │
+                                ▼            │ Anthropic            │
+                       ┌──────────────────┐  └──────────────────────┘
+                       │ S3               │
+                       │  db replica      │
+                       │  avatars, TCX    │
+                       └──────────────────┘
 ```
+
+### External dependencies
+
+Everything the API talks to that it does not own. Credentials for each are
+supplied via environment (see [Configuration](#configuration)).
+
+| Service                    | Used for                                                   |
+| -------------------------- | ---------------------------------------------------------- |
+| **Google OAuth**           | The only sign-in identity provider; issues the app JWT.     |
+| **Google Calendar**        | Two-way sync of scheduled activity via a connected account. |
+| **Whoop**                  | OAuth-connected recovery and activity data, plus inbound webhooks. |
+| **Garmin**                 | No API — `.tcx` files exported from the device are uploaded and parsed. |
+| **FatSecret**              | Food and macro lookup for nutrition logging.                |
+| **USDA FoodData Central**  | Second nutrition lookup source.                             |
+| **OpenAI**                 | Embeddings for the vector memory store; TTS priced in the usage ledger. |
+| **Anthropic**              | Distills raw chat history into durable agent memories.      |
+| **AWS S3**                 | Litestream replica target, plus avatar and TCX object storage. |
 
 - **Go + Chi router.** Chi was chosen for being minimal — do not replace it
   with a heavier framework.
@@ -87,19 +156,57 @@ see [`AGENTS.md`](./AGENTS.md).
 - **JWT (HS256) auth** with Google OAuth as the only identity provider.
   `/exercises` is public; `/activities` and other user-scoped routes require
   a valid user JWT.
-- **Single EC2 host** (Graviton `t4g.small`) fronted by Caddy.
-  Infrastructure is provisioned by Terraform in
-  [`prog-strength-infra`](https://github.com/Prog-Strength/prog-strength-infra).
+- **The MCP is the agent's only tool boundary.** New agent-facing
+  capabilities are added as MCP tools wrapping API endpoints, never as
+  direct API calls from the agent.
+- **`/internal/*` is network-scoped, not token-scoped.** Caddy refuses to
+  proxy it, so only container-to-container traffic on the Docker network
+  reaches the agent telemetry routes. The single-host network boundary *is*
+  the auth boundary for that surface.
+- **Single EC2 host** (Graviton `t4g.small`) fronted by Caddy. Every service
+  in the diagram runs as a container on that one box.
 
-A standard envelope (`internal/httpresp/`) wraps every response:
+A standard envelope (`internal/httpresp/`) wraps every response. Success and
+error shapes are deliberately disjoint — `message` only ever appears on
+success, `error` only on failure — so a client can tell them apart without
+consulting the status code:
 
 ```jsonc
 // success
-{ "service": "Prog Strength Backend", "message": "...", "data": ... }
-
-// error
-{ "service": "Prog Strength Backend", "error": "..." }
+{
+  "service": "Prog Strength Backend",
+  "version": "0.83.2",
+  "request_id": "01JZ8M4K7QW2R9V3XN6ABCD012",
+  "message": "...",
+  "data": {}                    // omitted when the handler returns no payload
+}
 ```
+
+```jsonc
+// error
+{
+  "service": "Prog Strength Backend",
+  "version": "0.83.2",
+  "request_id": "01JZ8M4K7QW2R9V3XN6ABCD012",
+  "error": "...",
+  "code": "tcx_not_running"     // omitted unless the handler opts in
+}
+```
+
+- **`request_id`** echoes the per-request correlation id minted by the
+  `requestid` middleware, and is also returned on the `X-Request-ID` header.
+  It is omitted outside the HTTP stack (background jobs), where no request
+  id exists to echo.
+- **`code`** is a machine-readable error identifier for clients that branch
+  on a precise reason rather than parsing prose — the TCX import flow uses
+  `tcx_not_running`, `file_too_large`, `duplicate_run`. Handlers opt in via
+  `ErrorWithCode`; plain `Error` responses omit the field entirely.
+
+For a deeper dive on the host itself — Terraform modules, the Caddy config,
+DNS, TLS, container wiring, and backup topology — see
+[`prog-strength-infra`](https://github.com/Prog-Strength/prog-strength-infra).
+The sibling services are covered in
+[Related Repositories](#related-repositories).
 
 ## Tech Stack
 

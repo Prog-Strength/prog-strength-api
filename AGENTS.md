@@ -15,11 +15,17 @@ that's Claude-specific.
 
 ## What this project is
 
-A single-user fitness tracking backend: the load-bearing service in the
-Prog Strength stack. Other repos (`prog-strength-web`,
+A fitness tracking backend: the load-bearing service in the Prog Strength
+stack. It ingests training, nutrition, and biometric data from wearables
+and manual entry, normalizes it into a shared schema, and serves it to
+clients and to the agent. Other repos (`prog-strength-web`,
 `prog-strength-mcp`, `prog-strength-agent`) depend on the API contract
 defined here. README.md has the high-level architecture overview and
 the visual diagram; this file does not duplicate it.
+
+It is multi-user (Google OAuth accounts, a follow graph, public
+profiles) but *single-tenant*: one host, one SQLite file. Don't confuse
+the two — see [Deliberately deferred](#deliberately-deferred).
 
 The owner is an experienced engineer with a Python background, using
 this project to learn idiomatic Go. Prefer idiomatic Go and explain
@@ -66,8 +72,8 @@ up-front:
   *what*. No emoji or decorative ASCII. One type/concept per file in
   domain packages.
 - **Don't add third-party dependencies without asking.** The existing
-  set (chi, oauth2, jwt, sqlite3, prometheus, aws-sdk-go-v2) is
-  intentionally small.
+  set (chi, chi/cors, oauth2, jwt, go-sqlite3, sqlite-vec, go-toml,
+  prometheus, aws-sdk-go-v2) is intentionally small.
 - **Surface bypasses.** If you find yourself about to use `--no-verify`,
   add a `//nolint:`, silence a `gosec` finding, or skip a test, that's
   a red flag — explain why in the PR rather than hiding it.
@@ -79,43 +85,113 @@ up-front:
 
 The original version of this file said the project was "weightlifting
 only" with cardio, running, and nutrition deferred. That is no longer
-true. The reality:
+true, and the shape has since changed again: migration
+`042_unified_activity_model.sql` folded the standalone `workout` and
+`running` packages into one sport-agnostic `activity` model. The
+reality:
+
+**Two renames worth internalizing before you go looking for code:**
+the old `internal/workout` now lives at `internal/activity/strength`,
+and `internal/running` is gutted down to `internal/running/estimate`
+(pace/effort math only) with ingest and CRUD absorbed by
+`internal/activity`.
 
 ### Shipping domains (`internal/<name>/`)
 
-- **`workout`** — sessions, exercises within sessions, sets. Three-level
+**Training**
+
+- **`activity`** — the unified log. One closed `ActivityType` taxonomy
+  (`running`, `walking`, `cycling`, `strength_training`, `other`) owned
+  in Go, not in a SQL `CHECK` — since migration 042 the `activities`
+  table has no constraint, so a new type is a code change plus a
+  detail-table migration. Covers TCX parse/validate/summarize (Garmin),
+  best efforts, max effort by distance, and S3 archival of raw uploads.
+- **`activity/strength`** — the former `workout` package. Three-level
   structure: `Workout` → `WorkoutExercise` → `Set`. Weight stored per
-  set with the user's unit (`lb` or `kg`), never converted. Includes
-  one-rep-max history backfill and personal-record tracking.
+  set with the user's unit (`lb` or `kg`), never converted. Owns 1RM
+  history, personal-record detection, muscle-group progression, and
+  user headline exercises.
 - **`exercise`** — admin-curated catalog of slug-IDed exercises
   (`barbell-high-bar-back-squat`) with closed `MuscleGroup` and
   `Equipment` enums. Read-only from end users. Catalog defined as
   `var Catalog []Exercise` in `catalog.go`; synced into SQLite on
   startup.
+- **`planned_workout`** — forward-looking entries pairing a scheduled
+  UTC window (plus the user's timezone) with an optional lift agenda
+  and Google Calendar sync bookkeeping. Lifecycle:
+  schedule → calibrate → complete/skip.
+- **`hrzones`** — deliberately pure heart-rate-zone engine: zone model,
+  max-HR estimation, classification, time-in-zone accumulation. Imports
+  nothing from db/HTTP/activity so the math is shared and unit-testable.
+
+**Health inputs**
+
+- **`nutrition`** — daily macro log + goals, pantry items. Timezone-
+  aware date contract on read paths (the boundary between user-local
+  and UTC is at the handler).
+- **`nutritionlookup`** — grounds custom-meal macros in real data via
+  FatSecret (restaurant/branded) and USDA FoodData Central (generic),
+  behind a durable SQLite cache. Quantity math happens in Go — the
+  agent copies totals, it never multiplies.
+- **`bodyweight`** — weight entries and goals.
+- **`steps`** — one upserted row per (user, date), latest-wins.
+
+**Connections** (all token material encrypted at rest via `tokencrypt`)
+
+- **`whoopsync` / `whoopconn` / `whooprecovery`** — Whoop OAuth consent
+  flow and v2 REST client; the persisted per-user connection; and daily
+  recovery metrics keyed by user + local date. OAuth state is bound to
+  both the CSRF cookie and the originating user via HMAC-SHA256 so a
+  callback can't link a Whoop account to a victim's user id.
+- **`calendarsync` / `calendarconn`** — the same split for Google
+  Calendar: sync client and OAuth flow, plus the stored connection.
+  `calendarconn` never decrypts; it stores and returns ciphertext.
+
+**Social**
+
+- **`follow`** — the follow graph: requests, accept/reject, followers
+  and following.
+- **`timeline`** — the feed built on top of it: posts, comments,
+  reactions. Stays import-clean by resolving identities through a
+  package-local `Author` via a `ProfileResolver` seam rather than
+  importing `user`/`follow` directly.
+
+**Identity and agent surface**
+
 - **`user`** — email-keyed users with display name and preferred
   `WeightUnit`. Email is immutable; changing it requires a re-verify
-  flow that doesn't exist. Soft-deleted.
+  flow that doesn't exist. Soft-deleted. Also public profiles, stats,
+  search, and avatars.
 - **`auth`** — Google OAuth + HS256 JWT, mounted at `/auth`.
   `RequireUser(secret)` is the middleware that gates user-scoped routes;
   `RequireAdmin(users, ADMIN_EMAILS)` gates the admin surface. Beta gate
   via the DB-backed `internal/beta` allowlist (table `beta_allowed_emails`,
   managed at `/admin/beta-emails`). Dev-auth backdoor (`POST /auth/dev/token`)
   gated by `DEV_AUTH=true`.
-- **`running`** — TCX import (Garmin), session CRUD, downsampled
-  trackpoints, dashboard metrics. Raw TCX archived via the `Archiver`
-  interface (S3 in prod, in-memory in dev). Dedup on
-  `(user_id, garmin_activity_id)`.
-- **`nutrition`** — daily macro log + goals, pantry items. Timezone-
-  aware date contract on read paths (the boundary between user-local
-  and UTC is at the handler).
-- **`bodyweight`** — weight entries and goals.
 - **`chat`** — persistent agent chat sessions: user-scoped CRUD plus
   per-turn append. Persists `last_intent` from agent responses for
   observability.
+- **`vectormemory`** — durable agent memory: OpenAI embeddings, an
+  `sqlite-vec` index (this is why CI installs `libsqlite3-dev` — cgo),
+  and an Anthropic-backed distiller that compacts raw history into
+  retained memories. Admin surface at `/admin/memories`.
+- **`usage`** — derives daily external-API spend from telemetry rows
+  through a server-side price table and exposes it as a percentage of
+  `DAILY_USAGE_CAP_USD`. No dollar figure crosses the wire: the DTO is
+  `{percent_used, capped, resets_at}`.
 - **`telemetry`** — agent intent/response event logging. Lives in a
   *separate* SQLite database (`TELEMETRY_DATABASE_URL`) so the high-
   volume agent writes don't share locks or Litestream backups with the
-  application data.
+  application data. Mounted under `/internal/*`, which Caddy refuses to
+  proxy — the Docker network boundary is the auth boundary here, so
+  these routes carry no JWT middleware by design.
+
+**Read models**
+
+- **`dashboard`** — cross-domain daily summary so clients don't fan out
+  across every domain to render one screen.
+- **`snapshot`** — `GET /training-snapshot`, a timezone-aware roll-up
+  across workouts, exercises, activities, steps, and nutrition.
 
 ### Infrastructure packages
 
@@ -125,16 +201,31 @@ These exist but rarely need changes. Read first; ask before modifying:
   graceful shutdown.
 - **`db`** — SQLite open + migration runner. Migrations live in
   `internal/db/migrations/`, embedded via `embed.FS`, numbered
-  `001_…_*.sql` through `014_…_*.sql`. Add the next one as `015_*.sql`.
-- **`config`** — env-var loading. Don't sprinkle `os.Getenv` calls
-  through handlers.
+  `001_…_*.sql` through `043_…_*.sql`. Add the next one as `044_*.sql`.
+- **`config`** — env-var loading, with an optional TOML `CONFIG_FILE`
+  layer. Don't sprinkle `os.Getenv` calls through handlers.
 - **`httpresp`** — the standard response envelope. See
   [HTTP conventions](#http-conventions).
 - **`requestid`** — per-request correlation ID middleware. See
   [HTTP conventions](#http-conventions).
+- **`logging`** — JSON `slog` logger, every record stamped with the
+  correlation id from context. JSON to stdout is deliberate: the awslogs
+  driver ships stdout to CloudWatch and Logs Insights auto-discovers the
+  fields. Level gated by `LOG_LEVEL`.
+- **`daterange`** — the timezone-aware date contract shared by every
+  date-windowed list endpoint: an IANA `timezone` plus `date` or
+  `start_date`+`end_date`, resolved to a UTC half-open `[start, end)`.
+  Use this rather than re-deriving day boundaries per handler.
+- **`tokencrypt`** — AES-256-GCM for OAuth token material at rest.
+  Provider-agnostic: each integration supplies its own 32-byte key.
+- **`originmatch`** — single-wildcard origin matching behind the OAuth
+  `return_to` open-redirect guard, sharing go-chi/cors semantics so
+  Vercel preview hostnames match consistently.
 - **`id`** — 32-char hex ID generator. `id.New()` is the entry point.
 - **`version`** — `APP_VERSION` baked in at build time via Dockerfile
   `-ldflags`. Read it via `version.Version`.
+- **`testutil`** — shared test helpers (e.g. `sqlcount`). Excluded from
+  coverage reporting; see `codecov.yml`.
 
 ### Deliberately deferred
 
@@ -143,14 +234,25 @@ these:
 
 - User-created exercises. Catalog stays curated.
 - Multi-tenant or horizontally-scaled deployment. Single host, single
-  SQLite file, Litestream backup. Cost is paramount.
-- Social features (sharing, public profiles, leaderboards).
+  SQLite file, Litestream backup. Cost is paramount. (Multi-*user* is
+  fine and shipped — this is about tenancy, not accounts.)
+- Leaderboards and public activity sharing beyond the existing follow
+  graph. Follows, profiles, and the timeline feed *are* shipped; the
+  boundary is competitive/ranking surfaces.
 - Email/password authentication. OAuth-only.
 - Email change flow.
 - Aggregated multi-error validation (`first-error-wins` for now).
 - DI framework (Wire, fx). Plain constructors.
-- Structured logging (`log/slog`). The whole codebase uses `log.Printf`;
-  migration is planned but not started.
+
+### In progress, not finished
+
+Started but incomplete. Don't treat the old state as settled, and don't
+expand the new one wholesale in an unrelated PR:
+
+- **Structured logging.** `internal/logging` exists and is a JSON `slog`
+  logger, but only two call sites use it — there are still ~79
+  `log.Printf` calls. New code should prefer `internal/logging`;
+  migrating existing calls is its own PR.
 
 ## Architecture decisions
 
@@ -180,7 +282,8 @@ reason; raise it in a separate discussion before implementing.
   ephemeral SQLite DB via `internal/db/dbtest` (`dbtest.New(t)`).
 - **Migrations** are forward-only, embedded via `embed.FS`, applied on
   startup by `db.Migrate(database)`. `schema_migrations` tracks the
-  applied set. Highest current: `014_running_dedup_live_only.sql`.
+  applied set. Highest current:
+  `043_planned_workout_drop_completed_kind.sql`.
 - **Soft deletes everywhere.** `DeletedAt *time.Time` with `json:"-"`.
   All read paths filter them out.
 - **`context.Context` first parameter on every repository method.**

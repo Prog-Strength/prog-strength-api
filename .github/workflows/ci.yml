@@ -126,10 +126,21 @@ jobs:
 
       - name: go test -race -cover
         # -race catches data races invisible to the standard suite.
-        # -cover prints per-package coverage in the run log; a separate
-        # coverage threshold can be enforced later by piping into a
-        # tool, but the visibility is the first step.
-        run: go test -race -cover ./...
+        # -covermode=atomic is required for a coverage profile that is
+        # correct under -race. The profile feeds the Codecov upload
+        # below, which backs the README coverage badge.
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          # Public-repo uploads work tokenless but are rate-limited and
+          # flake under load; the token makes them deterministic.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # Coverage is a reporting signal, not a merge gate — a
+          # Codecov outage must not redden an otherwise green PR.
+          fail_ci_if_error: false
 
   vulnerabilities:
     name: govulncheck

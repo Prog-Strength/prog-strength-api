@@ -370,6 +370,76 @@ func TestSummarize_WalkHasNoBestEfforts(t *testing.T) {
 	}
 }
 
+// tpAlt builds a trackpoint carrying only an altitude (nil = no altitude),
+// enough to exercise elevationProfile's altitude-only reduction.
+func tpAlt(alt *float64) parsedTrackpoint { return parsedTrackpoint{AltitudeMeters: alt} }
+
+func TestElevationProfile_AscentAndDescent(t *testing.T) {
+	// 100 -> 150 -> 120 -> 180 -> 90: gain = 50+60 = 110, loss = 30+90 = 120,
+	// high = 180, low = 90.
+	alts := []float64{100, 150, 120, 180, 90}
+	tps := make([]parsedTrackpoint, len(alts))
+	for i := range alts {
+		tps[i] = tpAlt(&alts[i])
+	}
+	gain, loss, high, low := elevationProfile(tps)
+	if gain == nil || loss == nil || high == nil || low == nil {
+		t.Fatalf("profile = (%v,%v,%v,%v), want all non-nil", gain, loss, high, low)
+	}
+	if *gain != 110 {
+		t.Errorf("gain = %v, want 110", *gain)
+	}
+	if *loss != 120 {
+		t.Errorf("loss = %v, want 120", *loss)
+	}
+	if *high != 180 {
+		t.Errorf("high = %v, want 180", *high)
+	}
+	if *low != 90 {
+		t.Errorf("low = %v, want 90", *low)
+	}
+}
+
+func TestElevationProfile_NoAltitudeAllNil(t *testing.T) {
+	tps := []parsedTrackpoint{tpAlt(nil), tpAlt(nil), tpAlt(nil)}
+	gain, loss, high, low := elevationProfile(tps)
+	if gain != nil || loss != nil || high != nil || low != nil {
+		t.Fatalf("profile = (%v,%v,%v,%v), want all nil when no point has altitude", gain, loss, high, low)
+	}
+}
+
+func TestElevationProfile_GapDoesNotManufactureCliff(t *testing.T) {
+	// 100, gap, gap, 130: only points that HAVE altitude advance the cursor,
+	// so the single 30 m climb registers once — a nil interruption between two
+	// altitudes must not double-count or fabricate a delta.
+	a0, a1 := 100.0, 130.0
+	tps := []parsedTrackpoint{tpAlt(&a0), tpAlt(nil), tpAlt(nil), tpAlt(&a1)}
+	gain, loss, high, low := elevationProfile(tps)
+	if gain == nil || *gain != 30 {
+		t.Errorf("gain = %v, want 30 (single climb across the gap)", gain)
+	}
+	if loss == nil || *loss != 0 {
+		t.Errorf("loss = %v, want 0", loss)
+	}
+	if high == nil || *high != 130 || low == nil || *low != 100 {
+		t.Errorf("high/low = %v/%v, want 130/100", high, low)
+	}
+}
+
+func TestElevationProfile_FlatPresentTrack(t *testing.T) {
+	// A present-but-flat track: gain 0, loss 0, high == low == the constant,
+	// all non-nil — distinct from the no-altitude case.
+	c := 42.0
+	tps := []parsedTrackpoint{tpAlt(&c), tpAlt(&c), tpAlt(&c)}
+	gain, loss, high, low := elevationProfile(tps)
+	if gain == nil || *gain != 0 || loss == nil || *loss != 0 {
+		t.Fatalf("gain/loss = %v/%v, want 0/0 (non-nil)", gain, loss)
+	}
+	if high == nil || low == nil || *high != c || *low != c {
+		t.Fatalf("high/low = %v/%v, want %v/%v", high, low, c, c)
+	}
+}
+
 // buildEmbeddedFast5KTCX builds an 8 km run at 1 Hz: ~3.0 m/s baseline with
 // a 5 km block at ~4.2 m/s starting at 1500 m.
 func buildEmbeddedFast5KTCX() []byte {

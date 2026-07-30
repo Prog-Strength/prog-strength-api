@@ -13,6 +13,7 @@ const (
 	ActivityRunning ActivityType = "running"
 	ActivityWalking ActivityType = "walking"
 	ActivityCycling ActivityType = "cycling"
+	ActivityHiking  ActivityType = "hiking"
 	ActivityOther   ActivityType = "other"
 	// ActivityStrengthTraining is a lifting session. Every logged workout's
 	// base row carries this type; a Garmin "Strength Training" TCX enriches
@@ -30,7 +31,7 @@ const (
 // untrusted input.
 func (t ActivityType) Valid() bool {
 	switch t {
-	case ActivityRunning, ActivityWalking, ActivityCycling, ActivityOther, ActivityStrengthTraining:
+	case ActivityRunning, ActivityWalking, ActivityCycling, ActivityHiking, ActivityOther, ActivityStrengthTraining:
 		return true
 	}
 	return false

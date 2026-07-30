@@ -249,6 +249,9 @@ type activityDTO struct {
 	MaxHeartRateBpm     *int            `json:"max_heart_rate_bpm"`
 	TotalCalories       *int            `json:"total_calories"`
 	ElevationGainMeters *float64        `json:"elevation_gain_meters"`
+	ElevationLossMeters *float64        `json:"elevation_loss_meters"`
+	ElevationHighMeters *float64        `json:"elevation_high_meters"`
+	ElevationLowMeters  *float64        `json:"elevation_low_meters"`
 	CreatedAt           time.Time       `json:"created_at"`
 	Trackpoints         []trackpointDTO `json:"trackpoints,omitempty"`
 	// HeartRateZones is the percent-of-max-HR time-in-zone breakdown. Only
@@ -365,6 +368,9 @@ func toActivityDTO(a Activity, withTrackpoints bool) activityDTO {
 		MaxHeartRateBpm:     a.MaxHeartRateBpm,
 		TotalCalories:       a.TotalCalories,
 		ElevationGainMeters: a.ElevationGainMeters,
+		ElevationLossMeters: a.ElevationLossMeters,
+		ElevationHighMeters: a.ElevationHighMeters,
+		ElevationLowMeters:  a.ElevationLowMeters,
 		CreatedAt:           a.CreatedAt,
 	}
 	if withTrackpoints {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -142,7 +143,7 @@ func (h *Handler) uploadPhoto(w http.ResponseWriter, r *http.Request) {
 	// Optional caption. Enforce the length cap up front.
 	var caption *string
 	if raw := r.FormValue("caption"); raw != "" {
-		if len(raw) > h.photoCfg.CaptionMaxChars {
+		if utf8.RuneCountInString(raw) > h.photoCfg.CaptionMaxChars {
 			httpresp.ErrorWithCode(w, http.StatusBadRequest, "caption is too long", "caption_too_long")
 			return
 		}
@@ -255,7 +256,7 @@ func (h *Handler) patchPhotoCaption(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Caption != nil && len(*req.Caption) > h.photoCfg.CaptionMaxChars {
+	if req.Caption != nil && utf8.RuneCountInString(*req.Caption) > h.photoCfg.CaptionMaxChars {
 		httpresp.ErrorWithCode(w, http.StatusBadRequest, "caption is too long", "caption_too_long")
 		return
 	}

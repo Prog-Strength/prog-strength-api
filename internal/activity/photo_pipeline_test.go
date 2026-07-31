@@ -301,6 +301,50 @@ func TestProcessPhotoPipeline_NeverUpscales(t *testing.T) {
 	}
 }
 
+// TestProcessPhotoPipeline_ShippedConfigKeepsFullAtNativeResolution pins the
+// fidelity policy the committed [photos] config encodes: because the `full`
+// variant is the ARCHIVAL copy (no original bytes are retained anywhere), its
+// max edge is set to maxDecodeEdge so nothing the decoder accepts is ever
+// downscaled. A regression here — someone reinstating a 2048-style clamp —
+// silently and permanently degrades every photo uploaded after it.
+//
+// The thumb still resizes; only the full variant is native.
+func TestProcessPhotoPipeline_ShippedConfigKeepsFullAtNativeResolution(t *testing.T) {
+	t.Parallel()
+
+	// The shipped values (config.toml [photos]). Kept as literals rather than
+	// loading the file so this test states the contract it's defending.
+	shipped := photoPipelineOpts{
+		FullMaxEdge: maxDecodeEdge, FullQuality: 95,
+		ThumbMaxEdge: 800, ThumbQuality: 85,
+	}
+
+	// Stand-in for a 12MP phone photo's aspect and scale relationship: well
+	// past the old 2048 clamp, cheap to synthesize.
+	const w, h = 3000, 2250
+	src := encodeJPEG(t, cornerImage(w, h), 95)
+	full, thumb, err := processPhoto(src, shipped)
+	if err != nil {
+		t.Fatalf("processPhoto: %v", err)
+	}
+	if full.Width != w || full.Height != h {
+		t.Errorf("full = %dx%d, want %dx%d (native resolution, no downscale)", full.Width, full.Height, w, h)
+	}
+	// The old clamp would have produced 2048x1536; assert we're not there.
+	if full.Width == 2048 {
+		t.Errorf("full was clamped to 2048 — the archival variant must not downscale")
+	}
+	// Thumb still resizes: 3000x2250 at max edge 800 -> 800x600.
+	if thumb.Width != 800 || thumb.Height != 600 {
+		t.Errorf("thumb = %dx%d, want 800x600", thumb.Width, thumb.Height)
+	}
+	// Near-lossless full should be substantially heavier than the thumb; a
+	// collapse toward thumb size would mean the quality knob got lost.
+	if len(full.Bytes) <= len(thumb.Bytes) {
+		t.Errorf("full (%d B) should exceed thumb (%d B)", len(full.Bytes), len(thumb.Bytes))
+	}
+}
+
 // TestProcessPhotoPipeline_Orientation covers all 8 EXIF orientation values.
 // For each, we assert the output dimensions (landscape vs portrait swap for
 // the 90/270 family) and the resulting top-left corner color, which the

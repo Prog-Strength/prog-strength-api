@@ -613,11 +613,11 @@ func TestGoldenManifest(t *testing.T) {
 		},
 		Photos: PhotosConfig{
 			MaxPerActivity:     10,
-			MaxUploadBytes:     12582912,
-			FullMaxEdgePx:      2048,
-			FullJPEGQuality:    82,
-			ThumbMaxEdgePx:     480,
-			ThumbJPEGQuality:   78,
+			MaxUploadBytes:     33554432,
+			FullMaxEdgePx:      20000,
+			FullJPEGQuality:    95,
+			ThumbMaxEdgePx:     800,
+			ThumbJPEGQuality:   85,
 			PresignWindowHours: 6,
 			CaptionMaxChars:    200,
 		},
@@ -678,11 +678,11 @@ func TestPhotosSectionParses(t *testing.T) {
 
 	want := PhotosConfig{
 		MaxPerActivity:     10,
-		MaxUploadBytes:     12582912,
-		FullMaxEdgePx:      2048,
-		FullJPEGQuality:    82,
-		ThumbMaxEdgePx:     480,
-		ThumbJPEGQuality:   78,
+		MaxUploadBytes:     33554432,
+		FullMaxEdgePx:      20000,
+		FullJPEGQuality:    95,
+		ThumbMaxEdgePx:     800,
+		ThumbJPEGQuality:   85,
 		PresignWindowHours: 6,
 		CaptionMaxChars:    200,
 	}

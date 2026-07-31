@@ -97,6 +97,10 @@ func NewS3VideoStore(ctx context.Context, bucket, region string, window time.Dur
 			bucket: bucket,
 			window: window,
 			now:    time.Now,
+			// Applied at READ time because the PUT can't carry it: see
+			// PresignPut. Same immutability rationale as photos — keys are
+			// video-id-addressed and never overwritten.
+			responseCacheControl: videoCacheControl,
 		},
 		uploader: s3.NewPresignClient(client),
 		bucket:   bucket,
@@ -115,11 +119,20 @@ func NewS3VideoStore(ctx context.Context, bucket, region string, window time.Dur
 // sanctioned explicitly by sows/activity-videos.md § Write Path; do not remove
 // the HEAD check without replacing it with a POST policy.
 func (s *S3VideoStore) PresignPut(ctx context.Context, key, contentType string, ttl time.Duration) (string, error) {
+	// NOTHING may be set here that the browser will not send as a header.
+	// Every field the SDK turns into a signed header becomes one the client
+	// MUST reproduce byte-for-byte, or S3 answers 403 SignatureDoesNotMatch.
+	// VideoStrip's XHR sends exactly one header: Content-Type.
+	//
+	// CacheControl used to be set here and put `cache-control` into
+	// X-Amz-SignedHeaders, so every upload 403'd after appearing to transfer.
+	// Caching is instead applied at READ time via the presigned GET's
+	// response-cache-control override, which needs no client cooperation.
+	// TestPresignPut_SignsOnlyHeadersTheBrowserSends guards this.
 	req, err := s.uploader.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket:       aws.String(s.bucket),
-		Key:          aws.String(key),
-		ContentType:  aws.String(contentType),
-		CacheControl: aws.String(videoCacheControl),
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", err

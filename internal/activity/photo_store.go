@@ -68,6 +68,15 @@ type windowedPresigner struct {
 	bucket string
 	window time.Duration
 	now    func() time.Time
+	// responseCacheControl, when non-empty, adds S3's response-cache-control
+	// override to the signed query so the GET response carries that header.
+	//
+	// Photos leave this empty: the server PUTs photo objects itself and sets
+	// Cache-Control at write time. Videos CAN'T — the browser does the PUT, and
+	// signing a cache-control header the browser doesn't send makes every
+	// upload 403. Applying it as a signed query param at read time achieves the
+	// same caching with no client cooperation at all.
+	responseCacheControl string
 }
 
 // presignGet builds a GET request for the virtual-hosted-style S3 URL of key,
@@ -95,6 +104,9 @@ func (p *windowedPresigner) presignGet(ctx context.Context, key string) (string,
 	expires := int64((2 * p.window) / time.Second)
 	q := req.URL.Query()
 	q.Set("X-Amz-Expires", strconv.FormatInt(expires, 10))
+	if p.responseCacheControl != "" {
+		q.Set("response-cache-control", p.responseCacheControl)
+	}
 	req.URL.RawQuery = q.Encode()
 
 	signedURL, _, err := p.signer.PresignHTTP(

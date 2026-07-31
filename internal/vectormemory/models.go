@@ -9,10 +9,14 @@ type Memory struct {
 	ID              int64
 	UserID          string
 	DistilledText   string
-	SourceType      string  // "chat_session" | "workout_note"
+	SourceType      string  // "chat_session" | "workout_note" | "activity_note"
 	SourceSessionID *string // set iff SourceType == "chat_session"
 	SourceMessageID *int64  // best-effort, chat only
-	SourceWorkoutID *string // set iff SourceType == "workout_note"
+	// SourceWorkoutID is the activities row a note came from — a lift for
+	// "workout_note", an endurance session for "activity_note". The column
+	// name predates unification (migration 042 re-pointed it at activities);
+	// the sport is recovered by joining activities.activity_type.
+	SourceWorkoutID *string
 	EmbeddingModel  string
 	EmbeddingDim    int
 	SupersededAt    *time.Time

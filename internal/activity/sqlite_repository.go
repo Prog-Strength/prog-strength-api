@@ -682,6 +682,28 @@ func (r *SQLiteRepository) Rename(ctx context.Context, userID, activityID, name 
 	return r.readActivitySummary(ctx, userID, activityID)
 }
 
+// UpdateNotes writes the base row's free-text note. NULLIF collapses an empty
+// note to NULL, matching how CreateManual/UpdateBase store a blank one.
+func (r *SQLiteRepository) UpdateNotes(ctx context.Context, userID, activityID, notes string) (*Activity, error) {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE activities
+		SET notes = NULLIF(?, ''), updated_at = ?
+		WHERE id = ? AND user_id = ? AND deleted_at IS NULL
+	`, notes, r.now().UTC(), activityID, userID)
+	if err != nil {
+		return nil, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, ErrNotFound
+	}
+	// Re-read so the returned activity reflects exactly what's persisted.
+	return r.readActivitySummary(ctx, userID, activityID)
+}
+
 func (r *SQLiteRepository) Calibrate(ctx context.Context, userID, activityID string, newDistanceMeters float64) (*Activity, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

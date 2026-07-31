@@ -79,6 +79,14 @@ type Repository interface {
 	// row matches.
 	Rename(ctx context.Context, userID, id, name string) (*Activity, error)
 
+	// UpdateNotes replaces a live activity's free-text note and returns the
+	// updated activity (without trackpoints). An empty note stores SQL NULL
+	// rather than "" so "no note" has one representation. Like Rename it
+	// bumps updated_at — which is also the settle signal the activity-note
+	// memory source waits on, so a note still being edited stays out of the
+	// distillation window. Returns ErrNotFound when no live row matches.
+	UpdateNotes(ctx context.Context, userID, id, notes string) (*Activity, error)
+
 	// Calibrate rescales an activity to newDistanceMeters in one transaction:
 	// it reads the current distance in-tx, computes the uniform factor
 	// f = newDistanceMeters / current, updates the summary distance and paces

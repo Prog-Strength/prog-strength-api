@@ -914,6 +914,59 @@ func TestPatchValidation(t *testing.T) {
 	}
 }
 
+// TestPatchNotes covers the notes half of the partial update: a notes-only
+// body is a complete patch (this is what the web notes editor sends), the
+// note round-trips on the response, an empty string clears it, and the
+// 2000-char cap is enforced. Notes live on the base row, so this is the same
+// path for every activity type.
+func TestPatchNotes(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	id := importedID(t, h, "typical_5k.tcx")
+
+	w := doPatch(t, h, id, `{"notes":"legs were dead the first two miles then it clicked"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("notes-only patch status = %d; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	_ = json.Unmarshal(w.Body.Bytes(), &env)
+	if env.Data.Notes == nil || *env.Data.Notes != "legs were dead the first two miles then it clicked" {
+		t.Errorf("notes = %v, want the saved note", env.Data.Notes)
+	}
+
+	// A notes-only patch leaves the name alone (and vice versa).
+	wn := doPatch(t, h, id, `{"name":"Tempo Run"}`)
+	_ = json.Unmarshal(wn.Body.Bytes(), &env)
+	if env.Data.Notes == nil {
+		t.Errorf("rename dropped the note: %+v", env.Data.Notes)
+	}
+	wb := doPatch(t, h, id, `{"notes":"still tender"}`)
+	_ = json.Unmarshal(wb.Body.Bytes(), &env)
+	if env.Data.Name == nil || *env.Data.Name != "Tempo Run" {
+		t.Errorf("note edit dropped the name: %v", env.Data.Name)
+	}
+
+	// Empty string clears the note (the editor's "delete everything" path).
+	wc := doPatch(t, h, id, `{"notes":""}`)
+	if wc.Code != http.StatusOK {
+		t.Fatalf("clear status = %d; body=%s", wc.Code, wc.Body.String())
+	}
+	_ = json.Unmarshal(wc.Body.Bytes(), &env)
+	if env.Data.Notes != nil {
+		t.Errorf("notes = %v after clearing, want null", *env.Data.Notes)
+	}
+
+	// Over the cap.
+	wl := doPatch(t, h, id, `{"notes":"`+strings.Repeat("a", 2001)+`"}`)
+	if wl.Code != http.StatusBadRequest {
+		t.Errorf("over-cap status = %d, want 400", wl.Code)
+	}
+	// Exactly at the cap is fine.
+	wk := doPatch(t, h, id, `{"notes":"`+strings.Repeat("a", 2000)+`"}`)
+	if wk.Code != http.StatusOK {
+		t.Errorf("at-cap status = %d, want 200; body=%s", wk.Code, wk.Body.String())
+	}
+}
+
 // --- delete then get -----------------------------------------------
 
 func TestDeleteThenGet(t *testing.T) {

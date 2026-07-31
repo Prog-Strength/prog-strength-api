@@ -25,7 +25,8 @@ const distillBatchSize = 20
 // vectormemory never imports chat or workout.
 type MemorySource interface {
 	// SourceType is the stable discriminator stored on every memory this
-	// source produces, e.g. "chat_session" or "workout_note".
+	// source produces, e.g. "chat_session", "workout_note", or
+	// "activity_note".
 	SourceType() string
 
 	// PendingUnits returns units that have settled (gone idle past this
@@ -67,10 +68,14 @@ type DistillUnit struct {
 // Provenance names the origin so the repository writes the right typed FK +
 // discriminator.
 type Provenance struct {
-	SourceType string  // "chat_session" | "workout_note"
+	SourceType string  // "chat_session" | "workout_note" | "activity_note"
 	SessionID  *string // set iff SourceType == "chat_session"
 	MessageID  *int64  // best-effort, chat only
-	WorkoutID  *string // set iff SourceType == "workout_note"
+	// WorkoutID is the activities row id, set for both note sources —
+	// "workout_note" (a lift, with its per-exercise notes) and
+	// "activity_note" (an endurance session). See Memory.SourceWorkoutID for
+	// why the field still reads "workout".
+	WorkoutID *string
 }
 
 // StartDistillation launches the background distillation loop in a

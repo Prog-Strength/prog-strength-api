@@ -40,6 +40,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/usage"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopadmin"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
@@ -47,6 +48,7 @@ import (
 
 type Server struct {
 	httpServer *http.Server
+	bgCancel   context.CancelFunc
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -115,6 +117,12 @@ func New(cfg config.Config) (*Server, error) {
 	// network — the Caddy layer refuses to proxy /metrics to the
 	// public internet.
 	r.Handle("/metrics", MetricsHandler())
+
+	// Misrouted-webhook observability: a provider posting to a path we don't
+	// serve (e.g. a trailing comma) 404s at the router, upstream of every
+	// api_whoop_* counter. This NotFound handler makes that 404 observable
+	// (api_webhook_misroute_total) while still serving the standard 404.
+	r.NotFound(webhookMisrouteNotFound)
 
 	// Health check.
 	r.Get("/health", HealthCheck)
@@ -470,7 +478,15 @@ func New(cfg config.Config) (*Server, error) {
 	// The authed half is mounted inside the JWT-gated group below. The two whoop
 	// repos (whoopConnRepo, whoopRecoveryRepo) were constructed above for the
 	// dashboard; they are REUSED here, not re-declared.
+	//
+	// Cancelable context for server-owned background goroutines (e.g. the WHOOP
+	// connection-gauge exporter). Run cancels it on shutdown. Created after the
+	// startup error-return paths above so it can't leak on a boot failure; the
+	// only consumer is the exporter goroutine started inside the whoop block.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
 	var whoopHandler *whoopsync.Handler
+	var whoopAdminHandler *whoopadmin.Handler
 	if cfg.WhoopClientID != "" && cfg.WhoopClientSecret != "" && cfg.WhoopTokenEncKey != "" && cfg.WhoopRedirectURL != "" {
 		key, keyErr := tokencrypt.KeyFromEnv(cfg.WhoopTokenEncKey)
 		if keyErr != nil {
@@ -485,6 +501,10 @@ func New(cfg config.Config) (*Server, error) {
 			whoopClient := whoopsync.NewClient(whoopHTTP)
 			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
 			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
+			whoopAdminHandler = whoopadmin.NewHandler(whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
+			// Publish the connection-health gauge every 5 minutes; gates the
+			// dead-ingestion alert and drives the dashboard connection panel.
+			go whoopadmin.NewConnectionsExporter(whoopConnRepo).Run(bgCtx)
 			// Public callback — WHOOP redirects here; the user id rides in the
 			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
 			whoopHandler.MountPublic(r)
@@ -747,6 +767,12 @@ func New(cfg config.Config) (*Server, error) {
 			if vmHandler != nil {
 				vmHandler.MountAdmin(r)
 			}
+			// Admin WHOOP surface — connection reads + operator resync. Present
+			// only when the WHOOP integration is enabled (same guard as the
+			// authed half); the admin gate is this enclosing group.
+			if whoopAdminHandler != nil {
+				whoopAdminHandler.Mount(r)
+			}
 		})
 		// Calendar sync (authed half): GET /auth/google/calendar/connect plus
 		// GET/DELETE /me/calendar/connection. Only present when calendar sync
@@ -788,6 +814,7 @@ func New(cfg config.Config) (*Server, error) {
 			WriteTimeout:      10 * time.Second,
 			IdleTimeout:       60 * time.Second,
 		},
+		bgCancel: bgCancel,
 	}, nil
 }
 
@@ -806,6 +833,9 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		log.Println("shutdown signal received")
+		if s.bgCancel != nil {
+			s.bgCancel()
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return s.httpServer.Shutdown(shutdownCtx)

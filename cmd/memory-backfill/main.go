@@ -42,6 +42,7 @@ import (
 	_ "time/tzdata"
 
 	progstrength "github.com/jwallace145/progressive-overload-fitness-tracker"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
@@ -105,12 +106,16 @@ func run(ctx context.Context, dryRun bool) error {
 	embedder := vectormemory.NewBatchEmbedder(client, cfg.VectorMemory.OpenAIAPIKey, cfg.VectorMemory.EmbedModel)
 	repo := vectormemory.NewSQLiteRepository(database)
 	chatRepo := chat.NewSQLiteRepository(database)
+	// The activity source reads session context (distance, duration, name)
+	// through this repository. The backfill only ever reads, so the archiver —
+	// which the repository touches on TCX writes alone — is never exercised.
+	activityRepo := activity.NewSQLiteRepository(database, activity.NewMemoryArchiver())
 
 	// Range over the SAME registry the live distillation job uses, so one run
-	// seeds every source's existing corpus (chat history + workout notes). The
-	// command may import internal/server: server does not import cmd, so there is
-	// no import cycle.
-	sources := server.BuildMemorySources(database, chatRepo, cfg.VectorMemory)
+	// seeds every source's existing corpus (chat history + workout notes +
+	// endurance session notes). The command may import internal/server: server
+	// does not import cmd, so there is no import cycle.
+	sources := server.BuildMemorySources(database, chatRepo, activityRepo, cfg.VectorMemory)
 
 	return backfill(ctx, backfillDeps{
 		cfg:       cfg.VectorMemory,

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
@@ -87,13 +88,25 @@ func (s *chatMemorySource) assembleUnit(ctx context.Context, sessionID, userID s
 }
 
 // BuildMemorySources constructs the distillation source registry. Order is the
-// iteration order of the job and backfill: chat first, workout-note second.
-// Lives here so the adapters (which import chat/workout schema) stay out of the
-// vectormemory package. The workout source reads app.db directly (db), since a
-// workout unit spans activities, activity_exercises, and exercises.
-func BuildMemorySources(db *sql.DB, chatRepo *chat.SQLiteRepository, cfg config.VectorMemoryConfig) []vectormemory.MemorySource {
+// iteration order of the job and backfill: chat first, workout-note second,
+// activity-note third. Lives here so the adapters (which import chat/workout
+// schema) stay out of the vectormemory package. The workout source reads
+// app.db directly (db), since a workout unit spans activities,
+// activity_exercises, and exercises; the activity source also takes the
+// activity repository, whose canonical projection carries the per-type detail
+// columns its context header needs.
+//
+// The two note sources partition the activities table by type — strength to
+// the workout source, everything else to the activity source — so no session
+// is ever distilled twice.
+func BuildMemorySources(db *sql.DB, chatRepo *chat.SQLiteRepository, activityRepo activity.Repository, cfg config.VectorMemoryConfig) []vectormemory.MemorySource {
 	return []vectormemory.MemorySource{
 		&chatMemorySource{chat: chatRepo, idleWindow: time.Duration(cfg.SessionIdleMinutes) * time.Minute},
 		&workoutNoteSource{db: db, settleWindow: time.Duration(cfg.WorkoutSettleMinutes) * time.Minute},
+		&activityNoteSource{
+			db:           db,
+			activities:   activityRepo,
+			settleWindow: time.Duration(cfg.ActivitySettleMinutes) * time.Minute,
+		},
 	}
 }

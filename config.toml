@@ -93,12 +93,37 @@ aws_region = "${AWS_REGION}"
 # max_upload_bytes is the raw-upload size ceiling; full_/thumb_* define the two
 # derived JPEG renditions (max edge in px + quality); presign_window_hours is a
 # presigned URL's lifetime; caption_max_chars bounds a caption's length.
+#
+# Fidelity policy: the `full` variant is the ARCHIVAL copy. No original bytes
+# are retained anywhere (unlike TCX uploads, which are archived to S3), so
+# whatever `full` stores is the best copy that will ever exist for that photo.
+# It is therefore kept at native resolution and near-lossless quality. The
+# re-encode itself stays unconditional — dropping the source's EXIF/GPS is the
+# privacy mechanism, and these photos are reachable via presigned URLs from the
+# social timeline. See sows/activity-photos.md.
 max_per_activity     = 10
-max_upload_bytes     = 12582912   # 12 MiB
-full_max_edge_px     = 2048
-full_jpeg_quality    = 82
-thumb_max_edge_px    = 480
-thumb_jpeg_quality   = 78
+# 32 MiB. Covers any phone/camera JPEG or HEIC (a 24MP JPEG is ~8-12 MB, a 48MP
+# HEIC ~5-8 MB) with headroom. Deliberately not higher: uploadPhoto passes this
+# as ParseMultipartForm's maxMemory, so the whole upload buffers in RAM before
+# decode, and the host is a t4g.small (2 GB).
+max_upload_bytes     = 33554432
+# NO DOWNSCALE. 20000 equals maxDecodeEdge in photo_pipeline.go, so nothing the
+# decoder accepts is ever resized — `resize` returns the source untouched when
+# both edges already fit. The stored `full` variant keeps the camera's native
+# resolution; the decode guard, not this number, is the real ceiling.
+#
+# This was 2048, which threw away 75% of a 12MP phone photo's pixels (4032x3024
+# -> 2048x1536) and ~94% of a 48MP one. That clamp, not the JPEG quality, was
+# the dominant cause of soft stored photos.
+full_max_edge_px     = 20000
+# Near-lossless. Above ~95 JPEG buys file size rather than visible fidelity;
+# below ~90 the artifacts are findable on a detailed photo at full zoom.
+full_jpeg_quality    = 95
+# The thumb feeds the timeline cover and the detail strip — the images actually
+# looked at most often. 480 visibly softened on a retina display; 800 is sharp
+# there while keeping a feed screen's worth of covers cheap.
+thumb_max_edge_px    = 800
+thumb_jpeg_quality   = 85
 presign_window_hours = 6
 caption_max_chars    = 200
 

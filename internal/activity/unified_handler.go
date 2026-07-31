@@ -55,6 +55,9 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 	if err := h.attachTypedPayload(ctx, userID, a, &dto); err != nil {
 		return activityDTO{}, err
 	}
+	if err := h.attachPhotos(ctx, userID, a.ID, &dto); err != nil {
+		return activityDTO{}, err
+	}
 	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
 		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
 		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
@@ -144,6 +147,34 @@ func (h *Handler) attachTypedPayload(ctx context.Context, userID string, a Activ
 	if s, ok := RenderSummary(h.registry, a, details); ok {
 		dto.Summary = &s
 	}
+	return nil
+}
+
+// attachPhotos populates the detail DTO's Photos array with the activity's live
+// photos, ordered (position, id) and filtered to live + parent-live by the repo,
+// each carrying freshly presigned full + thumb URLs. Detail-only: called from
+// buildDetailDTO so only GET /activities/{id} carries photos — list items and
+// write read-backs never do. When photo storage is unconfigured (either the
+// store or the repo is nil) it leaves dto.Photos nil so omitempty drops the key
+// entirely; when configured it always assigns a non-nil slice, so the key is
+// present and serializes as [] for an activity with no photos.
+func (h *Handler) attachPhotos(ctx context.Context, userID, activityID string, dto *activityDTO) error {
+	if h.photoRepo == nil || h.photoStore == nil {
+		return nil
+	}
+	photos, err := h.photoRepo.ListByActivity(ctx, userID, activityID)
+	if err != nil {
+		return err
+	}
+	dtos := make([]photoDTO, 0, len(photos))
+	for _, p := range photos {
+		pd, err := h.toPhotoDTO(ctx, p)
+		if err != nil {
+			return err
+		}
+		dtos = append(dtos, pd)
+	}
+	dto.Photos = &dtos
 	return nil
 }
 

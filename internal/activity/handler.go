@@ -346,6 +346,16 @@ type activityDTO struct {
 	// on list items too; omitted otherwise (endurance lists, base-only
 	// shaped sessions, no registry wired).
 	Details any `json:"details,omitempty"`
+	// Photos is the activity's ordered (position, id) live photo set, each with
+	// freshly presigned full + thumb URLs. Detail-only: attached solely on the
+	// single-activity GET, never on list items or write read-backs. It is a
+	// POINTER so the two "empty" cases stay distinguishable through omitempty:
+	// when photo storage is configured the detail path assigns a non-nil
+	// pointer (to a possibly-empty slice) so the key is ALWAYS present,
+	// serializing as [] when the activity has no photos; when storage is
+	// unconfigured it stays nil and omitempty drops the key entirely. A plain
+	// slice cannot express this — omitempty drops an empty non-nil slice too.
+	Photos *[]photoDTO `json:"photos,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -929,6 +939,14 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
 		return
 	}
+	// This is a SOFT delete: the row (and its photo rows, whose FK cascade
+	// only fires on a HARD delete) survives untouched, deleted_at just hides
+	// it. Deliberately NO photo-object orphan-tagging here — a soft delete is
+	// reversible, and restoring the activity must bring its photos back with
+	// their objects intact. The soft-deleted parent already hides the photos
+	// from every read (ListByActivity / CoverPhotosByActivityIDs JOIN
+	// activities and require a.deleted_at IS NULL), so nothing leaks; tagging
+	// would let the lifecycle rule reap still-referenced objects.
 	if err := h.repo.SoftDelete(r.Context(), userID, activityID); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")

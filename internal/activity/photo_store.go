@@ -61,8 +61,21 @@ type PhotoStore interface {
 // within the same window yield the exact same URL and the browser treats the
 // photo as a single cacheable resource. Doubling the expiry means a URL minted
 // near the end of a window is still valid for at least a full window afterward.
+//
+// Cache stability holds only while the credentials do. In prod they are the EC2
+// instance role's temporary credentials, which rotate every few hours, and a
+// rotation changes X-Amz-Credential, X-Amz-Security-Token and the signature —
+// so the URL changes mid-window and the browser refetches once. That is the
+// correct trade: the alternative, pinning credentials to keep the URL stable,
+// is what made every photo 403 ExpiredToken once the pinned token lapsed.
 type windowedPresigner struct {
-	creds  aws.Credentials
+	// creds is a PROVIDER, not a credential value, and is resolved on every
+	// presign. Snapshotting the value here means the presigner keeps signing
+	// with a session token that the SDK has long since rotated away from, and
+	// S3 rejects those URLs with 403 ExpiredToken. In prod this is the SDK's
+	// credential cache, so per-call resolution is a memory read, not an IMDS
+	// round trip.
+	creds  aws.CredentialsProvider
 	signer *v4.Signer
 	region string
 	bucket string
@@ -90,6 +103,12 @@ func (p *windowedPresigner) presignGet(ctx context.Context, key string) (string,
 	}
 	signingTime := now().Truncate(p.window)
 
+	// Resolved per call, never cached on the struct: see the type comment.
+	creds, err := p.creds.Retrieve(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	endpoint := fmt.Sprintf(
 		"https://%s.s3.%s.amazonaws.com/%s",
 		p.bucket, p.region, escapeKeyPath(key),
@@ -110,7 +129,7 @@ func (p *windowedPresigner) presignGet(ctx context.Context, key string) (string,
 	req.URL.RawQuery = q.Encode()
 
 	signedURL, _, err := p.signer.PresignHTTP(
-		ctx, p.creds, req, unsignedPayload, s3Service, p.region, signingTime,
+		ctx, creds, req, unsignedPayload, s3Service, p.region, signingTime,
 	)
 	if err != nil {
 		return "", err
@@ -142,8 +161,9 @@ var _ PhotoStore = (*S3PhotoStore)(nil)
 
 // NewS3PhotoStore builds an S3-backed photo store for the given bucket. window
 // controls the cache-stability window of presigned GET URLs. Credentials come
-// from the AWS default chain (the EC2 instance role in prod) and are resolved
-// once here so the presigner can sign without a per-call provider lookup.
+// from the AWS default chain (the EC2 instance role in prod); the PROVIDER is
+// handed to the presigner, not a resolved snapshot of it, so rotation of the
+// instance role's temporary credentials is picked up on the next presign.
 func NewS3PhotoStore(ctx context.Context, bucket, region string, window time.Duration) (*S3PhotoStore, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
@@ -151,15 +171,10 @@ func NewS3PhotoStore(ctx context.Context, bucket, region string, window time.Dur
 	}
 	client := s3.NewFromConfig(cfg)
 
-	creds, err := cfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	return &S3PhotoStore{
 		client: client,
 		presign: &windowedPresigner{
-			creds:  creds,
+			creds:  cfg.Credentials,
 			signer: v4.NewSigner(),
 			region: region,
 			bucket: bucket,

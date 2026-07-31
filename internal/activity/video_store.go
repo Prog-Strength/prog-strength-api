@@ -83,15 +83,10 @@ func NewS3VideoStore(ctx context.Context, bucket, region string, window time.Dur
 	}
 	client := s3.NewFromConfig(cfg)
 
-	creds, err := cfg.Credentials.Retrieve(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	return &S3VideoStore{
 		client: client,
 		presign: &windowedPresigner{
-			creds:  creds,
+			creds:  cfg.Credentials,
 			signer: v4.NewSigner(),
 			region: region,
 			bucket: bucket,

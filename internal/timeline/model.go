@@ -77,6 +77,19 @@ type PostContent struct {
 	Subtitle string
 	Metrics  []string
 	Href     string
+	// Photo is the cover thumbnail for a session card (nil when the source has no photo).
+	Photo *PostPhoto
+	// PhotoCount is the total live photo count on the source activity (0 when none).
+	PhotoCount int
+}
+
+// PostPhoto is the cover thumbnail a session card carries: a presigned thumb
+// URL plus its intrinsic pixel dimensions (so the client can reserve layout
+// space and avoid reflow). Rendered at read time from the live cover photo,
+// never stored on the post.
+type PostPhoto struct {
+	ThumbURL      string
+	Width, Height int
 }
 
 // ReactionSummary is the per-post reaction aggregate a feed page carries:

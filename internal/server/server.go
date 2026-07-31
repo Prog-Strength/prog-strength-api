@@ -552,7 +552,8 @@ func New(cfg config.Config) (*Server, error) {
 		// The timeline hydrator renders session posts (`workout`/`run`)
 		// through the same registry's Summarize, so build it here now that the
 		// registry exists — it's used by the timeline handler mounted below.
-		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry)
+		// TODO(activity-photos A10): pass photoRepo, photoStore
+		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry, nil, nil)
 		// Heart-rate-zone engine: tunables come from the [hr_zones] config
 		// section; the recency window for the reference-max-HR estimate is
 		// derived from recency_window_days.

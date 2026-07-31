@@ -215,6 +215,55 @@ func req(t *testing.T, method, target, userID, body string, params ...string) *h
 	return r.WithContext(ctx)
 }
 
+// --- content DTO: cover photo + count -------------------------------------
+
+// The content DTO always emits the `photo` key (null when the source has no
+// cover) and a `photo_count`. A present cover serializes as a
+// {thumb_url,width,height} object.
+func TestContentDTOPhotoSerialization(t *testing.T) {
+	// Absent cover → photo:null, photo_count:0, key always present.
+	noPhoto, err := json.Marshal(toContentDTO(PostContent{Title: "Push day"}))
+	if err != nil {
+		t.Fatalf("marshal no-photo: %v", err)
+	}
+	if !strings.Contains(string(noPhoto), `"photo":null`) {
+		t.Errorf("no-photo content should serialize photo:null, got %s", noPhoto)
+	}
+	if !strings.Contains(string(noPhoto), `"photo_count":0`) {
+		t.Errorf("no-photo content should serialize photo_count:0, got %s", noPhoto)
+	}
+
+	// Present cover → photo object with thumb_url/width/height + count.
+	withPhoto, err := json.Marshal(toContentDTO(PostContent{
+		Title:      "Push day",
+		Photo:      &PostPhoto{ThumbURL: "https://cdn.test/thumbs/w1.jpg", Width: 640, Height: 480},
+		PhotoCount: 3,
+	}))
+	if err != nil {
+		t.Fatalf("marshal with-photo: %v", err)
+	}
+	var decoded struct {
+		Photo *struct {
+			ThumbURL string `json:"thumb_url"`
+			Width    int    `json:"width"`
+			Height   int    `json:"height"`
+		} `json:"photo"`
+		PhotoCount int `json:"photo_count"`
+	}
+	if err := json.Unmarshal(withPhoto, &decoded); err != nil {
+		t.Fatalf("unmarshal with-photo: %v", err)
+	}
+	if decoded.Photo == nil {
+		t.Fatalf("with-photo content should carry a photo object, got %s", withPhoto)
+	}
+	if decoded.Photo.ThumbURL != "https://cdn.test/thumbs/w1.jpg" || decoded.Photo.Width != 640 || decoded.Photo.Height != 480 {
+		t.Errorf("photo object = %+v, want thumb/640/480", *decoded.Photo)
+	}
+	if decoded.PhotoCount != 3 {
+		t.Errorf("photo_count = %d, want 3", decoded.PhotoCount)
+	}
+}
+
 // --- feed pagination + shape ---------------------------------------------
 
 func TestFeedPaginationAndShape(t *testing.T) {

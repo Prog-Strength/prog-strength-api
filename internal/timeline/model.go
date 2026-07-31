@@ -77,6 +77,14 @@ type PostContent struct {
 	Subtitle string
 	Metrics  []string
 	Href     string
+	// ActivityType is the sport of the underlying session ("running",
+	// "hiking", "strength_training", ...) for a SourceActivity post, and
+	// empty for the source domains that aren't sessions (pr, best_effort).
+	// It is hydrated rather than stored because timeline_post deliberately
+	// holds no denormalized source state; it exists so clients can pick a
+	// per-sport glyph/label/treatment without re-fetching the activity,
+	// which is what the coarse SourceType no longer tells them.
+	ActivityType string
 }
 
 // ReactionSummary is the per-post reaction aggregate a feed page carries:

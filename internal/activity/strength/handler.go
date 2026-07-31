@@ -92,16 +92,18 @@ func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
 }
 
 // publishWorkoutPosts publishes the timeline posts a freshly-persisted
-// workout produces: one `workout` post for the session itself, plus one
-// `pr` post per PR break it set (looked up by workout id). All best-effort
-// and non-blocking — a failure here can never fail the workout write.
+// workout produces: one `activity` post for the session itself (a lift is an
+// activity like any other since the unified model — the feed reads the sport
+// off activities.activity_type), plus one `pr` post per PR break it set
+// (looked up by workout id). All best-effort and non-blocking — a failure
+// here can never fail the workout write.
 func (h *Handler) publishWorkoutPosts(ctx context.Context, w *Workout) {
 	if h.publisher == nil {
 		return
 	}
 	h.publish(ctx, timeline.PostRef{
 		UserID:     w.UserID,
-		SourceType: timeline.SourceWorkout,
+		SourceType: timeline.SourceActivity,
 		SourceID:   w.ID,
 		OccurredAt: w.PerformedAt,
 	})

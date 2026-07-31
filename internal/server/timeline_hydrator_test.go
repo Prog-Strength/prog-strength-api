@@ -100,13 +100,15 @@ func (f *fakeActivityRepo) Get(_ context.Context, userID, id string) (*activity.
 
 func strptr(s string) *string { return &s }
 
-// testRegistry builds a registry with the running + strength descriptors the
-// session hydration renders through. Endurance summarizes off the base row so
-// its detail store can be nil; strength's descriptor wraps the fake repo whose
-// batched exercise read backs its Summarize.
+// testRegistry builds a registry with the running, hiking, and strength
+// descriptors the activity hydration renders through. Endurance summarizes off
+// the base row so its detail store can be nil; strength's descriptor wraps the
+// fake repo whose batched exercise read backs its Summarize. Hiking is here
+// because it is the type the feed used to drop on the floor.
 func testRegistry(wRepo strength.Repository) *activity.Registry {
 	return activity.NewRegistry(
 		activity.NewEnduranceDescriptor(activity.ActivityRunning, nil),
+		activity.NewEnduranceDescriptor(activity.ActivityHiking, nil),
 		strength.NewDescriptor(wRepo),
 	)
 }
@@ -158,8 +160,8 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
-		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
-		{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "a1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "a1", OccurredAt: now},
 		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "pr1", OccurredAt: now},
 		{UserID: "u1", SourceType: timeline.SourceBestEffort, SourceID: "a1:5k", OccurredAt: now},
 	}
@@ -172,7 +174,9 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 		t.Fatalf("got %d contents, want 4", len(got))
 	}
 
-	// workout
+	// workout — one `activity` post; the sport rides on ActivityType, which is
+	// what the clients switch their per-sport rendering on now that the source
+	// type no longer names the sport.
 	wc := got[refs[0]]
 	if wc.Title != "Push day" {
 		t.Errorf("workout title = %q, want Push day", wc.Title)
@@ -182,6 +186,9 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 	}
 	if wc.Href != "/activities?view=workouts" {
 		t.Errorf("workout href = %q", wc.Href)
+	}
+	if wc.ActivityType != string(activity.ActivityStrengthTraining) {
+		t.Errorf("workout activity_type = %q, want strength_training", wc.ActivityType)
 	}
 
 	// run — match the SOW example chips 5.0 mi · 41:12
@@ -195,9 +202,15 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 	if rc.Href != "/activities?view=running" {
 		t.Errorf("run href = %q", rc.Href)
 	}
+	if rc.ActivityType != string(activity.ActivityRunning) {
+		t.Errorf("run activity_type = %q, want running", rc.ActivityType)
+	}
 
-	// pr
+	// pr — not a session, so it carries no sport.
 	pc := got[refs[2]]
+	if pc.ActivityType != "" {
+		t.Errorf("pr activity_type = %q, want empty", pc.ActivityType)
+	}
 	if pc.Title != "bench PR" {
 		t.Errorf("pr title = %q, want bench PR", pc.Title)
 	}
@@ -228,8 +241,8 @@ func TestHydrate_OmitsMissingSources(t *testing.T) {
 	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
-		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "gone", OccurredAt: now},
-		{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "gone", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "gone-lift", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "gone-run", OccurredAt: now},
 		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "gone", OccurredAt: now},
 		{UserID: "u1", SourceType: timeline.SourceBestEffort, SourceID: "gone:5k", OccurredAt: now},
 	}
@@ -272,7 +285,79 @@ func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 	}
 }
 
-// TestHydrate_SessionsBatchedPerAuthor pins hydrateSessions' fetch counts on a
+// TestHydrate_NonRunningEnduranceType is the regression guard for the bug this
+// change fixes: a hike was invisible in the feed. Nothing in the hydrator names
+// hiking — it renders because a descriptor is registered for it and every
+// session posts under the one `activity` source type, which is the property
+// that has to survive the next type anyone adds.
+func TestHydrate_NonRunningEnduranceType(t *testing.T) {
+	now := time.Date(2026, 7, 4, 8, 0, 0, 0, time.UTC)
+	wRepo := &fakeWorkoutRepo{exercises: map[string][]strength.WorkoutExercise{}, prEvents: map[string]strength.PersonalRecordEvent{}}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"h1": {
+				ID:              "h1",
+				UserID:          "u1",
+				ActivityType:    activity.ActivityHiking,
+				Name:            strptr("Franconia Ridge"),
+				DistanceMeters:  14484.1, // 9.0 mi
+				DurationSeconds: 21600,   // 6:00:00
+			},
+		},
+	}
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+
+	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "h1", OccurredAt: now}
+	got, err := h.Hydrate(context.Background(), []timeline.PostRef{ref})
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+	c, ok := got[ref]
+	if !ok {
+		t.Fatal("hike ref produced no content — the feed would drop the post")
+	}
+	if c.Title != "Franconia Ridge" {
+		t.Errorf("hike title = %q, want Franconia Ridge", c.Title)
+	}
+	if c.ActivityType != string(activity.ActivityHiking) {
+		t.Errorf("hike activity_type = %q, want hiking", c.ActivityType)
+	}
+	if c.Href != "/activities?view=hiking" {
+		t.Errorf("hike href = %q, want /activities?view=hiking", c.Href)
+	}
+}
+
+// TestHydrate_UnmappedTypeGetsOverviewHref pins the href fallback: a type with
+// no tab of its own still deep-links somewhere real. This is what keeps
+// activityHref from needing an edit every time a type is registered.
+func TestHydrate_UnmappedTypeGetsOverviewHref(t *testing.T) {
+	now := time.Now().UTC()
+	wRepo := &fakeWorkoutRepo{exercises: map[string][]strength.WorkoutExercise{}, prEvents: map[string]strength.PersonalRecordEvent{}}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"c1": {ID: "c1", UserID: "u1", ActivityType: activity.ActivityCycling, Name: strptr("Sunday spin"), DistanceMeters: 32186.9, DurationSeconds: 3600},
+		},
+	}
+	registry := activity.NewRegistry(
+		activity.NewEnduranceDescriptor(activity.ActivityCycling, nil),
+		strength.NewDescriptor(wRepo),
+	)
+	h := newTimelineHydrator(wRepo, aRepo, registry)
+
+	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "c1", OccurredAt: now}
+	got, err := h.Hydrate(context.Background(), []timeline.PostRef{ref})
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+	if got[ref].Href != "/activities" {
+		t.Errorf("cycling href = %q, want the /activities overview", got[ref].Href)
+	}
+	if got[ref].ActivityType != string(activity.ActivityCycling) {
+		t.Errorf("cycling activity_type = %q, want cycling", got[ref].ActivityType)
+	}
+}
+
+// TestHydrate_SessionsBatchedPerAuthor pins hydrateActivities' fetch counts on a
 // multi-author feed page: SummariesByIDs is user-scoped, so it runs exactly
 // once per distinct author (the idsByUser grouping), while the strength detail
 // load batches per TYPE across the whole merged page — one
@@ -299,10 +384,10 @@ func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
 	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
 
 	refs := []timeline.PostRef{
-		{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: now},
-		{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "a1", OccurredAt: now},
-		{UserID: "u2", SourceType: timeline.SourceWorkout, SourceID: "w2", OccurredAt: now},
-		{UserID: "u2", SourceType: timeline.SourceRun, SourceID: "a2", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "a1", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceActivity, SourceID: "w2", OccurredAt: now},
+		{UserID: "u2", SourceType: timeline.SourceActivity, SourceID: "a2", OccurredAt: now},
 	}
 	got, err := h.Hydrate(context.Background(), refs)
 	if err != nil {

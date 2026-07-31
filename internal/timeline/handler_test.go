@@ -168,7 +168,7 @@ func seedPost(t *testing.T, repo *SQLiteRepository, userID, sourceID string, occ
 	t.Helper()
 	p, err := repo.EnsurePost(context.Background(), PostRef{
 		UserID:     userID,
-		SourceType: SourceWorkout,
+		SourceType: SourceActivity,
 		SourceID:   sourceID,
 		OccurredAt: occurredAt,
 	})
@@ -255,13 +255,13 @@ func TestFeedPaginationAndShape(t *testing.T) {
 
 	// Assert the hydrated content + decoration on the newest post.
 	top := p1.Data.Posts[0]
-	if top.SourceType != SourceWorkout || top.SourceID != "c" {
-		t.Errorf("top source = %s/%s, want workout/c", top.SourceType, top.SourceID)
+	if top.SourceType != SourceActivity || top.SourceID != "c" {
+		t.Errorf("top source = %s/%s, want activity/c", top.SourceType, top.SourceID)
 	}
 	if top.Visibility != VisibilityFriends {
 		t.Errorf("visibility = %q, want friends", top.Visibility)
 	}
-	if top.Content.Title != "title-c" || top.Content.Href != "/source/workout/c" {
+	if top.Content.Title != "title-c" || top.Content.Href != "/source/activity/c" {
 		t.Errorf("content wrong: %+v", top.Content)
 	}
 	if len(top.Content.Metrics) != 2 {

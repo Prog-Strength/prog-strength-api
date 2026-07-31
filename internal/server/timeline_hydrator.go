@@ -46,10 +46,12 @@ func (h *timelineHydrator) Hydrate(ctx context.Context, refs []timeline.PostRef)
 		byType[ref.SourceType] = append(byType[ref.SourceType], ref)
 	}
 
-	// `workout` and `run` posts both point at rows in the one activities base
-	// table, so they resolve through a single unified path (registry
-	// Summarize), not two divergent renderers.
-	if err := h.hydrateSessions(ctx, byType[timeline.SourceWorkout], byType[timeline.SourceRun], out); err != nil {
+	// Every session — a lift, a run, a hike, a future kickboxing class — is
+	// an `activity` post pointing at the one activities base table, so they
+	// all resolve through a single unified path (registry Summarize). There
+	// is deliberately no per-sport branch here: that is what made the feed
+	// blind to types nobody had special-cased.
+	if err := h.hydrateActivities(ctx, byType[timeline.SourceActivity], out); err != nil {
 		return nil, err
 	}
 	if err := h.hydratePRs(ctx, byType[timeline.SourcePR], out); err != nil {
@@ -62,31 +64,33 @@ func (h *timelineHydrator) Hydrate(ctx context.Context, refs []timeline.PostRef)
 	return out, nil
 }
 
-// hydrateSessions renders `workout` and `run` posts through the unified
-// activity store and the type registry. Both source types point at the
-// activities base table, so they share one batched summary read
+// hydrateActivities renders `activity` posts — every session type — through
+// the unified activity store and the type registry: one batched summary read
 // (SummariesByIDs, grouped by author since a feed page spans the viewer's
 // followees) plus activity.RenderSummaries, which loads each type's detail
 // (strength's exercises/sets) in a single batch and renders the same card the
-// unified /activities list shows. The card body is byte-identical for both
-// types; only the Href differs, and that web-routing concern stays here in the
-// wiring layer because Summary deliberately carries no Href. A ref whose
-// source no longer resolves is absent from the summaries map and omitted.
-func (h *timelineHydrator) hydrateSessions(ctx context.Context, workoutRefs, runRefs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
-	sessionRefs := make([]timeline.PostRef, 0, len(workoutRefs)+len(runRefs))
-	sessionRefs = append(sessionRefs, workoutRefs...)
-	sessionRefs = append(sessionRefs, runRefs...)
-	if len(sessionRefs) == 0 {
+// unified /activities list shows. Nothing here knows which sports exist; a
+// newly registered type renders the moment its descriptor does, which is the
+// whole point of routing every session through one path. A ref whose source no
+// longer resolves is absent from the summaries map and omitted.
+//
+// The sport travels back out on PostContent.ActivityType so the API's
+// discriminator survives the collapse of the per-sport source types, and it
+// picks the Href — a web-routing concern that stays here in the wiring layer
+// because Summary deliberately carries none.
+func (h *timelineHydrator) hydrateActivities(ctx context.Context, refs []timeline.PostRef, out map[timeline.PostRef]timeline.PostContent) error {
+	if len(refs) == 0 {
 		return nil
 	}
 
 	// SummariesByIDs is user-scoped (it enforces ownership), and the feed
 	// spans the viewer plus their followees, so batch the base read per author.
 	idsByUser := make(map[string][]string)
-	for _, ref := range sessionRefs {
+	for _, ref := range refs {
 		idsByUser[ref.UserID] = append(idsByUser[ref.UserID], ref.SourceID)
 	}
-	activities := make([]activity.Activity, 0, len(sessionRefs))
+	activities := make([]activity.Activity, 0, len(refs))
+	typeByID := make(map[string]activity.ActivityType, len(refs))
 	for uid, ids := range idsByUser {
 		found, err := h.activityRepo.SummariesByIDs(ctx, uid, ids)
 		if err != nil {
@@ -94,6 +98,7 @@ func (h *timelineHydrator) hydrateSessions(ctx context.Context, workoutRefs, run
 		}
 		for _, a := range found {
 			activities = append(activities, a)
+			typeByID[a.ID] = a.ActivityType
 		}
 	}
 
@@ -102,30 +107,41 @@ func (h *timelineHydrator) hydrateSessions(ctx context.Context, workoutRefs, run
 	// summarize off the joined base row, so one render over the merged authors
 	// is correct.
 	summaries := activity.RenderSummaries(ctx, h.registry, "", activities)
-	for _, ref := range sessionRefs {
+	for _, ref := range refs {
 		s, ok := summaries[ref.SourceID]
 		if !ok {
 			// Source gone (deleted/not found) or unrenderable: omit.
 			continue
 		}
+		activityType := typeByID[ref.SourceID]
 		out[ref] = timeline.PostContent{
-			Title:    s.Title,
-			Subtitle: s.Subtitle,
-			Metrics:  s.Metrics,
-			Href:     sessionHref(ref.SourceType),
+			Title:        s.Title,
+			Subtitle:     s.Subtitle,
+			Metrics:      s.Metrics,
+			Href:         activityHref(activityType),
+			ActivityType: string(activityType),
 		}
 	}
 	return nil
 }
 
-// sessionHref maps a session post's source type to its web destination — the
-// workouts or running tab of the consolidated Activities page. There is no
-// per-session detail route in web v1.
-func sessionHref(t timeline.SourceType) string {
-	if t == timeline.SourceWorkout {
+// activityHref maps a session's sport to its web destination — the tab of the
+// consolidated Activities page that lists it. There is no per-session detail
+// route in web v1. A type with no tab of its own (walking, cycling, other, and
+// any newly registered type) lands on the Activities overview, which lists
+// every type: an unmapped sport degrades to a working link rather than a 404,
+// so adding a type still needs no change here.
+func activityHref(t activity.ActivityType) string {
+	switch t {
+	case activity.ActivityStrengthTraining:
 		return "/activities?view=workouts"
+	case activity.ActivityRunning:
+		return "/activities?view=running"
+	case activity.ActivityHiking:
+		return "/activities?view=hiking"
+	default:
+		return "/activities"
 	}
-	return "/activities?view=running"
 }
 
 // hydratePRs renders `pr` posts. The workout repo exposes a batch read keyed

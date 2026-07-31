@@ -84,6 +84,7 @@ return_to_allowed_origins = [
 avatar_bucket_name = "${AVATAR_BUCKET_NAME}"
 tcx_bucket_name = "${TCX_BUCKET_NAME}"   # folded in from the former stray os.Getenv
 photo_bucket_name = "${PHOTO_BUCKET_NAME}"   # activity photos (Terraform-owned)
+video_bucket_name = "${VIDEO_BUCKET_NAME}"   # activity videos (Terraform-owned)
 # AWS region for the S3 clients. Terraform-owned; REQUIRED when a bucket is set.
 aws_region = "${AWS_REGION}"
 
@@ -105,7 +106,8 @@ max_per_activity     = 10
 # 32 MiB. Covers any phone/camera JPEG or HEIC (a 24MP JPEG is ~8-12 MB, a 48MP
 # HEIC ~5-8 MB) with headroom. Deliberately not higher: uploadPhoto passes this
 # as ParseMultipartForm's maxMemory, so the whole upload buffers in RAM before
-# decode, and the host is a t4g.small (2 GB).
+# decode, and the host is a t4g.medium (4 GB) shared with MCP, the agent,
+# Caddy, Prometheus and Grafana.
 max_upload_bytes     = 33554432
 # NO DOWNSCALE. 20000 equals maxDecodeEdge in photo_pipeline.go, so nothing the
 # decoder accepts is ever resized — `resize` returns the source untouched when
@@ -126,6 +128,42 @@ thumb_max_edge_px    = 800
 thumb_jpeg_quality   = 85
 presign_window_hours = 6
 caption_max_chars    = 200
+
+[videos]
+# Tunables for the Activity Videos feature. Public literals — not secrets, not
+# env-overridden. See sows/activity-videos.md.
+#
+# There are deliberately NO quality or dimension knobs for the video itself:
+# nothing is transcoded, and the stored object is byte-identical to what the
+# user uploaded. The only derived artifact is the poster JPEG, which the client
+# generates and the server bounds through the existing image pipeline.
+max_per_activity = 10
+# 1 GiB. Enforced by S3 against the presigned upload's content-length-range and
+# re-checked by a HEAD at commit — NOT by a request-body cap, because the bytes
+# never reach this process. That is the whole point of the direct-to-S3 path:
+# buffering a file this size in RAM on a shared 4 GB host is not viable, and
+# the ceiling would move with the instance type rather than with the product.
+max_upload_bytes = 1073741824
+# Container allowlist. mp4 and quicktime cover every phone and camera that
+# matters; HEVC inside those containers is accepted and flagged for playback
+# rather than rejected — losing a moment the user can't re-record is worse than
+# a playback caveat (sows/activity-videos.md, Open Question 1).
+allowed_content_types = ["video/mp4", "video/quicktime"]
+# Playback URL lifetime. Matches photos so the same windowed presigner keeps
+# minting cache-stable URLs.
+presign_window_hours = 6
+# How long a reservation's upload target stays valid. Generous enough for a
+# 1 GiB upload on a slow connection without leaving signed write URLs alive.
+upload_url_ttl_minutes = 60
+# The client-generated poster, bounded server-side. Larger than the photo thumb
+# because a poster is displayed at strip size AND as the pre-play frame.
+poster_max_edge_px  = 1280
+poster_jpeg_quality = 88
+caption_max_chars   = 200
+# A reservation whose client vanished mid-upload leaves a pending row and maybe
+# an object. Older than this, the reaper soft-deletes the row and tags the
+# object for the bucket's existing lifecycle rule.
+pending_reap_after_hours = 24
 
 [usage]
 # Per-user daily external-API spend ceiling (USD). 0 = disabled. Public

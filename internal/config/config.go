@@ -134,6 +134,14 @@ type Config struct {
 	// AvatarBucketName is empty.
 	PhotoBucketName string
 
+	// VideoBucketName is the S3 bucket for user-uploaded activity videos.
+	// Empty (the default) means video storage is unconfigured: the activity
+	// video endpoints degrade (503), mirroring PhotoBucketName. Separate from
+	// the photo bucket so lifecycle, CORS, and cost are addressable on their
+	// own — videos need a CORS policy (the browser writes to S3 directly)
+	// that photos never did.
+	VideoBucketName string
+
 	// AWSRegion is the AWS region for the S3 clients, sourced from
 	// AWS_REGION (Terraform-owned). REQUIRED when any bucket is set —
 	// the SDK clients resolve their region from the same env var, and a
@@ -194,6 +202,11 @@ type Config struct {
 	// upload-size ceiling, the derivative image dimensions/quality, the
 	// presign window, and the caption length limit. See PhotosConfig.
 	Photos PhotosConfig
+
+	// Videos configures the Activity Videos feature: per-activity caps, the
+	// upload ceiling S3 enforces, the container allowlist, the presign and
+	// upload-URL windows, and the poster derivative. See VideosConfig.
+	Videos VideosConfig
 }
 
 // HRZonesConfig groups the heart-rate-zone engine tunables. All are non-secret
@@ -229,6 +242,30 @@ type PhotosConfig struct {
 	ThumbJPEGQuality   int
 	PresignWindowHours int
 	CaptionMaxChars    int
+}
+
+// VideosConfig groups the Activity Videos tunables. All are non-secret public
+// literals, mirroring PhotosConfig.
+//
+// The shape differs from photos because nothing is transcoded: there are no
+// quality or dimension knobs for the video itself, only for the client-supplied
+// poster JPEG that runs through the existing image pipeline. MaxUploadBytes is
+// enforced by S3 against the presigned upload's content-length-range and
+// re-checked by a HEAD at commit — it is NOT a request-body cap here, because
+// the bytes never reach this process. AllowedContentTypes is the container
+// allowlist. UploadURLTTLMinutes bounds how long a reservation's upload target
+// stays valid; PendingReapAfterHours is how long an unconfirmed reservation
+// survives before the reaper collects its row and tags its object.
+type VideosConfig struct {
+	MaxPerActivity        int
+	MaxUploadBytes        int64
+	AllowedContentTypes   []string
+	PresignWindowHours    int
+	UploadURLTTLMinutes   int
+	PosterMaxEdgePx       int
+	PosterJPEGQuality     int
+	CaptionMaxChars       int
+	PendingReapAfterHours int
 }
 
 // VectorMemoryConfig groups the Agent Vector Memory settings. Enabled is the
@@ -295,6 +332,7 @@ type fileConfig struct {
 		AvatarBucketName string `toml:"avatar_bucket_name"`
 		TCXBucketName    string `toml:"tcx_bucket_name"`
 		PhotoBucketName  string `toml:"photo_bucket_name"`
+		VideoBucketName  string `toml:"video_bucket_name"`
 		AWSRegion        string `toml:"aws_region"`
 	} `toml:"storage"`
 	Usage struct {
@@ -339,6 +377,17 @@ type fileConfig struct {
 		PresignWindowHours int   `toml:"presign_window_hours"`
 		CaptionMaxChars    int   `toml:"caption_max_chars"`
 	} `toml:"photos"`
+	Videos struct {
+		MaxPerActivity        int   `toml:"max_per_activity"`
+		MaxUploadBytes        int64 `toml:"max_upload_bytes"`
+		AllowedContentTypes   any   `toml:"allowed_content_types"`
+		PresignWindowHours    int   `toml:"presign_window_hours"`
+		UploadURLTTLMinutes   int   `toml:"upload_url_ttl_minutes"`
+		PosterMaxEdgePx       int   `toml:"poster_max_edge_px"`
+		PosterJPEGQuality     int   `toml:"poster_jpeg_quality"`
+		CaptionMaxChars       int   `toml:"caption_max_chars"`
+		PendingReapAfterHours int   `toml:"pending_reap_after_hours"`
+	} `toml:"videos"`
 }
 
 // toStringList normalizes a decoded list value — a native TOML array, a
@@ -426,6 +475,10 @@ func Load(defaultTOML []byte) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	videoContentTypes, err := toStringList(fc.Videos.AllowedContentTypes)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		DatabaseURL:               fc.Database.URL,
@@ -445,6 +498,7 @@ func Load(defaultTOML []byte) (Config, error) {
 		AvatarBucketName:          fc.Storage.AvatarBucketName,
 		TCXBucketName:             fc.Storage.TCXBucketName,
 		PhotoBucketName:           fc.Storage.PhotoBucketName,
+		VideoBucketName:           fc.Storage.VideoBucketName,
 		AWSRegion:                 fc.Storage.AWSRegion,
 		FatSecretClientID:         fc.NutritionLookup.FatSecretClientID,
 		FatSecretClientSecret:     fc.NutritionLookup.FatSecretClientSecret,
@@ -488,12 +542,23 @@ func Load(defaultTOML []byte) (Config, error) {
 			PresignWindowHours: fc.Photos.PresignWindowHours,
 			CaptionMaxChars:    fc.Photos.CaptionMaxChars,
 		},
+		Videos: VideosConfig{
+			MaxPerActivity:        fc.Videos.MaxPerActivity,
+			MaxUploadBytes:        fc.Videos.MaxUploadBytes,
+			AllowedContentTypes:   videoContentTypes,
+			PresignWindowHours:    fc.Videos.PresignWindowHours,
+			UploadURLTTLMinutes:   fc.Videos.UploadURLTTLMinutes,
+			PosterMaxEdgePx:       fc.Videos.PosterMaxEdgePx,
+			PosterJPEGQuality:     fc.Videos.PosterJPEGQuality,
+			CaptionMaxChars:       fc.Videos.CaptionMaxChars,
+			PendingReapAfterHours: fc.Videos.PendingReapAfterHours,
+		},
 	}
 
 	if cfg.JWTSigningKey == "" {
 		return Config{}, errors.New("config: auth.jwt_signing_key is required (set JWT_SIGNING_KEY)")
 	}
-	if (cfg.AvatarBucketName != "" || cfg.TCXBucketName != "" || cfg.PhotoBucketName != "") && cfg.AWSRegion == "" {
+	if (cfg.AvatarBucketName != "" || cfg.TCXBucketName != "" || cfg.PhotoBucketName != "" || cfg.VideoBucketName != "") && cfg.AWSRegion == "" {
 		return Config{}, errors.New("config: storage.aws_region is required when a bucket is configured (set AWS_REGION)")
 	}
 
@@ -523,6 +588,7 @@ func interpolate(fc *fileConfig) {
 	fc.Storage.AvatarBucketName = interp(fc.Storage.AvatarBucketName)
 	fc.Storage.TCXBucketName = interp(fc.Storage.TCXBucketName)
 	fc.Storage.PhotoBucketName = interp(fc.Storage.PhotoBucketName)
+	fc.Storage.VideoBucketName = interp(fc.Storage.VideoBucketName)
 	fc.Storage.AWSRegion = interp(fc.Storage.AWSRegion)
 	fc.Usage.PriceTable = interp(fc.Usage.PriceTable)
 	fc.NutritionLookup.FatSecretClientID = interp(fc.NutritionLookup.FatSecretClientID)

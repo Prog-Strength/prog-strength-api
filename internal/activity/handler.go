@@ -33,6 +33,12 @@ const (
 	listLimitMax     = 100
 )
 
+// maxNotesLength caps a session's free-text note. Long enough for a real
+// post-session reflection, short enough that one note is a single cheap
+// distillation unit for the memory pipeline. The web/mobile editors cap
+// their inputs at the same number.
+const maxNotesLength = 2000
+
 // Calibration rejects a correction factor outside these bounds to catch a
 // unit-entry mistake (miles typed as meters, etc.). Documented in the SOW;
 // tune if a real calibration legitimately exceeds them.
@@ -726,14 +732,15 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Name        *string `json:"name"`
+		Notes       *string `json:"notes"`
 		Environment *string `json:"environment"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == nil && req.Environment == nil {
-		httpresp.Error(w, http.StatusBadRequest, "name or environment is required")
+	if req.Name == nil && req.Notes == nil && req.Environment == nil {
+		httpresp.Error(w, http.StatusBadRequest, "name, notes, or environment is required")
 		return
 	}
 
@@ -755,6 +762,26 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			httpresp.ServerError(w, r.Context(), "rename activity", err)
+			return
+		}
+		updated = a
+	}
+	if req.Notes != nil {
+		// Unlike name, a blank note is legitimate — it's how the client
+		// clears one — so only the length is validated. The cap matches the
+		// editor's own maxLength.
+		notes := strings.TrimSpace(*req.Notes)
+		if len(notes) > maxNotesLength {
+			httpresp.Error(w, http.StatusBadRequest, "notes is too long")
+			return
+		}
+		a, err := h.repo.UpdateNotes(r.Context(), userID, activityID, notes)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
+				return
+			}
+			httpresp.ServerError(w, r.Context(), "update activity notes", err)
 			return
 		}
 		updated = a

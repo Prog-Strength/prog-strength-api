@@ -357,6 +357,69 @@ func TestRename(t *testing.T) {
 	}
 }
 
+// TestUpdateNotes covers the note write: it round-trips, an empty string
+// stores NULL (not ""), it bumps updated_at — the settle signal the memory
+// source keys off — and it is ownership-scoped like every other write.
+func TestUpdateNotes(t *testing.T) {
+	t.Parallel()
+	repo, _ := newRepo(t)
+	ctx := context.Background()
+
+	a := newActivity("u1", IngestManualTCX, "n1", mustTime(t, "2026-06-01T07:00:00Z"), 5000, 1500)
+	if err := repo.Create(ctx, a, []byte("x")); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Age the row so the bump is unambiguous rather than a sub-millisecond
+	// race against Create's own stamp.
+	before := mustTime(t, "2026-06-01T08:00:00Z")
+	if _, err := repo.db.ExecContext(ctx,
+		`UPDATE activities SET updated_at = ? WHERE id = ?`, before, a.ID); err != nil {
+		t.Fatalf("age row: %v", err)
+	}
+
+	got, err := repo.UpdateNotes(ctx, "u1", a.ID, "humid, backed off on purpose")
+	if err != nil {
+		t.Fatalf("UpdateNotes: %v", err)
+	}
+	if got.Notes == nil || *got.Notes != "humid, backed off on purpose" {
+		t.Fatalf("notes not updated: %v", got.Notes)
+	}
+	if after := updatedAtOf(t, repo, a.ID); !after.After(before) {
+		t.Errorf("updated_at not bumped: %v -> %v", before, after)
+	}
+
+	cleared, err := repo.UpdateNotes(ctx, "u1", a.ID, "")
+	if err != nil {
+		t.Fatalf("clear notes: %v", err)
+	}
+	if cleared.Notes != nil {
+		t.Errorf("notes = %v after clearing, want nil", *cleared.Notes)
+	}
+	var isNull bool
+	if err := repo.db.QueryRowContext(ctx,
+		`SELECT notes IS NULL FROM activities WHERE id = ?`, a.ID).Scan(&isNull); err != nil {
+		t.Fatalf("read notes column: %v", err)
+	}
+	if !isNull {
+		t.Error("cleared notes should store SQL NULL, not the empty string")
+	}
+
+	if _, err := repo.UpdateNotes(ctx, "u2", a.ID, "hax"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cross-user UpdateNotes: want ErrNotFound, got %v", err)
+	}
+}
+
+// updatedAtOf reads an activity's updated_at straight from the row, since the
+// Activity struct doesn't carry it.
+func updatedAtOf(t *testing.T, repo *SQLiteRepository, id string) time.Time {
+	t.Helper()
+	var at time.Time
+	if err := repo.db.QueryRow(`SELECT updated_at FROM activities WHERE id = ?`, id).Scan(&at); err != nil {
+		t.Fatalf("read updated_at: %v", err)
+	}
+	return at
+}
+
 // TestCalibrate_UniformScale asserts the header distance and every trackpoint
 // distance scale by the same factor, avg pace recomputes from the new
 // distance, best pace is recomputed from the rescaled trackpoints (not

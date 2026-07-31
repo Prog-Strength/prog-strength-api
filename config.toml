@@ -106,7 +106,8 @@ max_per_activity     = 10
 # 32 MiB. Covers any phone/camera JPEG or HEIC (a 24MP JPEG is ~8-12 MB, a 48MP
 # HEIC ~5-8 MB) with headroom. Deliberately not higher: uploadPhoto passes this
 # as ParseMultipartForm's maxMemory, so the whole upload buffers in RAM before
-# decode, and the host is a t4g.small (2 GB).
+# decode, and the host is a t4g.medium (4 GB) shared with MCP, the agent,
+# Caddy, Prometheus and Grafana.
 max_upload_bytes     = 33554432
 # NO DOWNSCALE. 20000 equals maxDecodeEdge in photo_pipeline.go, so nothing the
 # decoder accepts is ever resized — `resize` returns the source untouched when
@@ -140,7 +141,8 @@ max_per_activity = 10
 # 1 GiB. Enforced by S3 against the presigned upload's content-length-range and
 # re-checked by a HEAD at commit — NOT by a request-body cap, because the bytes
 # never reach this process. That is the whole point of the direct-to-S3 path:
-# a 2 GB t4g.small cannot buffer a file this size.
+# buffering a file this size in RAM on a shared 4 GB host is not viable, and
+# the ceiling would move with the instance type rather than with the product.
 max_upload_bytes = 1073741824
 # Container allowlist. mp4 and quicktime cover every phone and camera that
 # matters; HEVC inside those containers is accepted and flagged for playback

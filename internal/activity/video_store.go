@@ -37,7 +37,8 @@ var ErrObjectNotFound = errors.New("activity: object not found")
 // PhotoStore in the one way that matters: it can hand out a presigned PUT so
 // the CLIENT uploads directly to S3. Video bytes never pass through this
 // process — the photo path's io.ReadAll + Put([]byte) shape cannot carry a
-// multi-hundred-megabyte file on a 2 GB host.
+// multi-hundred-megabyte file on a host that also runs MCP, the agent, Caddy,
+// Prometheus and Grafana.
 //
 // Put remains, but only for the poster JPEG, which is small and already flows
 // through the server-authoritative image pipeline.

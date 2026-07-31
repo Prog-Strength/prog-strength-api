@@ -1569,6 +1569,168 @@ func TestGetActivity_NoHR_OmitsBlock(t *testing.T) {
 	}
 }
 
+// seedHRActivity persists an activity of actType carrying a short HR-bearing
+// trackpoint stream and returns its id. The bpm series is deliberately spread
+// across the zone boundaries of testHRZonesEngine's 190 bpm population default
+// so the breakdown lands in more than one zone.
+func seedHRActivity(t *testing.T, repo Repository, actType ActivityType, sourceID string) string {
+	t.Helper()
+	bpms := []int{100, 118, 135, 152, 172}
+	tps := make([]Trackpoint, 0, len(bpms))
+	for i, bpm := range bpms {
+		tps = append(tps, Trackpoint{Sequence: i, ElapsedSeconds: i * 60, HeartRateBpm: ptrInt(bpm)})
+	}
+	a := &Activity{
+		UserID:           testUserID,
+		ActivityType:     actType,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: sourceID,
+		StartTime:        time.Now().UTC(),
+		DurationSeconds:  240,
+		Trackpoints:      tps,
+	}
+	if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
+		t.Fatalf("seed %s: %v", actType, err)
+	}
+	return a.ID
+}
+
+// Time in zone is a property of the heart-rate stream, not of the sport: every
+// activity type carrying per-point HR gets the block. Hiking and TCX-enriched
+// strength are the two surfaces issue #131 asks for; both flow through the same
+// unified detail read as running.
+func TestGetActivity_HeartRateZones_NonRunningTypes(t *testing.T) {
+	for _, actType := range []ActivityType{ActivityHiking, ActivityStrengthTraining, ActivityWalking, ActivityCycling} {
+		t.Run(string(actType), func(t *testing.T) {
+			h, _, repo := newTestHandler(t)
+			h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+			id := seedHRActivity(t, repo, actType, "hr-"+string(actType))
+
+			get := httptest.NewRequest("GET", "/activities/"+id, nil)
+			get = withParam(get.WithContext(authctx.WithUserID(get.Context(), testUserID)), "id", id)
+			w := httptest.NewRecorder()
+			h.get(w, get)
+			if w.Code != http.StatusOK {
+				t.Fatalf("get status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+
+			var env activityEnvelope
+			if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+				t.Fatalf("decode get: %v", err)
+			}
+			hz := env.Data.HeartRateZones
+			if hz == nil {
+				t.Fatalf("expected heart_rate_zones block for %s; body=%s", actType, w.Body.String())
+				return
+			}
+			if len(hz.Zones) != 5 {
+				t.Fatalf("zones len = %d, want 5", len(hz.Zones))
+			}
+			var sum float64
+			for _, z := range hz.Zones {
+				sum += z.TimePct
+			}
+			if d := sum - 1.0; d > 1e-6 || d < -1e-6 {
+				t.Errorf("sum(time_pct) = %v, want ~1.0", sum)
+			}
+			if hz.TotalHRSeconds != 240 {
+				t.Errorf("total_hr_seconds = %d, want 240", hz.TotalHRSeconds)
+			}
+		})
+	}
+}
+
+// A hike with no HR gets no block — the gate is the data, not the type, in
+// both directions.
+func TestGetActivity_NonRunning_NoHR_OmitsBlock(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+
+	a := &Activity{
+		UserID:           testUserID,
+		ActivityType:     ActivityHiking,
+		IngestSource:     IngestManualTCX,
+		SourceActivityID: "hike-no-hr",
+		StartTime:        time.Now().UTC(),
+		DistanceMeters:   8000,
+		DurationSeconds:  5400,
+		Trackpoints: []Trackpoint{
+			{Sequence: 0, ElapsedSeconds: 0, DistanceMeters: 0},
+			{Sequence: 1, ElapsedSeconds: 60, DistanceMeters: 90},
+		},
+	}
+	if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	get := httptest.NewRequest("GET", "/activities/"+a.ID, nil)
+	get = withParam(get.WithContext(authctx.WithUserID(get.Context(), testUserID)), "id", a.ID)
+	w := httptest.NewRecorder()
+	h.get(w, get)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "heart_rate_zones") {
+		t.Errorf("expected heart_rate_zones key absent for a no-HR hike; body=%s", w.Body.String())
+	}
+}
+
+// The reference max HR stays running-derived: a lift's own low-intensity
+// samples must never be pooled into the recent-history p99. With a calibrated
+// running history the lift's zones resolve against the RUNS' reference, not
+// against its own ceiling.
+func TestGetActivity_HeartRateZones_ReferenceStaysRunningDerived(t *testing.T) {
+	h, _, repo := newTestHandler(t)
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+
+	// Enough HR-bearing runs to clear CalibratedRunThreshold (5), each topping
+	// out near 200 bpm — well above the 190 population default.
+	for i := 0; i < 6; i++ {
+		a := &Activity{
+			UserID:           testUserID,
+			ActivityType:     ActivityRunning,
+			IngestSource:     IngestManualTCX,
+			SourceActivityID: fmt.Sprintf("run-%d", i),
+			StartTime:        time.Now().UTC().Add(-time.Duration(i+1) * 24 * time.Hour),
+			DistanceMeters:   5000,
+			DurationSeconds:  1500,
+			Trackpoints: []Trackpoint{
+				{Sequence: 0, ElapsedSeconds: 0, HeartRateBpm: ptrInt(180)},
+				{Sequence: 1, ElapsedSeconds: 60, HeartRateBpm: ptrInt(200)},
+			},
+		}
+		if err := repo.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
+			t.Fatalf("seed run %d: %v", i, err)
+		}
+	}
+	// The lift tops out at 172 — if its own samples defined the reference, the
+	// top zone would sit far lower.
+	id := seedHRActivity(t, repo, ActivityStrengthTraining, "lift-hr")
+
+	get := httptest.NewRequest("GET", "/activities/"+id, nil)
+	get = withParam(get.WithContext(authctx.WithUserID(get.Context(), testUserID)), "id", id)
+	w := httptest.NewRecorder()
+	h.get(w, get)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var env activityEnvelope
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode get: %v", err)
+	}
+	hz := env.Data.HeartRateZones
+	if hz == nil {
+		t.Fatalf("expected heart_rate_zones block; body=%s", w.Body.String())
+		return
+	}
+	if hz.MaxHRReferenceBpm != 200 {
+		t.Errorf("max_hr_reference_bpm = %d, want 200 (the runs' p99, not the lift's)", hz.MaxHRReferenceBpm)
+	}
+	if hz.ReferenceConfidence != "calibrated" {
+		t.Errorf("reference_confidence = %q, want calibrated", hz.ReferenceConfidence)
+	}
+}
+
 // --- detail derived blocks (unit param, splits, strip, best pace) ---------
 
 // doGet drives the detail handler with an optional query string.

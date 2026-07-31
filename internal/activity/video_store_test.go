@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -114,7 +113,7 @@ func TestPresignPut_URLShape(t *testing.T) {
 func TestPresignGet_CarriesCacheControlOverride(t *testing.T) {
 	s := newTestVideoPresigner(t)
 	s.presign = &windowedPresigner{
-		creds:                aws.Credentials{AccessKeyID: "AKIATEST", SecretAccessKey: "secret"},
+		creds:                credentials.NewStaticCredentialsProvider("AKIATEST", "secret", ""),
 		signer:               v4.NewSigner(),
 		region:               "us-east-2",
 		bucket:               "prog-strength-activity-videos",
@@ -147,7 +146,7 @@ func TestPresignGet_CarriesCacheControlOverride(t *testing.T) {
 // at write time, so their presigner leaves the override empty.
 func TestPresignGet_PhotosHaveNoCacheControlOverride(t *testing.T) {
 	p := &windowedPresigner{
-		creds:  aws.Credentials{AccessKeyID: "AKIATEST", SecretAccessKey: "secret"},
+		creds:  credentials.NewStaticCredentialsProvider("AKIATEST", "secret", ""),
 		signer: v4.NewSigner(),
 		region: "us-east-2",
 		bucket: "prog-strength-activity-photos",

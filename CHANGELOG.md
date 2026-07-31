@@ -1,3 +1,10 @@
+# [0.90.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.89.0...v0.90.0) (2026-07-31)
+
+
+### Features
+
+* **activities:** attach videos to any activity ([#95](https://github.com/Prog-Strength/prog-strength-api/issues/95)) ([d916711](https://github.com/Prog-Strength/prog-strength-api/commit/d916711cb1006b344c1d3a657fed7d9faab186de))
+
 # [0.89.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.88.0...v0.89.0) (2026-07-31)
 
 

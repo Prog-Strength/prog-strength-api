@@ -1,3 +1,10 @@
+# [0.86.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.85.0...v0.86.0) (2026-07-31)
+
+
+### Features
+
+* activity session notes — writable notes + endurance note distillation ([#89](https://github.com/Prog-Strength/prog-strength-api/issues/89)) ([30f9302](https://github.com/Prog-Strength/prog-strength-api/commit/30f930217246c1d90b3b17e36e7dc4e4ab49a546))
+
 # [0.85.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.84.0...v0.85.0) (2026-07-30)
 
 

@@ -1,3 +1,10 @@
+## [0.90.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.0...v0.90.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **videos:** stop signing cache-control on the presigned upload ([#96](https://github.com/Prog-Strength/prog-strength-api/issues/96)) ([b3b9892](https://github.com/Prog-Strength/prog-strength-api/commit/b3b9892ac09fabf2c089d99e1677e07e8a6cf1e4))
+
 # [0.90.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.89.0...v0.90.0) (2026-07-31)
 
 

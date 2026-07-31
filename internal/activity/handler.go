@@ -84,6 +84,30 @@ type Handler struct {
 	// post-construction via SetRegistry from server wiring; no route reads
 	// it yet — the unified surface layers on next.
 	registry *Registry
+	// photoStore / photoRepo / photoCfg back the activity-photo write path
+	// (POST/PATCH/PUT/DELETE under /activities/{id}/photos). Optional and
+	// nil-safe: when either photoStore or photoRepo is nil the endpoints
+	// return 503. Injected post-construction via SetPhotoStore from server
+	// wiring, which translates config.PhotosConfig into the local
+	// PhotosConfig below so this package never imports internal/config.
+	photoStore PhotoStore
+	photoRepo  PhotoRepository
+	photoCfg   PhotosConfig
+}
+
+// PhotosConfig mirrors config.PhotosConfig for the activity photo write path.
+// It is declared here (rather than importing internal/config) so the activity
+// package stays free of a config dependency; server wiring copies the fields
+// across when it calls SetPhotoStore.
+type PhotosConfig struct {
+	MaxPerActivity     int
+	MaxUploadBytes     int64
+	FullMaxEdgePx      int
+	FullJPEGQuality    int
+	ThumbMaxEdgePx     int
+	ThumbJPEGQuality   int
+	PresignWindowHours int
+	CaptionMaxChars    int
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -118,6 +142,16 @@ func (h *Handler) SetDemographicsLoader(l DemographicsLoader) {
 // after construction, mirroring the other setters so NewHandler's signature
 // (and the tests that call it) stay untouched. Nothing consumes it yet.
 func (h *Handler) SetRegistry(reg *Registry) { h.registry = reg }
+
+// SetPhotoStore wires the object store, photo repository, and photo tunables in
+// so the activity-photo write endpoints work. Called from server wiring after
+// construction. Safe to never call — the endpoints nil-guard photoStore/photoRepo
+// and return 503 when either is unset.
+func (h *Handler) SetPhotoStore(store PhotoStore, repo PhotoRepository, cfg PhotosConfig) {
+	h.photoStore = store
+	h.photoRepo = repo
+	h.photoCfg = cfg
+}
 
 // matchSession best-effort-notifies the plan matcher that ref was logged. It
 // NEVER affects the HTTP response: a nil matcher is a no-op.
@@ -171,6 +205,12 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Patch("/{id}", h.patch)
 		r.Put("/{id}", h.updateUnified)
 		r.Delete("/{id}", h.delete)
+		// Activity photos (write path). Reads are served elsewhere; these
+		// mutate the photo set for one activity. Nil-guarded in the handlers.
+		r.Post("/{id}/photos", h.uploadPhoto)
+		r.Patch("/{id}/photos/{photo_id}", h.patchPhotoCaption)
+		r.Put("/{id}/photos/order", h.reorderPhotos)
+		r.Delete("/{id}/photos/{photo_id}", h.deletePhoto)
 		// Type-specific routes (running calibrate, strength TCX enrichment
 		// and progression) mount through the registered descriptors, wired
 		// in server.go.

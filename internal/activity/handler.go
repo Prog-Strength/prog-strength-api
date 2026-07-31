@@ -125,9 +125,10 @@ func (h *Handler) SetPublisher(p timeline.Publisher) { h.publisher = p }
 func (h *Handler) SetPlanMatcher(m PlanMatcher) { h.planMatcher = m }
 
 // SetHRZonesEngine wires the heart-rate-zone engine (and its recency window)
-// in so a running activity's detail response carries a heart_rate_zones block.
-// Called from server wiring after construction. Safe to never call — the get
-// handler nil-guards and simply omits the block when the engine is unset.
+// in so an activity's detail response carries a heart_rate_zones block whenever
+// it has per-point HR — any type, not just running. Called from server wiring
+// after construction. Safe to never call — the get handler nil-guards and
+// simply omits the block when the engine is unset.
 func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 	h.hrEngine = e
 	h.hrWindow = window
@@ -316,10 +317,10 @@ type activityDTO struct {
 	ElevationLowMeters  *float64        `json:"elevation_low_meters"`
 	CreatedAt           time.Time       `json:"created_at"`
 	Trackpoints         []trackpointDTO `json:"trackpoints,omitempty"`
-	// HeartRateZones is the percent-of-max-HR time-in-zone breakdown. Only
-	// populated on the single-activity detail path for running activities with
-	// usable HR data; omitempty drops the key otherwise (no HR / not running /
-	// engine unwired).
+	// HeartRateZones is the percent-of-max-HR time-in-zone breakdown. Populated
+	// on the single-activity detail path for ANY activity type carrying usable
+	// per-point HR — runs, hikes, and TCX-enriched lifts alike; omitempty drops
+	// the key otherwise (no HR / engine unwired).
 	HeartRateZones *heartRateZonesDTO `json:"heart_rate_zones,omitempty"`
 	// Detail-only derived blocks (omitted on list responses and non-running
 	// activities): the read-time derivation the detail page renders verbatim.

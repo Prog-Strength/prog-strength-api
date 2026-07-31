@@ -46,9 +46,9 @@ func (h *Handler) toListDTOs(ctx context.Context, userID string, activities []Ac
 }
 
 // buildDetailDTO renders the full single-activity detail shape: the base DTO
-// with trackpoints plus, for running activities, the read-time derived blocks
-// (splits, strip summary, best pace, intervals) and — when the engine is
-// wired and HR is usable — the heart_rate_zones block. Shared by the detail
+// with trackpoints plus — when the engine is wired and HR is usable — the
+// heart_rate_zones block, and, for running activities, the read-time derived
+// blocks (splits, strip summary, best pace, intervals). Shared by the detail
 // GET and the calibrate response so both return an identical shape.
 func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity, unit DistanceUnit) (activityDTO, error) {
 	dto := toActivityDTO(a, true)
@@ -58,35 +58,8 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 	if err := h.attachPhotos(ctx, userID, a.ID, &dto); err != nil {
 		return activityDTO{}, err
 	}
-	if h.hrEngine != nil && a.ActivityType == ActivityRunning {
-		tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
-		currentRunHRSamples := make([]int, 0, len(a.Trackpoints))
-		for _, tp := range a.Trackpoints {
-			tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
-			if tp.HeartRateBpm != nil {
-				currentRunHRSamples = append(currentRunHRSamples, *tp.HeartRateBpm)
-			}
-		}
-		stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
-		if err != nil {
-			return activityDTO{}, err
-		}
-		stats.CurrentRunP99 = hrzones.P99(currentRunHRSamples)
-		ref := h.hrEngine.EstimateReference(stats)
-		if res, ok := h.hrEngine.Compute(ref, tps); ok {
-			zones := make([]heartRateZoneDTO, 0, len(res.Zones))
-			for _, z := range res.Zones {
-				zones = append(zones, heartRateZoneDTO{
-					Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
-					MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
-				})
-			}
-			dto.HeartRateZones = &heartRateZonesDTO{
-				Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
-				ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
-				Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
-			}
-		}
+	if err := h.attachHeartRateZones(ctx, userID, a, &dto); err != nil {
+		return activityDTO{}, err
 	}
 	// Read-time derivation + invariant gate (running only). Violations are
 	// ERROR-logged but the response is still served: a read never 500s over
@@ -121,6 +94,63 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 		}
 	}
 	return dto, nil
+}
+
+// attachHeartRateZones fills the detail DTO's heart_rate_zones block for ANY
+// activity type that carries per-point heart rate — a run, a hike, a lift with
+// a Garmin TCX attached. Time in zone is a property of the heart-rate stream,
+// not of the sport, so the block is gated on the data (the engine being wired
+// and Compute finding at least one HR-bearing interval) rather than on
+// a.ActivityType. Activities with no HR simply leave the key absent, exactly as
+// a no-HR run always has.
+//
+// The reference max HR stays RUNNING-derived (RecentHRStats scans running rows
+// only): max HR is a property of the person, not the session, and runs are the
+// highest-intensity signal available. Pooling a lift's thousands of
+// low-intensity samples into the p99 would drag the reference down and inflate
+// every activity's zone times. A hike or lift still contributes its OWN p99 as
+// CurrentRunP99, so a maximal effort outside running can still raise a
+// cold-start reference — the same rung of the ladder a first run climbs.
+func (h *Handler) attachHeartRateZones(ctx context.Context, userID string, a Activity, dto *activityDTO) error {
+	if h.hrEngine == nil {
+		return nil
+	}
+	tps := make([]hrzones.Trackpoint, 0, len(a.Trackpoints))
+	currentHRSamples := make([]int, 0, len(a.Trackpoints))
+	for _, tp := range a.Trackpoints {
+		tps = append(tps, hrzones.Trackpoint{ElapsedSeconds: tp.ElapsedSeconds, HeartRateBpm: tp.HeartRateBpm})
+		if tp.HeartRateBpm != nil {
+			currentHRSamples = append(currentHRSamples, *tp.HeartRateBpm)
+		}
+	}
+	// No HR anywhere in the stream: skip the reference read entirely rather
+	// than paying for a trackpoint scan Compute would only reject.
+	if len(currentHRSamples) == 0 {
+		return nil
+	}
+	stats, err := h.repo.RecentHRStats(ctx, userID, h.hrWindow, a.ID)
+	if err != nil {
+		return err
+	}
+	stats.CurrentRunP99 = hrzones.P99(currentHRSamples)
+	ref := h.hrEngine.EstimateReference(stats)
+	res, ok := h.hrEngine.Compute(ref, tps)
+	if !ok {
+		return nil
+	}
+	zones := make([]heartRateZoneDTO, 0, len(res.Zones))
+	for _, z := range res.Zones {
+		zones = append(zones, heartRateZoneDTO{
+			Zone: z.Number, Name: z.Name, LowerPct: z.LowerPct, UpperPct: z.UpperPct,
+			MinBpm: z.MinBpm, MaxBpm: z.MaxBpm, TimeSeconds: z.TimeSeconds, TimePct: z.TimePct,
+		})
+	}
+	dto.HeartRateZones = &heartRateZonesDTO{
+		Model: res.Model, MaxHRReferenceBpm: res.Reference.MaxHRBpm,
+		ReferenceSource: res.Reference.Source, ReferenceConfidence: string(res.Reference.Confidence),
+		Calibrating: res.Calibrating, TotalHRSeconds: res.TotalHRSeconds, Zones: zones,
+	}
+	return nil
 }
 
 // attachTypedPayload adds the registry-driven fields to a detail-read DTO:

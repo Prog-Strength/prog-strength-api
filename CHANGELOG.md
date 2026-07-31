@@ -1,3 +1,10 @@
+# [0.88.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.87.0...v0.88.0) (2026-07-31)
+
+
+### Features
+
+* **activities:** compute heart-rate zones for every activity type ([#92](https://github.com/Prog-Strength/prog-strength-api/issues/92)) ([125c80e](https://github.com/Prog-Strength/prog-strength-api/commit/125c80e9a9bdb66ce582596ab866e816669d9f1a)), closes [Prog-Strength/prog-strength-web#131](https://github.com/Prog-Strength/prog-strength-web/issues/131)
+
 # [0.87.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.86.1...v0.87.0) (2026-07-31)
 
 

@@ -61,6 +61,9 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 	if err := h.attachHeartRateZones(ctx, userID, a, &dto); err != nil {
 		return activityDTO{}, err
 	}
+	if err := h.attachVideos(ctx, userID, a.ID, &dto); err != nil {
+		return activityDTO{}, err
+	}
 	// Read-time derivation + invariant gate (running only). Violations are
 	// ERROR-logged but the response is still served: a read never 500s over
 	// an accounting mismatch — CI fixtures assert the gate stays quiet.

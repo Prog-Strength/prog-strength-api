@@ -93,6 +93,14 @@ type Handler struct {
 	photoStore PhotoStore
 	photoRepo  PhotoRepository
 	photoCfg   PhotosConfig
+
+	// videoStore / videoRepo / videoCfg back the activity-video path. Same
+	// nil-safe contract as photos: when either is nil the video endpoints
+	// return 503 and the detail read simply omits the videos array, which is
+	// what lets api and infra ship in either order.
+	videoStore VideoStore
+	videoRepo  VideoRepository
+	videoCfg   VideosConfig
 }
 
 // PhotosConfig mirrors config.PhotosConfig for the activity photo write path.
@@ -108,6 +116,33 @@ type PhotosConfig struct {
 	ThumbJPEGQuality   int
 	PresignWindowHours int
 	CaptionMaxChars    int
+}
+
+// VideosConfig mirrors config.VideosConfig for the activity video path, for the
+// same reason PhotosConfig does: the activity package stays free of a config
+// dependency and server wiring copies the fields across.
+type VideosConfig struct {
+	MaxPerActivity        int
+	MaxUploadBytes        int64
+	AllowedContentTypes   []string
+	PresignWindowHours    int
+	UploadURLTTLMinutes   int
+	PosterMaxEdgePx       int
+	PosterJPEGQuality     int
+	CaptionMaxChars       int
+	PendingReapAfterHours int
+}
+
+// allowsContentType reports whether ct is in the configured container
+// allowlist. An empty allowlist denies everything — fail closed, so a
+// misconfigured deploy refuses uploads rather than accepting anything.
+func (c VideosConfig) allowsContentType(ct string) bool {
+	for _, allowed := range c.AllowedContentTypes {
+		if allowed == ct {
+			return true
+		}
+	}
+	return false
 }
 
 func NewHandler(repo Repository) *Handler { return &Handler{repo: repo, now: time.Now} }
@@ -152,6 +187,16 @@ func (h *Handler) SetPhotoStore(store PhotoStore, repo PhotoRepository, cfg Phot
 	h.photoStore = store
 	h.photoRepo = repo
 	h.photoCfg = cfg
+}
+
+// SetVideoStore wires the object store, video repository, and video tunables in
+// so the activity-video endpoints work. Called from server wiring after
+// construction. Safe to never call — every endpoint nil-guards and returns 503,
+// and the detail read omits the videos array entirely.
+func (h *Handler) SetVideoStore(store VideoStore, repo VideoRepository, cfg VideosConfig) {
+	h.videoStore = store
+	h.videoRepo = repo
+	h.videoCfg = cfg
 }
 
 // matchSession best-effort-notifies the plan matcher that ref was logged. It
@@ -212,6 +257,18 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Patch("/{id}/photos/{photo_id}", h.patchPhotoCaption)
 		r.Put("/{id}/photos/order", h.reorderPhotos)
 		r.Delete("/{id}/photos/{photo_id}", h.deletePhoto)
+		// Activity videos. Two-phase upload: reserve mints a presigned PUT the
+		// client uploads directly to S3, complete confirms the object and
+		// attaches the poster. Video bytes never pass through this process.
+		// Nil-guarded in the handlers, same as photos.
+		//
+		// The /order route is registered BEFORE /{video_id} so chi doesn't
+		// route a PUT of "order" into the caption/param handler.
+		r.Post("/{id}/videos", h.reserveVideo)
+		r.Post("/{id}/videos/{video_id}/complete", h.completeVideo)
+		r.Put("/{id}/videos/order", h.reorderVideos)
+		r.Patch("/{id}/videos/{video_id}", h.patchVideoCaption)
+		r.Delete("/{id}/videos/{video_id}", h.deleteVideo)
 		// Type-specific routes (running calibrate, strength TCX enrichment
 		// and progression) mount through the registered descriptors, wired
 		// in server.go.
@@ -340,6 +397,12 @@ type activityDTO struct {
 	// reads; omitted when no registry is wired or the row's type is
 	// unregistered (degrade, don't fail).
 	Summary *Summary `json:"summary,omitempty"`
+	// Videos is the activity's attached videos, newest-ordered by position.
+	// Detail-read only, and populated for EVERY activity type that has one —
+	// gated on the data, never on activity_type. Nil (key absent) when video
+	// storage is unwired, which is distinguishable from an empty array meaning
+	// "storage is on, this activity has no videos".
+	Videos *[]videoDTO `json:"videos,omitempty"`
 	// Details is the type-keyed detail payload (registry DetailStore.Load):
 	// exercises/sets + personal_records_set for strength, the detail-table
 	// fields for endurance. Present on detail reads and, for types whose

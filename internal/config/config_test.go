@@ -621,6 +621,17 @@ func TestGoldenManifest(t *testing.T) {
 			PresignWindowHours: 6,
 			CaptionMaxChars:    200,
 		},
+		Videos: VideosConfig{
+			MaxPerActivity:        10,
+			MaxUploadBytes:        1073741824,
+			AllowedContentTypes:   []string{"video/mp4", "video/quicktime"},
+			PresignWindowHours:    6,
+			UploadURLTTLMinutes:   60,
+			PosterMaxEdgePx:       1280,
+			PosterJPEGQuality:     88,
+			CaptionMaxChars:       200,
+			PendingReapAfterHours: 24,
+		},
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
@@ -688,5 +699,39 @@ func TestPhotosSectionParses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Photos, want) {
 		t.Errorf("Photos = %#v, want %#v", cfg.Photos, want)
+	}
+}
+
+// TestVideosSectionParses pins the [videos] tunables, mirroring the photos
+// test. The shape is deliberately different from photos — no per-video quality
+// or dimension knobs, because nothing is transcoded and the stored object is
+// byte-identical to the upload. AllowedContentTypes goes through toStringList,
+// so this also covers the native-TOML-array path for that field.
+func TestVideosSectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "videos-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := VideosConfig{
+		MaxPerActivity:        10,
+		MaxUploadBytes:        1073741824,
+		AllowedContentTypes:   []string{"video/mp4", "video/quicktime"},
+		PresignWindowHours:    6,
+		UploadURLTTLMinutes:   60,
+		PosterMaxEdgePx:       1280,
+		PosterJPEGQuality:     88,
+		CaptionMaxChars:       200,
+		PendingReapAfterHours: 24,
+	}
+	if !reflect.DeepEqual(cfg.Videos, want) {
+		t.Errorf("Videos = %#v, want %#v", cfg.Videos, want)
 	}
 }

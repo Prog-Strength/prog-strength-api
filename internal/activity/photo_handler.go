@@ -324,7 +324,7 @@ func (h *Handler) reorderPhotos(w http.ResponseWriter, r *http.Request) {
 
 	// The submitted list must be a permutation of the live set: same length,
 	// every submitted id live, and no duplicates.
-	if !isSamePhotoSet(liveIDs, req.PhotoIDs) {
+	if !isSameIDSet(liveIDs, req.PhotoIDs) {
 		httpresp.ErrorWithCode(w, http.StatusBadRequest, "photo_ids must list exactly the activity's photos, once each", "invalid_photo_order")
 		return
 	}
@@ -355,9 +355,9 @@ func (h *Handler) reorderPhotos(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "reordered photos", dtos)
 }
 
-// isSamePhotoSet reports whether submitted is exactly live as a set: same
+// isSameIDSet reports whether submitted is exactly live as a set: same
 // length, no duplicates in submitted, and every submitted id present in live.
-func isSamePhotoSet(live, submitted []string) bool {
+func isSameIDSet(live, submitted []string) bool {
 	if len(live) != len(submitted) {
 		return false
 	}

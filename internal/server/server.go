@@ -175,6 +175,22 @@ func New(cfg config.Config) (*Server, error) {
 		log.Println("activity: photo storage disabled (PHOTO_BUCKET_NAME unset); photo endpoints return 503")
 	}
 
+	// Activity video store. Same optional-seam shape as photos: unset bucket ⇒
+	// nil store ⇒ the video endpoints 503 and the detail read omits `videos`.
+	// A separate bucket from photos so lifecycle, CORS (the browser PUTs
+	// directly to S3 for videos), and cost are addressable independently.
+	var videoStore activity.VideoStore
+	if cfg.VideoBucketName != "" {
+		s3VideoStore, err := activity.NewS3VideoStore(context.Background(), cfg.VideoBucketName, cfg.AWSRegion, time.Duration(cfg.Videos.PresignWindowHours)*time.Hour)
+		if err != nil {
+			return nil, err
+		}
+		videoStore = s3VideoStore
+		log.Printf("activity: storing videos in s3 bucket %s", cfg.VideoBucketName)
+	} else {
+		log.Println("activity: video storage disabled (VIDEO_BUCKET_NAME unset); video endpoints return 503")
+	}
+
 	// Initialize repositories based on config.
 	var exerciseRepo exercise.Repository
 	var workoutRepo strength.Repository
@@ -242,6 +258,8 @@ func New(cfg config.Config) (*Server, error) {
 	// object store (photoStore, above) is the optional seam; the handler and
 	// timeline hydrator nil-guard on the store, not this repo.
 	photoRepo := activity.NewSQLitePhotoRepository(database)
+	// Activity video repository — same always-built plain wrapper as photoRepo.
+	videoRepo := activity.NewSQLiteVideoRepository(database)
 	nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 	timelineRepo = timeline.NewSQLiteRepository(database)
 	calendarConnRepo = calendarconn.NewSQLiteRepository(database)
@@ -588,6 +606,29 @@ func New(cfg config.Config) (*Server, error) {
 			PresignWindowHours: cfg.Photos.PresignWindowHours,
 			CaptionMaxChars:    cfg.Photos.CaptionMaxChars,
 		})
+		// Same wiring shape for videos. videoStore may be nil (bucket
+		// unconfigured); videoStorageReady() then 503s writes and omits the
+		// `videos` array on reads.
+		activityHandler.SetVideoStore(videoStore, videoRepo, activity.VideosConfig{
+			MaxPerActivity:        cfg.Videos.MaxPerActivity,
+			MaxUploadBytes:        cfg.Videos.MaxUploadBytes,
+			AllowedContentTypes:   cfg.Videos.AllowedContentTypes,
+			PresignWindowHours:    cfg.Videos.PresignWindowHours,
+			UploadURLTTLMinutes:   cfg.Videos.UploadURLTTLMinutes,
+			PosterMaxEdgePx:       cfg.Videos.PosterMaxEdgePx,
+			PosterJPEGQuality:     cfg.Videos.PosterJPEGQuality,
+			CaptionMaxChars:       cfg.Videos.CaptionMaxChars,
+			PendingReapAfterHours: cfg.Videos.PendingReapAfterHours,
+		})
+		// Startup sweep for abandoned reservations: a client that vanished
+		// mid-upload leaves a pending row and maybe an object. At single-user
+		// volume one sweep per boot is enough (SOW Open Question 4); it is
+		// best-effort and never blocks startup.
+		if n, err := activityHandler.ReapStalePendingVideos(context.Background()); err != nil {
+			log.Printf("activity: pending-video reap failed (non-fatal): %v", err)
+		} else if n > 0 {
+			log.Printf("activity: reaped %d abandoned video reservation(s)", n)
+		}
 		// The timeline hydrator renders session posts (`workout`/`run`)
 		// through the same registry's Summarize, so build it here now that the
 		// registry exists — it's used by the timeline handler mounted below.

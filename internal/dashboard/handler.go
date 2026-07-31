@@ -45,6 +45,7 @@ type Handler struct {
 	userRepo       user.Repository
 	whoopConns     whoopconn.Repository
 	whoopRecovery  whooprecovery.Repository
+	layoutRepo     Repository
 
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
@@ -63,6 +64,7 @@ func NewHandler(
 	userRepo user.Repository,
 	whoopConns whoopconn.Repository,
 	whoopRecovery whooprecovery.Repository,
+	layoutRepo Repository,
 ) *Handler {
 	return &Handler{
 		activityRepo:   activityRepo,
@@ -74,6 +76,7 @@ func NewHandler(
 		userRepo:       userRepo,
 		whoopConns:     whoopConns,
 		whoopRecovery:  whoopRecovery,
+		layoutRepo:     layoutRepo,
 		now:            time.Now,
 	}
 }
@@ -83,6 +86,7 @@ func NewHandler(
 // context and assumes it's present.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/dashboard/summary", h.summary)
+	r.Put("/dashboard/layout", h.putLayout)
 }
 
 // summary handles GET /dashboard/summary — the aggregate "command center" tile

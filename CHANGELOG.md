@@ -1,3 +1,10 @@
+# [0.91.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.2...v0.91.0) (2026-07-31)
+
+
+### Features
+
+* **whoop:** admin diagnostics surface, resync, and ingestion instrumentation ([#98](https://github.com/Prog-Strength/prog-strength-api/issues/98)) ([7e1e37f](https://github.com/Prog-Strength/prog-strength-api/commit/7e1e37f2af146390ee130592405d88ce636a8d8b))
+
 ## [0.90.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.1...v0.90.2) (2026-07-31)
 
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
@@ -25,12 +26,20 @@ type timelineHydrator struct {
 	workoutRepo  strength.Repository
 	activityRepo activity.Repository
 	registry     *activity.Registry
+	// photoRepo + photoStore decorate session cards with their activity's cover
+	// thumbnail and photo count. Both are nil-safe: when photo storage is
+	// unconfigured they are nil and session cards render without a photo
+	// (graceful degradation). The cover read is one batched query per page.
+	photoRepo  activity.PhotoRepository
+	photoStore activity.PhotoStore
 }
 
 // newTimelineHydrator builds the adapter over the workout + activity repos and
 // the type registry (whose descriptors' Summarize renders the session cards).
-func newTimelineHydrator(workoutRepo strength.Repository, activityRepo activity.Repository, registry *activity.Registry) *timelineHydrator {
-	return &timelineHydrator{workoutRepo: workoutRepo, activityRepo: activityRepo, registry: registry}
+// photoRepo + photoStore are the activity-photos seam for cover decoration and
+// may both be nil when photo storage is unconfigured (cards render photoless).
+func newTimelineHydrator(workoutRepo strength.Repository, activityRepo activity.Repository, registry *activity.Registry, photoRepo activity.PhotoRepository, photoStore activity.PhotoStore) *timelineHydrator {
+	return &timelineHydrator{workoutRepo: workoutRepo, activityRepo: activityRepo, registry: registry, photoRepo: photoRepo, photoStore: photoStore}
 }
 
 var _ timeline.SourceHydrator = (*timelineHydrator)(nil)
@@ -107,20 +116,57 @@ func (h *timelineHydrator) hydrateActivities(ctx context.Context, refs []timelin
 	// summarize off the joined base row, so one render over the merged authors
 	// is correct.
 	summaries := activity.RenderSummaries(ctx, h.registry, "", activities)
+
+	// One batched cover-photo read for the whole page's renderable session ids
+	// (the DB "one query per page" the SOW requires). A cover-load failure must
+	// never blank the feed, so it degrades to photoless cards with a log line.
+	rendered := make([]timeline.PostRef, 0, len(refs))
+	ids := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		s, ok := summaries[ref.SourceID]
-		if !ok {
+		if _, ok := summaries[ref.SourceID]; !ok {
 			// Source gone (deleted/not found) or unrenderable: omit.
 			continue
 		}
+		rendered = append(rendered, ref)
+		ids = append(ids, ref.SourceID)
+	}
+	var covers map[string]activity.PhotoCover
+	if h.photoRepo != nil && h.photoStore != nil && len(ids) > 0 {
+		c, err := h.photoRepo.CoverPhotosByActivityIDs(ctx, ids)
+		if err != nil {
+			// A photo hiccup shouldn't blank the feed — log and render photoless.
+			log.Printf("timeline: cover photo load failed for %d session ids: %v — rendering without photos", len(ids), err)
+		} else {
+			covers = c
+		}
+	}
+
+	for _, ref := range rendered {
+		s := summaries[ref.SourceID]
 		activityType := typeByID[ref.SourceID]
-		out[ref] = timeline.PostContent{
+		content := timeline.PostContent{
 			Title:        s.Title,
 			Subtitle:     s.Subtitle,
 			Metrics:      s.Metrics,
 			Href:         activityHref(activityType),
 			ActivityType: string(activityType),
 		}
+		if cover, ok := covers[ref.SourceID]; ok {
+			// Presign is local HMAC (cheap); per-cover presigning is fine — the
+			// SOW's "one query per page" is the DB read above.
+			thumbURL, err := h.photoStore.PresignGet(ctx, cover.Cover.ThumbS3Key)
+			if err != nil {
+				log.Printf("timeline: presign cover thumb for activity %s failed: %v — rendering without photo", ref.SourceID, err)
+			} else {
+				content.Photo = &timeline.PostPhoto{
+					ThumbURL: thumbURL,
+					Width:    cover.Cover.Width,
+					Height:   cover.Cover.Height,
+				}
+				content.PhotoCount = cover.Count
+			}
+		}
+		out[ref] = content
 	}
 	return nil
 }

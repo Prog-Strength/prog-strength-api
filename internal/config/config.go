@@ -128,8 +128,14 @@ type Config struct {
 	// by a stray os.Getenv in internal/server; now folded into Config.
 	TCXBucketName string
 
+	// PhotoBucketName is the S3 bucket for user-uploaded activity photos.
+	// Empty (the default) means photo storage is unconfigured: the activity
+	// photo endpoints degrade (503) exactly as the avatar surface does when
+	// AvatarBucketName is empty.
+	PhotoBucketName string
+
 	// AWSRegion is the AWS region for the S3 clients, sourced from
-	// AWS_REGION (Terraform-owned). REQUIRED when either bucket is set —
+	// AWS_REGION (Terraform-owned). REQUIRED when any bucket is set —
 	// the SDK clients resolve their region from the same env var, and a
 	// configured bucket with no region fails endpoint resolution at the
 	// first request. Validated at startup so the failure is loud and early.
@@ -183,6 +189,11 @@ type Config struct {
 	// (sows/running-heart-rate-zones.md): the reference-max-HR estimation
 	// tunables and the five-zone percent-of-max model. See HRZonesConfig.
 	HRZones HRZonesConfig
+
+	// Photos configures the Activity Photos feature: per-activity caps, the
+	// upload-size ceiling, the derivative image dimensions/quality, the
+	// presign window, and the caption length limit. See PhotosConfig.
+	Photos PhotosConfig
 }
 
 // HRZonesConfig groups the heart-rate-zone engine tunables. All are non-secret
@@ -200,6 +211,24 @@ type HRZonesConfig struct {
 	MaxReferenceBpm        int
 	ZoneUpperBounds        []float64
 	ZoneNames              []string
+}
+
+// PhotosConfig groups the Activity Photos tunables. All are non-secret public
+// literals (no ${VAR} interpolation, no env override): MaxPerActivity caps how
+// many photos an activity may carry, MaxUploadBytes is the raw-upload size
+// ceiling, FullMaxEdgePx/FullJPEGQuality and ThumbMaxEdgePx/ThumbJPEGQuality
+// define the two derived (full + thumbnail) JPEG renditions, PresignWindowHours
+// is the lifetime of a generated presigned URL, and CaptionMaxChars bounds a
+// caption's length.
+type PhotosConfig struct {
+	MaxPerActivity     int
+	MaxUploadBytes     int64
+	FullMaxEdgePx      int
+	FullJPEGQuality    int
+	ThumbMaxEdgePx     int
+	ThumbJPEGQuality   int
+	PresignWindowHours int
+	CaptionMaxChars    int
 }
 
 // VectorMemoryConfig groups the Agent Vector Memory settings. Enabled is the
@@ -265,6 +294,7 @@ type fileConfig struct {
 	Storage struct {
 		AvatarBucketName string `toml:"avatar_bucket_name"`
 		TCXBucketName    string `toml:"tcx_bucket_name"`
+		PhotoBucketName  string `toml:"photo_bucket_name"`
 		AWSRegion        string `toml:"aws_region"`
 	} `toml:"storage"`
 	Usage struct {
@@ -299,6 +329,16 @@ type fileConfig struct {
 		ZoneUpperBounds        []float64 `toml:"zone_upper_bounds"`
 		ZoneNames              []string  `toml:"zone_names"`
 	} `toml:"hr_zones"`
+	Photos struct {
+		MaxPerActivity     int   `toml:"max_per_activity"`
+		MaxUploadBytes     int64 `toml:"max_upload_bytes"`
+		FullMaxEdgePx      int   `toml:"full_max_edge_px"`
+		FullJPEGQuality    int   `toml:"full_jpeg_quality"`
+		ThumbMaxEdgePx     int   `toml:"thumb_max_edge_px"`
+		ThumbJPEGQuality   int   `toml:"thumb_jpeg_quality"`
+		PresignWindowHours int   `toml:"presign_window_hours"`
+		CaptionMaxChars    int   `toml:"caption_max_chars"`
+	} `toml:"photos"`
 }
 
 // toStringList normalizes a decoded list value — a native TOML array, a
@@ -404,6 +444,7 @@ func Load(defaultTOML []byte) (Config, error) {
 		AdminEmails:               splitCSV(fc.Auth.AdminEmails),
 		AvatarBucketName:          fc.Storage.AvatarBucketName,
 		TCXBucketName:             fc.Storage.TCXBucketName,
+		PhotoBucketName:           fc.Storage.PhotoBucketName,
 		AWSRegion:                 fc.Storage.AWSRegion,
 		FatSecretClientID:         fc.NutritionLookup.FatSecretClientID,
 		FatSecretClientSecret:     fc.NutritionLookup.FatSecretClientSecret,
@@ -437,12 +478,22 @@ func Load(defaultTOML []byte) (Config, error) {
 			ZoneUpperBounds:        fc.HRZones.ZoneUpperBounds,
 			ZoneNames:              fc.HRZones.ZoneNames,
 		},
+		Photos: PhotosConfig{
+			MaxPerActivity:     fc.Photos.MaxPerActivity,
+			MaxUploadBytes:     fc.Photos.MaxUploadBytes,
+			FullMaxEdgePx:      fc.Photos.FullMaxEdgePx,
+			FullJPEGQuality:    fc.Photos.FullJPEGQuality,
+			ThumbMaxEdgePx:     fc.Photos.ThumbMaxEdgePx,
+			ThumbJPEGQuality:   fc.Photos.ThumbJPEGQuality,
+			PresignWindowHours: fc.Photos.PresignWindowHours,
+			CaptionMaxChars:    fc.Photos.CaptionMaxChars,
+		},
 	}
 
 	if cfg.JWTSigningKey == "" {
 		return Config{}, errors.New("config: auth.jwt_signing_key is required (set JWT_SIGNING_KEY)")
 	}
-	if (cfg.AvatarBucketName != "" || cfg.TCXBucketName != "") && cfg.AWSRegion == "" {
+	if (cfg.AvatarBucketName != "" || cfg.TCXBucketName != "" || cfg.PhotoBucketName != "") && cfg.AWSRegion == "" {
 		return Config{}, errors.New("config: storage.aws_region is required when a bucket is configured (set AWS_REGION)")
 	}
 
@@ -471,6 +522,7 @@ func interpolate(fc *fileConfig) {
 	fc.Whoop.TokenEncKey = interp(fc.Whoop.TokenEncKey)
 	fc.Storage.AvatarBucketName = interp(fc.Storage.AvatarBucketName)
 	fc.Storage.TCXBucketName = interp(fc.Storage.TCXBucketName)
+	fc.Storage.PhotoBucketName = interp(fc.Storage.PhotoBucketName)
 	fc.Storage.AWSRegion = interp(fc.Storage.AWSRegion)
 	fc.Usage.PriceTable = interp(fc.Usage.PriceTable)
 	fc.NutritionLookup.FatSecretClientID = interp(fc.NutritionLookup.FatSecretClientID)

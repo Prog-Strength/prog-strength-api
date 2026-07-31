@@ -156,6 +156,25 @@ func New(cfg config.Config) (*Server, error) {
 		log.Println("user: avatar storage disabled (AVATAR_BUCKET_NAME unset); /me/avatar returns 503")
 	}
 
+	// Activity photo store. When PHOTO_BUCKET_NAME is set we presign/put to S3
+	// (prod); otherwise the store is nil and the activity handler nil-guards:
+	// the photo write endpoints return 503 and reads omit photos — graceful
+	// degradation (SOW). The repository (a plain DB wrapper) is always built,
+	// but later, once the *sql.DB exists; only the object store is optional
+	// here. A configured-but-broken bucket is a loud startup error, same scope
+	// as the avatar/TCX AWS init.
+	var photoStore activity.PhotoStore
+	if cfg.PhotoBucketName != "" {
+		s3PhotoStore, err := activity.NewS3PhotoStore(context.Background(), cfg.PhotoBucketName, cfg.AWSRegion, time.Duration(cfg.Photos.PresignWindowHours)*time.Hour)
+		if err != nil {
+			return nil, err
+		}
+		photoStore = s3PhotoStore
+		log.Printf("activity: storing photos in s3 bucket %s", cfg.PhotoBucketName)
+	} else {
+		log.Println("activity: photo storage disabled (PHOTO_BUCKET_NAME unset); photo endpoints return 503")
+	}
+
 	// Initialize repositories based on config.
 	var exerciseRepo exercise.Repository
 	var workoutRepo strength.Repository
@@ -219,6 +238,10 @@ func New(cfg config.Config) (*Server, error) {
 	chatSQLiteRepo := chat.NewSQLiteRepository(database)
 	chatRepo = chatSQLiteRepo
 	activityRepo = activity.NewSQLiteRepository(database, activityArchiver)
+	// Activity photo repository — a plain *sql.DB wrapper, always built. The
+	// object store (photoStore, above) is the optional seam; the handler and
+	// timeline hydrator nil-guard on the store, not this repo.
+	photoRepo := activity.NewSQLitePhotoRepository(database)
 	nutritionLookupRepo = nutritionlookup.NewSQLiteRepository(database)
 	timelineRepo = timeline.NewSQLiteRepository(database)
 	calendarConnRepo = calendarconn.NewSQLiteRepository(database)
@@ -550,10 +573,25 @@ func New(cfg config.Config) (*Server, error) {
 			strengthDesc,
 		)
 		activityHandler.SetRegistry(activityRegistry)
+		// Wire the photo store, repository, and tunables in. photoStore may be
+		// nil (bucket unconfigured); the handler's photoStorageReady() guard
+		// then returns 503 for writes and omits photos on reads. The config →
+		// activity PhotosConfig copy keeps the activity package free of a config
+		// dependency.
+		activityHandler.SetPhotoStore(photoStore, photoRepo, activity.PhotosConfig{
+			MaxPerActivity:     cfg.Photos.MaxPerActivity,
+			MaxUploadBytes:     cfg.Photos.MaxUploadBytes,
+			FullMaxEdgePx:      cfg.Photos.FullMaxEdgePx,
+			FullJPEGQuality:    cfg.Photos.FullJPEGQuality,
+			ThumbMaxEdgePx:     cfg.Photos.ThumbMaxEdgePx,
+			ThumbJPEGQuality:   cfg.Photos.ThumbJPEGQuality,
+			PresignWindowHours: cfg.Photos.PresignWindowHours,
+			CaptionMaxChars:    cfg.Photos.CaptionMaxChars,
+		})
 		// The timeline hydrator renders session posts (`workout`/`run`)
 		// through the same registry's Summarize, so build it here now that the
 		// registry exists — it's used by the timeline handler mounted below.
-		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry)
+		timelineHydrator := newTimelineHydrator(workoutRepo, activityRepo, activityRegistry, photoRepo, photoStore)
 		// Heart-rate-zone engine: tunables come from the [hr_zones] config
 		// section; the recency window for the reference-max-HR estimate is
 		// derived from recency_window_days.

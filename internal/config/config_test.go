@@ -51,7 +51,7 @@ var configEnvVars = []string{
 	"CALENDAR_TOKEN_ENC_KEY",
 	"WHOOP_CLIENT_ID", "WHOOP_CLIENT_SECRET", "WHOOP_REDIRECT_URL",
 	"WHOOP_TOKEN_ENC_KEY",
-	"AVATAR_BUCKET_NAME", "TCX_BUCKET_NAME", "AWS_REGION",
+	"AVATAR_BUCKET_NAME", "TCX_BUCKET_NAME", "PHOTO_BUCKET_NAME", "AWS_REGION",
 	"FATSECRET_CLIENT_ID", "FATSECRET_CLIENT_SECRET", "USDA_FDC_API_KEY",
 	"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
 }
@@ -127,13 +127,15 @@ client_id = "${GOOGLE_CLIENT_ID}"
 
 [storage]
 tcx_bucket_name = "${TCX_BUCKET_NAME}"
+photo_bucket_name = "${PHOTO_BUCKET_NAME}"
 aws_region = "${AWS_REGION}"
 `
 	cfg := load(t, toml, map[string]string{
-		"JWT_SIGNING_KEY":  "from-env",
-		"GOOGLE_CLIENT_ID": "client-123",
-		"TCX_BUCKET_NAME":  "tcx-bucket",
-		"AWS_REGION":       "us-east-2",
+		"JWT_SIGNING_KEY":   "from-env",
+		"GOOGLE_CLIENT_ID":  "client-123",
+		"TCX_BUCKET_NAME":   "tcx-bucket",
+		"PHOTO_BUCKET_NAME": "photo-bucket",
+		"AWS_REGION":        "us-east-2",
 	})
 
 	if cfg.JWTSigningKey != "from-env" {
@@ -145,8 +147,30 @@ aws_region = "${AWS_REGION}"
 	if cfg.TCXBucketName != "tcx-bucket" {
 		t.Errorf("TCXBucketName = %q, want tcx-bucket", cfg.TCXBucketName)
 	}
+	if cfg.PhotoBucketName != "photo-bucket" {
+		t.Errorf("PhotoBucketName = %q, want photo-bucket", cfg.PhotoBucketName)
+	}
 	if cfg.AWSRegion != "us-east-2" {
 		t.Errorf("AWSRegion = %q, want us-east-2", cfg.AWSRegion)
+	}
+}
+
+// TestPhotoBucketInterpolationUnsetIsEmpty pins that an unset PHOTO_BUCKET_NAME
+// leaves PhotoBucketName empty (unconfigured), mirroring the other ${VAR}
+// storage fields.
+func TestPhotoBucketInterpolationUnsetIsEmpty(t *testing.T) {
+	toml := `
+[auth]
+jwt_signing_key = "x"
+
+[storage]
+photo_bucket_name = "${PHOTO_BUCKET_NAME}"
+`
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "x")
+	cfg := load(t, toml, nil)
+	if cfg.PhotoBucketName != "" {
+		t.Errorf("PhotoBucketName = %q, want empty (unset)", cfg.PhotoBucketName)
 	}
 }
 
@@ -320,6 +344,20 @@ aws_region = "us-east-2"
 `
 	if err := loadErr(t, withBucketAndRegion, nil); err != nil {
 		t.Errorf("Load() error = %v, want nil when region set", err)
+	}
+
+	photoBucketNoRegion := `
+[auth]
+jwt_signing_key = "x"
+
+[storage]
+photo_bucket_name = "photos"
+aws_region = ""
+`
+	if err := loadErr(t, photoBucketNoRegion, nil); err == nil {
+		t.Fatal("Load() error = nil, want aws_region required error for photo bucket")
+	} else if !strings.Contains(err.Error(), "aws_region") {
+		t.Errorf("error = %v, want mention of aws_region", err)
 	}
 
 	noBucketNoRegion := `
@@ -539,6 +577,7 @@ func TestGoldenManifest(t *testing.T) {
 		AdminEmails:           nil,
 		AvatarBucketName:      "",
 		TCXBucketName:         "",
+		PhotoBucketName:       "",
 		AWSRegion:             "",
 		FatSecretClientID:     "",
 		FatSecretClientSecret: "",
@@ -571,6 +610,16 @@ func TestGoldenManifest(t *testing.T) {
 			MaxReferenceBpm:        230,
 			ZoneUpperBounds:        []float64{0.60, 0.70, 0.80, 0.90},
 			ZoneNames:              []string{"Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"},
+		},
+		Photos: PhotosConfig{
+			MaxPerActivity:     10,
+			MaxUploadBytes:     12582912,
+			FullMaxEdgePx:      2048,
+			FullJPEGQuality:    82,
+			ThumbMaxEdgePx:     480,
+			ThumbJPEGQuality:   78,
+			PresignWindowHours: 6,
+			CaptionMaxChars:    200,
 		},
 	}
 
@@ -607,5 +656,37 @@ func TestHRZonesSectionParses(t *testing.T) {
 	}
 	if len(cfg.HRZones.ZoneNames) != 5 || cfg.HRZones.ZoneNames[4] != "VO2max" {
 		t.Errorf("ZoneNames = %#v, want [...]/[4]==VO2max", cfg.HRZones.ZoneNames)
+	}
+}
+
+// TestPhotosSectionParses pins the [photos] tunables: the committed manifest
+// decodes into the typed PhotosConfig the Activity Photos feature consumes.
+// These are plain literals (no ${VAR} interpolation, no env override), so a
+// direct Load of the golden config is the assertion surface.
+func TestPhotosSectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "photos-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := PhotosConfig{
+		MaxPerActivity:     10,
+		MaxUploadBytes:     12582912,
+		FullMaxEdgePx:      2048,
+		FullJPEGQuality:    82,
+		ThumbMaxEdgePx:     480,
+		ThumbJPEGQuality:   78,
+		PresignWindowHours: 6,
+		CaptionMaxChars:    200,
+	}
+	if !reflect.DeepEqual(cfg.Photos, want) {
+		t.Errorf("Photos = %#v, want %#v", cfg.Photos, want)
 	}
 }

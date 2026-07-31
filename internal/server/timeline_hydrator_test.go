@@ -157,7 +157,7 @@ func TestHydrate_PerSourceContent(t *testing.T) {
 		},
 	}
 
-	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
@@ -238,7 +238,7 @@ func TestHydrate_OmitsMissingSources(t *testing.T) {
 	now := time.Now().UTC()
 	wRepo := &fakeWorkoutRepo{exercises: map[string][]strength.WorkoutExercise{}, prEvents: map[string]strength.PersonalRecordEvent{}}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "gone-lift", OccurredAt: now},
@@ -266,7 +266,7 @@ func TestHydrate_PRsBatchedNoNPlusOne(t *testing.T) {
 		},
 	}
 	aRepo := &fakeActivityRepo{activities: map[string]*activity.Activity{}}
-	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "pr1", OccurredAt: now},
@@ -305,7 +305,7 @@ func TestHydrate_NonRunningEnduranceType(t *testing.T) {
 			},
 		},
 	}
-	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
 
 	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "h1", OccurredAt: now}
 	got, err := h.Hydrate(context.Background(), []timeline.PostRef{ref})
@@ -342,7 +342,7 @@ func TestHydrate_UnmappedTypeGetsOverviewHref(t *testing.T) {
 		activity.NewEnduranceDescriptor(activity.ActivityCycling, nil),
 		strength.NewDescriptor(wRepo),
 	)
-	h := newTimelineHydrator(wRepo, aRepo, registry)
+	h := newTimelineHydrator(wRepo, aRepo, registry, nil, nil)
 
 	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "c1", OccurredAt: now}
 	got, err := h.Hydrate(context.Background(), []timeline.PostRef{ref})
@@ -381,7 +381,7 @@ func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
 			"a2": {ID: "a2", UserID: "u2", ActivityType: activity.ActivityRunning, Name: strptr("U2 run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
 		},
 	}
-	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo))
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
 
 	refs := []timeline.PostRef{
 		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
@@ -411,5 +411,144 @@ func TestHydrate_SessionsBatchedPerAuthor(t *testing.T) {
 	// exactly one bulk PR-event query per page — never per post.
 	if wRepo.listPREventsByWkCall != 1 {
 		t.Errorf("ListPersonalRecordEventsByWorkouts called %d times, want 1 (one per type across the page)", wRepo.listPREventsByWkCall)
+	}
+}
+
+// --- cover-photo fakes -------------------------------------------------
+
+// fakePhotoRepo embeds activity.PhotoRepository (so unused methods panic) and
+// implements only CoverPhotosByActivityIDs, counting calls so the test can pin
+// the "one cover query per page" contract. covers maps an activity id to the
+// cover it should return; ids absent from the map have no photo.
+type fakePhotoRepo struct {
+	activity.PhotoRepository
+	covers    map[string]activity.PhotoCover
+	coverCall int
+}
+
+func (f *fakePhotoRepo) CoverPhotosByActivityIDs(_ context.Context, activityIDs []string) (map[string]activity.PhotoCover, error) {
+	f.coverCall++
+	out := make(map[string]activity.PhotoCover, len(activityIDs))
+	for _, id := range activityIDs {
+		if c, ok := f.covers[id]; ok {
+			out[id] = c
+		}
+	}
+	return out, nil
+}
+
+// fakePhotoStore implements activity.PhotoStore with a deterministic presigned
+// URL so the test can assert the thumb URL that lands on a card.
+type fakePhotoStore struct {
+	activity.PhotoStore
+}
+
+func (f *fakePhotoStore) PresignGet(_ context.Context, key string) (string, error) {
+	return "https://cdn.test/" + key, nil
+}
+
+// TestHydrate_SessionCoverPhotosBatched pins the cover decoration: a page of N
+// session posts issues EXACTLY ONE cover query (the batched DB read), and the
+// presigned thumb URL + live count land on the correct session refs. Sessions
+// with no cover render photoless; PR/best-effort refs never carry a cover.
+func TestHydrate_SessionCoverPhotosBatched(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	sets := []strength.Set{{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds}}
+	wRepo := &fakeWorkoutRepo{
+		exercises: map[string][]strength.WorkoutExercise{
+			"w1": {{ExerciseID: "bench", Sets: sets}},
+		},
+		prEvents: map[string]strength.PersonalRecordEvent{
+			"pr1": {ID: "pr1", UserID: "u1", ExerciseID: "bench", Weight: 305, Reps: 3, Unit: user.WeightUnitPounds, AchievedAt: now},
+		},
+	}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"w1": {ID: "w1", UserID: "u1", ActivityType: activity.ActivityStrengthTraining, Name: strptr("Push day")},
+			"a1": {ID: "a1", UserID: "u1", ActivityType: activity.ActivityRunning, Name: strptr("Morning run"), DistanceMeters: 8046.72, DurationSeconds: 2472},
+		},
+	}
+	pRepo := &fakePhotoRepo{
+		covers: map[string]activity.PhotoCover{
+			// w1 has a 2-photo cover; a1 has no photos (absent from the map).
+			"w1": {Cover: activity.ActivityPhoto{ThumbS3Key: "thumbs/w1.jpg", Width: 640, Height: 480}, Count: 2},
+		},
+	}
+	pStore := &fakePhotoStore{}
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), pRepo, pStore)
+
+	refs := []timeline.PostRef{
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "a1", OccurredAt: now},
+		{UserID: "u1", SourceType: timeline.SourcePR, SourceID: "pr1", OccurredAt: now},
+	}
+	got, err := h.Hydrate(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+
+	// EXACTLY one cover query for the whole page.
+	if pRepo.coverCall != 1 {
+		t.Errorf("CoverPhotosByActivityIDs called %d times, want 1 (one per page)", pRepo.coverCall)
+	}
+
+	// w1 carries the presigned cover + count.
+	wc := got[refs[0]]
+	if wc.Photo == nil {
+		t.Fatalf("workout ref missing cover photo")
+	}
+	if wc.Photo.ThumbURL != "https://cdn.test/thumbs/w1.jpg" {
+		t.Errorf("workout thumb_url = %q, want https://cdn.test/thumbs/w1.jpg", wc.Photo.ThumbURL)
+	}
+	if wc.Photo.Width != 640 || wc.Photo.Height != 480 {
+		t.Errorf("workout photo dims = %dx%d, want 640x480", wc.Photo.Width, wc.Photo.Height)
+	}
+	if wc.PhotoCount != 2 {
+		t.Errorf("workout photo_count = %d, want 2", wc.PhotoCount)
+	}
+
+	// a1 (run) has no cover — photoless, count 0.
+	rc := got[refs[1]]
+	if rc.Photo != nil {
+		t.Errorf("run ref should have no cover photo, got %+v", rc.Photo)
+	}
+	if rc.PhotoCount != 0 {
+		t.Errorf("run photo_count = %d, want 0", rc.PhotoCount)
+	}
+
+	// PR ref is not a session — never carries a cover.
+	pc := got[refs[2]]
+	if pc.Photo != nil || pc.PhotoCount != 0 {
+		t.Errorf("pr ref should carry no cover, got photo=%+v count=%d", pc.Photo, pc.PhotoCount)
+	}
+}
+
+// TestHydrate_SessionCoverPhotosNilSeam confirms graceful degradation: with a
+// nil photo repo/store the session cards render photoless and no cover query is
+// attempted (the seam is skipped entirely).
+func TestHydrate_SessionCoverPhotosNilSeam(t *testing.T) {
+	now := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	sets := []strength.Set{{Reps: 5, Weight: 100, Unit: user.WeightUnitPounds}}
+	wRepo := &fakeWorkoutRepo{
+		exercises: map[string][]strength.WorkoutExercise{"w1": {{ExerciseID: "bench", Sets: sets}}},
+		prEvents:  map[string]strength.PersonalRecordEvent{},
+	}
+	aRepo := &fakeActivityRepo{
+		activities: map[string]*activity.Activity{
+			"w1": {ID: "w1", UserID: "u1", ActivityType: activity.ActivityStrengthTraining, Name: strptr("Push day")},
+		},
+	}
+	h := newTimelineHydrator(wRepo, aRepo, testRegistry(wRepo), nil, nil)
+
+	refs := []timeline.PostRef{
+		{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: now},
+	}
+	got, err := h.Hydrate(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("Hydrate: %v", err)
+	}
+	wc := got[refs[0]]
+	if wc.Photo != nil || wc.PhotoCount != 0 {
+		t.Errorf("nil photo seam should render photoless, got photo=%+v count=%d", wc.Photo, wc.PhotoCount)
 	}
 }

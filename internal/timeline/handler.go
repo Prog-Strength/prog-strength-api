@@ -139,10 +139,21 @@ func decodeCursor(token string) (Cursor, error) {
 // always a non-nil slice so it serializes as [] (not null) for a source with
 // no chips.
 type contentDTO struct {
-	Title    string   `json:"title"`
-	Subtitle string   `json:"subtitle"`
-	Metrics  []string `json:"metrics"`
-	Href     string   `json:"href"`
+	Title      string         `json:"title"`
+	Subtitle   string         `json:"subtitle"`
+	Metrics    []string       `json:"metrics"`
+	Href       string         `json:"href"`
+	Photo      *photoCoverDTO `json:"photo"`       // nullable object, always present as key (null when no photo)
+	PhotoCount int            `json:"photo_count"` // total live photo count on the source (0 when none)
+}
+
+// photoCoverDTO is a session card's cover thumbnail on the wire: a presigned
+// thumb URL plus its intrinsic pixel dimensions. It is nil (serialized null)
+// for a source with no photo.
+type photoCoverDTO struct {
+	ThumbURL string `json:"thumb_url"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
 }
 
 // reactionsDTO is the per-post reaction aggregate. summary maps reaction type
@@ -208,11 +219,21 @@ func toContentDTO(c PostContent) contentDTO {
 	if metrics == nil {
 		metrics = []string{}
 	}
+	var photo *photoCoverDTO
+	if c.Photo != nil {
+		photo = &photoCoverDTO{
+			ThumbURL: c.Photo.ThumbURL,
+			Width:    c.Photo.Width,
+			Height:   c.Photo.Height,
+		}
+	}
 	return contentDTO{
-		Title:    c.Title,
-		Subtitle: c.Subtitle,
-		Metrics:  metrics,
-		Href:     c.Href,
+		Title:      c.Title,
+		Subtitle:   c.Subtitle,
+		Metrics:    metrics,
+		Href:       c.Href,
+		Photo:      photo,
+		PhotoCount: c.PhotoCount,
 	}
 }
 

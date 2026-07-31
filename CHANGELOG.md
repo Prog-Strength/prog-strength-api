@@ -1,3 +1,10 @@
+## [0.90.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.1...v0.90.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **activities:** resolve S3 credentials per presign, not once at startup ([#97](https://github.com/Prog-Strength/prog-strength-api/issues/97)) ([c6e1f70](https://github.com/Prog-Strength/prog-strength-api/commit/c6e1f70a2239376e34138d1dcd49982f3495079a))
+
 ## [0.90.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.0...v0.90.1) (2026-07-31)
 
 

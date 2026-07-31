@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
@@ -63,6 +65,8 @@ func TestDeriveDate(t *testing.T) {
 type fakeAPI struct {
 	recoveries []Recovery
 	cycles     []Cycle
+	recErr     error // if set, Recoveries returns it (simulates a WHOOP fetch failure)
+	cycErr     error // if set, Cycles returns it
 	lastToken  string
 	calls      int32
 	orderTick  *int32 // shared monotonic counter
@@ -74,11 +78,17 @@ func (f *fakeAPI) Recoveries(_ context.Context, accessToken string, _, _ time.Ti
 		f.firstOrder = atomic.AddInt32(f.orderTick, 1)
 	}
 	f.lastToken = accessToken
+	if f.recErr != nil {
+		return nil, f.recErr
+	}
 	return f.recoveries, nil
 }
 
 func (f *fakeAPI) Cycles(_ context.Context, accessToken string, _, _ time.Time, _ int) ([]Cycle, error) {
 	f.lastToken = accessToken
+	if f.cycErr != nil {
+		return nil, f.cycErr
+	}
 	return f.cycles, nil
 }
 
@@ -420,5 +430,96 @@ func TestSyncWindow_DatesByScoredAtNotCycleStart(t *testing.T) {
 	}
 	if got[0].Date != "2026-01-16" {
 		t.Fatalf("date = %q (cycle-start day?), want 2026-01-16 (the day the user woke up with this recovery)", got[0].Date)
+	}
+}
+
+// --- SyncSince (admin resync) -----------------------------------------------
+
+// TestSyncSince_LabelsAdminResync pins the deliberate metric label: an operator
+// resync must increment {admin_resync, ok}, NOT {window, ok}, so it does not
+// mask the dead-ingestion alert that watches organic window syncs.
+func TestSyncSince_LabelsAdminResync(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", now.Add(time.Hour), now)
+
+	api := &fakeAPI{
+		cycles: []Cycle{
+			{ID: 1, Start: "2026-01-15T12:00:00Z", TimezoneOffset: "-08:00"},
+			{ID: 2, Start: "2026-01-16T12:00:00Z", TimezoneOffset: "-08:00"},
+		},
+		recoveries: []Recovery{
+			{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}},
+			{CycleID: 2, SleepID: "s2", CreatedAt: "2026-01-16T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}},
+		},
+	}
+	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
+
+	adminBefore := testutil.ToFloat64(syncsTotal.WithLabelValues("admin_resync", "ok"))
+	windowBefore := testutil.ToFloat64(syncsTotal.WithLabelValues("window", "ok"))
+
+	res, err := svc.SyncSince(ctx, "u1", 30*24*time.Hour, 25)
+	if err != nil {
+		t.Fatalf("SyncSince: %v", err)
+	}
+	if res.Upserted != 2 {
+		t.Fatalf("Upserted = %d, want 2 (result: %+v)", res.Upserted, res)
+	}
+
+	if got := testutil.ToFloat64(syncsTotal.WithLabelValues("admin_resync", "ok")) - adminBefore; got != 1 {
+		t.Fatalf("{admin_resync,ok} delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(syncsTotal.WithLabelValues("window", "ok")) - windowBefore; got != 0 {
+		t.Fatalf("{window,ok} delta = %v, want 0 (admin resync must not touch the window liveness counter)", got)
+	}
+}
+
+// TestSyncSince_UpstreamErrorIsClassified pins that a WHOOP fetch failure is
+// wrapped in ErrUpstream (so callers can map it to 502) and returns a zero-value
+// result.
+func TestSyncSince_UpstreamErrorIsClassified(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", now.Add(time.Hour), now)
+
+	api := &fakeAPI{recErr: errors.New("whoop 503")}
+	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
+
+	res, err := svc.SyncSince(ctx, "u1", 30*24*time.Hour, 25)
+	if !errors.Is(err, ErrUpstream) {
+		t.Fatalf("err = %v, want ErrUpstream", err)
+	}
+	if res != (SyncResult{}) {
+		t.Fatalf("result = %+v, want zero value on upstream error", res)
+	}
+}
+
+// TestSyncSince_NotConnectedReconnectNeeded confirms ErrReconnectNeeded flows
+// through SyncSince unchanged (validToken classifies it before any fetch).
+func TestSyncSince_NotConnectedReconnectNeeded(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	seedConnection(t, conns, cipher, "u1", "access", "refresh", now.Add(time.Hour), now)
+	if err := conns.SetStatus(ctx, "u1", whoopconn.StatusError, now); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	api := &fakeAPI{}
+	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
+
+	res, err := svc.SyncSince(ctx, "u1", 30*24*time.Hour, 25)
+	if !errors.Is(err, ErrReconnectNeeded) {
+		t.Fatalf("err = %v, want ErrReconnectNeeded", err)
+	}
+	if res != (SyncResult{}) {
+		t.Fatalf("result = %+v, want zero value on reconnect-needed", res)
+	}
+	if api.calls != 0 {
+		t.Fatalf("api should not be called when not connected, got %d", api.calls)
 	}
 }

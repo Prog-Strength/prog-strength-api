@@ -260,6 +260,60 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("List", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		// Empty DB: no rows, no error.
+		empty, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("List (empty): %v", err)
+		}
+		if len(empty) != 0 {
+			t.Fatalf("List (empty) = %d rows, want 0", len(empty))
+		}
+
+		// Two users with distinct updated_at. u1 is upserted first (earlier
+		// updated_at), u2 second (later), so DESC order must surface u2 first.
+		t1 := t0.Add(time.Hour)
+		if err = repo.Upsert(ctx, "u1", whoopID, tokens, "s1", t0); err != nil {
+			t.Fatalf("Upsert u1: %v", err)
+		}
+		if err = repo.Upsert(ctx, "u2", whoopID+1, tokens, "s2", t1); err != nil {
+			t.Fatalf("Upsert u2: %v", err)
+		}
+		// Flip u1 to a non-connected status; List must still return it (any
+		// status) and reflect the new status. SetStatus keeps updated_at at t0
+		// so the DESC ordering below stays deterministic.
+		if err = repo.SetStatus(ctx, "u1", StatusError, t0); err != nil {
+			t.Fatalf("SetStatus u1: %v", err)
+		}
+
+		got, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("List = %d rows, want 2", len(got))
+		}
+		// Ordered by updated_at DESC: u2 (t1) before u1 (t0).
+		if got[0].UserID != "u2" || got[1].UserID != "u1" {
+			t.Fatalf("List order = [%s, %s], want [u2, u1]", got[0].UserID, got[1].UserID)
+		}
+		if got[0].Status != StatusConnected {
+			t.Fatalf("u2 status = %q, want connected", got[0].Status)
+		}
+		if got[1].Status != StatusError {
+			t.Fatalf("u1 status = %q, want error", got[1].Status)
+		}
+		if got[0].WhoopUserID != whoopID+1 || got[1].WhoopUserID != whoopID {
+			t.Fatalf("whoop user ids = [%d, %d]", got[0].WhoopUserID, got[1].WhoopUserID)
+		}
+		if !got[0].UpdatedAt.Equal(t1) || !got[1].UpdatedAt.Equal(t0) {
+			t.Fatalf("updated_at = [%v, %v], want [%v, %v]", got[0].UpdatedAt, got[1].UpdatedAt, t1, t0)
+		}
+	})
+
 	t.Run("AbsentUser_ReturnsErrNotFound", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()

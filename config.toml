@@ -83,8 +83,24 @@ return_to_allowed_origins = [
 # Empty → in-memory fallback (uploads vanish on restart; DB rows survive).
 avatar_bucket_name = "${AVATAR_BUCKET_NAME}"
 tcx_bucket_name = "${TCX_BUCKET_NAME}"   # folded in from the former stray os.Getenv
+photo_bucket_name = "${PHOTO_BUCKET_NAME}"   # activity photos (Terraform-owned)
 # AWS region for the S3 clients. Terraform-owned; REQUIRED when a bucket is set.
 aws_region = "${AWS_REGION}"
+
+[photos]
+# Tunables for the Activity Photos feature (internal/photos). Public literals —
+# not secrets, not env-overridden. max_per_activity caps photos per activity;
+# max_upload_bytes is the raw-upload size ceiling; full_/thumb_* define the two
+# derived JPEG renditions (max edge in px + quality); presign_window_hours is a
+# presigned URL's lifetime; caption_max_chars bounds a caption's length.
+max_per_activity     = 10
+max_upload_bytes     = 12582912   # 12 MiB
+full_max_edge_px     = 2048
+full_jpeg_quality    = 82
+thumb_max_edge_px    = 480
+thumb_jpeg_quality   = 78
+presign_window_hours = 6
+caption_max_chars    = 200
 
 [usage]
 # Per-user daily external-API spend ceiling (USD). 0 = disabled. Public

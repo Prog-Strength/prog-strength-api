@@ -1,3 +1,10 @@
+# [0.89.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.88.0...v0.89.0) (2026-07-31)
+
+
+### Features
+
+* **photos:** store the full variant at native resolution, near-lossless ([#94](https://github.com/Prog-Strength/prog-strength-api/issues/94)) ([7fd804c](https://github.com/Prog-Strength/prog-strength-api/commit/7fd804c038b0fb0fd4e27926e52fabbf34c3de99))
+
 # [0.88.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.87.0...v0.88.0) (2026-07-31)
 
 

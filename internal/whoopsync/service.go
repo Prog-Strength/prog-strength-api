@@ -20,6 +20,20 @@ import (
 // prompt rather than retrying.
 var ErrReconnectNeeded = errors.New("whoopsync: whoop connection needs reconnect")
 
+// ErrUpstream wraps a failure talking to the WHOOP API (fetch of recoveries or
+// cycles). Callers that surface HTTP status can map it to 502 rather than 500.
+var ErrUpstream = errors.New("whoopsync: whoop api error")
+
+// SyncResult reports what a sync did with the recoveries it fetched. The four
+// counts sum to the number of recoveries processed. Returned by SyncSince so an
+// operator resync can report the outcome.
+type SyncResult struct {
+	Upserted        int
+	SkippedUnscored int
+	SkippedNoCycle  int
+	SkippedBadDate  int
+}
+
 // refreshSkew is how far ahead of the recorded expiry we proactively refresh.
 // Refreshing a little early avoids racing an about-to-expire access token
 // against a slow WHOOP API call.
@@ -100,14 +114,25 @@ func NewService(
 // small value covering the handful of recoveries it announced).
 func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) error {
 	now := s.now()
-	return s.syncWindow(ctx, "window", userID, now.Add(-recentWindow), now, limit)
+	_, err := s.syncWindow(ctx, "window", userID, now.Add(-recentWindow), now, limit)
+	return err
 }
 
 // Backfill pulls a wider historical window (the last backfillWindow) in one
 // shot, used when a connection is first established.
 func (s *Service) Backfill(ctx context.Context, userID string) error {
 	now := s.now()
-	return s.syncWindow(ctx, "backfill", userID, now.Add(-backfillWindow), now, backfillLimit)
+	_, err := s.syncWindow(ctx, "backfill", userID, now.Add(-backfillWindow), now, backfillLimit)
+	return err
+}
+
+// SyncSince runs an operator-triggered resync over [now-window, now]. Thin
+// wrapper over syncWindow with kind="admin_resync" — a deliberate label so an
+// operator investigating an outage does not increment the window-sync
+// liveness counter the dead-ingestion alert watches.
+func (s *Service) SyncSince(ctx context.Context, userID string, window time.Duration, limit int) (SyncResult, error) {
+	now := s.now()
+	return s.syncWindow(ctx, "admin_resync", userID, now.Add(-window), now, limit)
 }
 
 // syncWindow is the shared core: obtain a valid token, fetch recoveries + cycles
@@ -115,22 +140,22 @@ func (s *Service) Backfill(ctx context.Context, userID string) error {
 // its cycle's local calendar date. Recoveries that are not SCORED, or whose
 // cycle is absent from the fetched window, are skipped. kind labels the caller
 // (backfill / window) in the summary log and metrics.
-func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, end time.Time, limit int) error {
+func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, end time.Time, limit int) (SyncResult, error) {
 	result := "error"
 	defer func() { syncsTotal.WithLabelValues(kind, result).Inc() }()
 
 	accessToken, err := s.validToken(ctx, userID)
 	if err != nil {
-		return err
+		return SyncResult{}, err
 	}
 
 	recoveries, err := s.api.Recoveries(ctx, accessToken, start, end, limit)
 	if err != nil {
-		return fmt.Errorf("whoopsync: fetch recoveries: %w", err)
+		return SyncResult{}, fmt.Errorf("%w: fetch recoveries: %w", ErrUpstream, err)
 	}
 	cycles, err := s.api.Cycles(ctx, accessToken, start, end, limit)
 	if err != nil {
-		return fmt.Errorf("whoopsync: fetch cycles: %w", err)
+		return SyncResult{}, fmt.Errorf("%w: fetch cycles: %w", ErrUpstream, err)
 	}
 
 	byID := make(map[int64]Cycle, len(cycles))
@@ -181,7 +206,7 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 			entry.HRVRmssdMilli = r.Score.HRVRmssdMilli
 		}
 		if err := s.rec.Upsert(ctx, entry, now); err != nil {
-			return fmt.Errorf("whoopsync: upsert recovery for %s: %w", date, err)
+			return SyncResult{}, fmt.Errorf("whoopsync: upsert recovery for %s: %w", date, err)
 		}
 		upserted++
 	}
@@ -207,7 +232,7 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 		"skipped_bad_date", skippedBadDate,
 	)
 	result = "ok"
-	return nil
+	return SyncResult{Upserted: upserted, SkippedUnscored: skippedUnscored, SkippedNoCycle: skippedNoCycle, SkippedBadDate: skippedBadDate}, nil
 }
 
 // validToken returns a usable access token for the user, refreshing it first if

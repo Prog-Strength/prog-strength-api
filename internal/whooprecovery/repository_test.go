@@ -255,6 +255,108 @@ func TestDeleteBySleepID(t *testing.T) {
 	}
 }
 
+// --- Latest: newest row per user, absence is (nil, nil) ----------------
+
+func TestLatest_NewestRowAndIsolation(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSQLiteRepository(dbtest.New(t))
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// u1 has several days; the newest (2026-06-13) should win.
+	for _, d := range []string{"2026-06-10", "2026-06-11", "2026-06-13", "2026-06-12"} {
+		if err := repo.Upsert(ctx, Entry{
+			UserID: "u1", Date: d, RecoveryScore: fptr(70),
+			CycleID: 1, SleepID: "u1-" + d,
+		}, now); err != nil {
+			t.Fatalf("seed u1/%s: %v", d, err)
+		}
+	}
+	// A more recent row for a different user must not leak into u1's Latest.
+	if err := repo.Upsert(ctx, Entry{
+		UserID: "u2", Date: "2026-06-20", RecoveryScore: fptr(90),
+		CycleID: 2, SleepID: "u2-latest",
+	}, now); err != nil {
+		t.Fatalf("seed u2: %v", err)
+	}
+
+	got, err := repo.Latest(ctx, "u1")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected a row for u1, got nil")
+	}
+	if got.Date != "2026-06-13" {
+		t.Errorf("latest date = %s, want 2026-06-13", got.Date)
+	}
+	if got.UserID != "u1" {
+		t.Errorf("latest leaked another user: %+v", got)
+	}
+	if got.ID == "" || got.RecoveryScore == nil || *got.RecoveryScore != 70 || got.SleepID != "u1-2026-06-13" {
+		t.Errorf("latest fields not populated: %+v", got)
+	}
+}
+
+func TestLatest_NoRowsReturnsNil(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSQLiteRepository(dbtest.New(t))
+
+	got, err := repo.Latest(ctx, "nobody")
+	if err != nil {
+		t.Fatalf("latest: %v", err)
+	}
+	if got != nil {
+		t.Errorf("no rows should return nil, got %+v", got)
+	}
+}
+
+// --- CountForUser: exact count, isolated, 0 for unknown ------------------
+
+func TestCountForUser(t *testing.T) {
+	ctx := context.Background()
+	repo := NewSQLiteRepository(dbtest.New(t))
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	for _, d := range []string{"2026-06-10", "2026-06-11", "2026-06-12"} {
+		if err := repo.Upsert(ctx, Entry{
+			UserID: "u1", Date: d, RecoveryScore: fptr(70),
+			CycleID: 1, SleepID: "u1-" + d,
+		}, now); err != nil {
+			t.Fatalf("seed u1/%s: %v", d, err)
+		}
+	}
+	if err := repo.Upsert(ctx, Entry{
+		UserID: "u2", Date: "2026-06-11", RecoveryScore: fptr(70),
+		CycleID: 1, SleepID: "u2-x",
+	}, now); err != nil {
+		t.Fatalf("seed u2: %v", err)
+	}
+
+	n, err := repo.CountForUser(ctx, "u1")
+	if err != nil {
+		t.Fatalf("count u1: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("u1 count = %d, want 3 (must not count u2)", n)
+	}
+
+	n, err = repo.CountForUser(ctx, "u2")
+	if err != nil {
+		t.Fatalf("count u2: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("u2 count = %d, want 1", n)
+	}
+
+	n, err = repo.CountForUser(ctx, "unknown")
+	if err != nil {
+		t.Fatalf("count unknown: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("unknown user count = %d, want 0", n)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

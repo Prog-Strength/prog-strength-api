@@ -3,6 +3,7 @@ package whoopconn
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 )
 
@@ -57,6 +58,34 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID string) (*Connection,
 		FROM user_whoop_connection
 		WHERE user_id = ?
 	`, userID))
+}
+
+func (r *SQLiteRepository) List(ctx context.Context) ([]Connection, error) {
+	// Same metadata column list/mapping as Get — never token material. Ordered
+	// newest-first for the admin surface and gauge exporter.
+	const q = `SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at
+FROM user_whoop_connection ORDER BY updated_at DESC`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("whoopconn: list: %w", err)
+	}
+	defer rows.Close()
+	var out []Connection
+	for rows.Next() {
+		var (
+			c         Connection
+			statusStr string
+		)
+		if err := rows.Scan(&c.UserID, &c.WhoopUserID, &c.Scopes, &statusStr, &c.TokenExpiresAt, &c.ConnectedAt, &c.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("whoopconn: list scan: %w", err)
+		}
+		c.Status = Status(statusStr)
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("whoopconn: list rows: %w", err)
+	}
+	return out, nil
 }
 
 func (r *SQLiteRepository) GetByWhoopUserID(ctx context.Context, whoopUserID int64) (*Connection, error) {

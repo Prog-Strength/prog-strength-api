@@ -3,6 +3,8 @@ package whooprecovery
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -86,6 +88,38 @@ func (r *SQLiteRepository) ListRange(ctx context.Context, userID, since, until s
 		return nil, err
 	}
 	return out, nil
+}
+
+// Latest returns the user's most recent row by date. No rows is not an error
+// — a freshly connected account has none yet — so it returns (nil, nil) on
+// sql.ErrNoRows and lets callers distinguish "not synced" from a real failure.
+func (r *SQLiteRepository) Latest(ctx context.Context, userID string) (*Entry, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, user_id, date, recovery_score, resting_heart_rate,
+			hrv_rmssd_milli, cycle_id, sleep_id, created_at, updated_at
+		FROM user_whoop_recovery
+		WHERE user_id = ?
+		ORDER BY date DESC
+		LIMIT 1`, userID)
+	e, err := scanEntry(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("whooprecovery: latest: %w", err)
+	}
+	return &e, nil
+}
+
+// CountForUser returns how many recovery rows the user has stored.
+func (r *SQLiteRepository) CountForUser(ctx context.Context, userID string) (int, error) {
+	var n int
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM user_whoop_recovery WHERE user_id = ?
+	`, userID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("whooprecovery: count for user: %w", err)
+	}
+	return n, nil
 }
 
 // DeleteBySleepID hard-deletes the user's row with the matching sleep_id.

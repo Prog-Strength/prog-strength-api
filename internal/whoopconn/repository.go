@@ -19,6 +19,10 @@ type Repository interface {
 	// Get returns metadata (no token). ErrNotFound when absent.
 	Get(ctx context.Context, userID string) (*Connection, error)
 
+	// List returns all connections (any status), ordered by updated_at DESC.
+	// Metadata only — never token material, consistent with Get.
+	List(ctx context.Context) ([]Connection, error)
+
 	// GetByWhoopUserID routes inbound webhooks (which identify users by Whoop ID).
 	// ErrNotFound when absent.
 	GetByWhoopUserID(ctx context.Context, whoopUserID int64) (*Connection, error)

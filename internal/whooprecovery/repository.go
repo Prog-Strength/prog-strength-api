@@ -21,6 +21,14 @@ type Repository interface {
 	// (either may be "" meaning unbounded), newest-first (date DESC).
 	ListRange(ctx context.Context, userID, since, until string) ([]Entry, error)
 
+	// Latest returns the newest row for the user by date (date DESC LIMIT 1),
+	// or (nil, nil) when the user has no rows — absence is an expected state
+	// for a freshly connected account, not an error.
+	Latest(ctx context.Context, userID string) (*Entry, error)
+
+	// CountForUser returns the number of recovery rows stored for the user.
+	CountForUser(ctx context.Context, userID string) (int, error)
+
 	// DeleteBySleepID removes the row whose sleep_id matches for the user. It
 	// is not an error when no row matches (idempotent webhook delete).
 	DeleteBySleepID(ctx context.Context, userID, sleepID string) error

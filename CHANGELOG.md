@@ -1,3 +1,10 @@
+# [0.87.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.86.1...v0.87.0) (2026-07-31)
+
+
+### Features
+
+* add activity photos (upload pipeline, S3 storage, feed hydration) ([#93](https://github.com/Prog-Strength/prog-strength-api/issues/93)) ([f30ed8f](https://github.com/Prog-Strength/prog-strength-api/commit/f30ed8f466b91e54b2124e2f0bbbee0e7363327b))
+
 ## [0.86.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.86.0...v0.86.1) (2026-07-31)
 
 

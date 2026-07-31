@@ -48,7 +48,7 @@ func mustTime(t *testing.T, s string) time.Time {
 func ref(userID, sourceID string, occurred time.Time) PostRef {
 	return PostRef{
 		UserID:     userID,
-		SourceType: SourceWorkout,
+		SourceType: SourceActivity,
 		SourceID:   sourceID,
 		OccurredAt: occurred,
 	}

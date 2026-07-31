@@ -288,16 +288,21 @@ func (h *Handler) createUnified(w http.ResponseWriter, r *http.Request) {
 			respondWriteError(w, r, "save activity details", err)
 			return
 		}
-		// Best-effort side effects for manual runs, mirroring the TCX
-		// ingest path: a timeline post and a planned-workout match. Other
-		// endurance/base-only types aren't feed sources (yet).
+		// Best-effort side effects, mirroring the TCX ingest path. EVERY
+		// session type posts to the feed — the source type is the coarse
+		// `activity`, so there is no per-sport gate to keep in sync as
+		// types are registered (a hike used to fall through this branch and
+		// silently never reach the feed).
+		h.publish(r.Context(), timeline.PostRef{
+			UserID:     userID,
+			SourceType: timeline.SourceActivity,
+			SourceID:   activityID,
+			OccurredAt: req.StartTime,
+		})
+		// Planned-workout matching stays running-only: the planner's
+		// endurance side models runs, and widening it is a product decision
+		// for the reconciliation SOW, not a side effect of feed coverage.
 		if desc.Type == ActivityRunning {
-			h.publish(r.Context(), timeline.PostRef{
-				UserID:     userID,
-				SourceType: timeline.SourceRun,
-				SourceID:   activityID,
-				OccurredAt: req.StartTime,
-			})
 			h.matchSession(r.Context(), userID, SessionRef{SessionID: activityID, StartUTC: req.StartTime})
 		}
 	}

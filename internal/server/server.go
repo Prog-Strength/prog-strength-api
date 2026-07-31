@@ -267,10 +267,11 @@ func New(cfg config.Config) (*Server, error) {
 		log.Printf("backfill activity routes: %v", err)
 	}
 
-	// Seed the timeline feed index from existing workouts, runs, PR
-	// events, and best efforts. Gated on timeline_post being empty, so it
-	// runs once after migration 019 ships and is a no-op thereafter.
-	if err := backfillTimeline(context.Background(), database, timelineRepo); err != nil {
+	// Make the timeline feed index whole: any activity, PR event, or best
+	// effort with no post gets one. Runs every boot so a best-effort
+	// publish that failed (or a type the hooks used to skip) self-heals on
+	// the next deploy rather than staying invisible forever.
+	if err := reconcileTimeline(context.Background(), database, timelineRepo); err != nil {
 		return nil, err
 	}
 

@@ -521,17 +521,22 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		log.Printf("activity import: request_id=%s user_id=%s source=%s source_activity_id=%s activity_type=%s outcome=imported",
 			rid, userID, a.IngestSource, a.SourceActivityID, a.ActivityType)
-		// Best-effort: publish the run and its best efforts into the
-		// timeline. Only running activities are feed sources; never affects
-		// this response. (The ErrDuplicate branch deliberately doesn't
-		// publish — the post already exists from the original ingest.)
+		// Best-effort: publish the session into the timeline. Every ingested
+		// type is a feed source — the source type is the coarse `activity`,
+		// so an imported hike posts on the same path a run does. Never
+		// affects this response. (The ErrDuplicate branch deliberately
+		// doesn't publish — the post already exists from the original
+		// ingest.)
+		h.publish(r.Context(), timeline.PostRef{
+			UserID:     a.UserID,
+			SourceType: timeline.SourceActivity,
+			SourceID:   a.ID,
+			OccurredAt: a.StartTime,
+		})
+		// Best-effort milestone posts and planned-workout matching remain
+		// running-only: best efforts are only computed for runs, and the
+		// planner's endurance side models runs.
 		if a.ActivityType == ActivityRunning {
-			h.publish(r.Context(), timeline.PostRef{
-				UserID:     a.UserID,
-				SourceType: timeline.SourceRun,
-				SourceID:   a.ID,
-				OccurredAt: a.StartTime,
-			})
 			for _, be := range a.BestEfforts {
 				h.publish(r.Context(), timeline.PostRef{
 					UserID:     a.UserID,

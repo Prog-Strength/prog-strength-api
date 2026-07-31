@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,8 +39,40 @@ var httpRequestDuration = prometheus.NewHistogramVec(
 	[]string{"method", "route", "status"},
 )
 
+// api_webhook_misroute_total counts 404s whose path matches a known webhook
+// provider fragment — a delivery to a path we do not serve. Deliberately narrow
+// (a tiny hard-coded registry) so it is silent except when a real provider is
+// misdelivering; a general /webhooks/ 404 counter would readmit the scanner
+// noise this metric exists to escape.
+var webhookMisrouteTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "api_webhook_misroute_total",
+		Help: "Total 404 requests whose path matches a known webhook provider fragment, labeled by provider.",
+	},
+	[]string{"provider"},
+)
+
+// providerFragments maps a lowercase path fragment to the provider it
+// identifies. Kept tiny and hard-coded on purpose (see the counter's help):
+// matching anything broader would readmit scanner noise.
+var providerFragments = map[string]string{"whoop": "whoop"}
+
+// webhookMisrouteNotFound is the chi NotFound handler. It increments the
+// misroute counter when the 404 path matches a known provider fragment, then
+// serves the standard 404 so behavior is otherwise unchanged.
+func webhookMisrouteNotFound(w http.ResponseWriter, r *http.Request) {
+	path := strings.ToLower(r.URL.Path)
+	for frag, provider := range providerFragments {
+		if strings.Contains(path, frag) {
+			webhookMisrouteTotal.WithLabelValues(provider).Inc()
+			break
+		}
+	}
+	http.NotFound(w, r)
+}
+
 func init() {
-	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration)
+	prometheus.MustRegister(httpRequestsTotal, httpRequestDuration, webhookMisrouteTotal)
 }
 
 // MetricsMiddleware records request count and latency against the

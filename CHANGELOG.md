@@ -1,3 +1,10 @@
+## [0.86.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.86.0...v0.86.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **timeline:** post every activity type to the social feed ([#91](https://github.com/Prog-Strength/prog-strength-api/issues/91)) ([a1c55bd](https://github.com/Prog-Strength/prog-strength-api/commit/a1c55bd6eb0316083c02e548a66020270a0d93fb)), closes [#90](https://github.com/Prog-Strength/prog-strength-api/issues/90)
+
 # [0.86.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.85.0...v0.86.0) (2026-07-31)
 
 

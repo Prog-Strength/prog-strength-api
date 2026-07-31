@@ -34,6 +34,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/snapshot"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
@@ -92,6 +93,22 @@ type contractEnv struct {
 	registry *activity.Registry
 	repos    contractRepos
 	userID   string
+	// published records every timeline post the wired handler emits, so the
+	// contract can assert feed publishing the same way it asserts the HTTP
+	// surface: through the real handler, with nothing type-aware in between.
+	published *contractPublisher
+}
+
+// contractPublisher is a timeline.Publisher that records instead of writing.
+// The real one is server-wired; the contract only needs to see what the
+// handler decided to publish.
+type contractPublisher struct {
+	refs []timeline.PostRef
+}
+
+func (p *contractPublisher) EnsurePost(_ context.Context, ref timeline.PostRef) error {
+	p.refs = append(p.refs, ref)
+	return nil
 }
 
 type contractRepos struct {
@@ -131,6 +148,8 @@ func newContractEnv(t *testing.T) *contractEnv {
 	reg := newContractRegistry(db)
 	ah := activity.NewHandler(rp.activity)
 	ah.SetRegistry(reg)
+	pub := &contractPublisher{}
+	ah.SetPublisher(pub)
 
 	dh := dashboard.NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps,
 		rp.nutrition, rp.bodyweight, rp.user,
@@ -145,7 +164,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 	ah.Mount(r)
 	dh.Mount(r)
 
-	return &contractEnv{srv: r, db: db, registry: reg, repos: rp, userID: u.ID}
+	return &contractEnv{srv: r, db: db, registry: reg, repos: rp, userID: u.ID, published: pub}
 }
 
 func (e *contractEnv) do(t *testing.T, method, path, body string) *httptest.ResponseRecorder {
@@ -333,14 +352,12 @@ func TestContract_BaseOnlyType_UnifiedSurface(t *testing.T) {
 // calls — one card, shared). A registered Summarize is therefore all a new
 // type needs for its card to render.
 //
-// Deliberate boundary, documented here so the contract is honest: card
-// RENDERING comes free, but post PUBLISHING does not. timeline_post rows are
-// constrained by a SQL CHECK — migration 020_timeline.sql:
-// CHECK(source_type IN ('workout','run','pr','best_effort')) — so publishing
-// feed posts for a new type additionally requires a timeline source_type
-// mapping plus a migration widening that CHECK. That is out of the
-// descriptor's reach by design (the feed's post taxonomy is a product
-// decision, not a per-type default); see the adding-an-activity-type recipe.
+// Card rendering and post publishing used to be different contracts — the
+// latter needed a per-type source_type plus a CHECK-widening migration, so a
+// registered type rendered a card it would never get a post for. Migration 046
+// collapsed the feed's per-sport source types into one `activity` value; both
+// now come free, and TestContract_BaseOnlyType_PostsToTimeline below is the
+// guard for the publishing half.
 func TestContract_BaseOnlyType_RendersTimelineCard(t *testing.T) {
 	env := newContractEnv(t)
 
@@ -379,6 +396,39 @@ func TestContract_BaseOnlyType_RendersTimelineCard(t *testing.T) {
 	s, ok = activity.RenderSummary(env.registry, a, nil)
 	if !ok || s.Title != "Shadowboxing" {
 		t.Errorf("unnamed card = %+v (ok=%v), want default title Shadowboxing", s, ok)
+	}
+}
+
+// TestContract_BaseOnlyType_PostsToTimeline: logging a session of a type
+// production has never heard of publishes a feed post, through the real POST
+// /activities handler with no type-aware code in between. This is the half of
+// the timeline contract that used to be missing — the gap that made hiking
+// invisible in the social feed (issue #90) — and it holds now because the feed
+// keys posts on the coarse `activity` source domain and reads the sport from
+// activities.activity_type.
+func TestContract_BaseOnlyType_PostsToTimeline(t *testing.T) {
+	env := newContractEnv(t)
+
+	w := env.do(t, http.MethodPost, "/activities", fmt.Sprintf(
+		`{"activity_type":%q,"start_time":"2026-07-20T18:00:00Z","name":"Sparring prep","duration_seconds":1800}`,
+		shadowboxingType))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("POST /activities = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	created := decodeContractItem(t, w)
+
+	if len(env.published.refs) != 1 {
+		t.Fatalf("published %d posts, want 1: %+v", len(env.published.refs), env.published.refs)
+	}
+	ref := env.published.refs[0]
+	if ref.SourceType != timeline.SourceActivity {
+		t.Errorf("source_type = %q, want activity — a per-sport source type would need a migration per new type", ref.SourceType)
+	}
+	if ref.SourceID != created.ID {
+		t.Errorf("source_id = %q, want the created session %q", ref.SourceID, created.ID)
+	}
+	if ref.UserID != env.userID {
+		t.Errorf("user_id = %q, want %q", ref.UserID, env.userID)
 	}
 }
 

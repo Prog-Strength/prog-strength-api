@@ -1,4 +1,4 @@
--- migrations/046_activity_photos.sql
+-- migrations/047_activity_photos.sql
 -- Activity Photos: attach uploaded photos (full + thumbnail S3 variants) to any
 -- activity. See prog-strength-docs/sows/activity-photos.md.
 --

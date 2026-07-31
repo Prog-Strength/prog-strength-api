@@ -33,7 +33,7 @@ func (f *fakeTimelineRepo) EnsurePost(_ context.Context, ref timeline.PostRef) (
 func TestTimelinePublisher_Success(t *testing.T) {
 	repo := &fakeTimelineRepo{}
 	pub := newTimelinePublisher(repo)
-	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceWorkout, SourceID: "w1", OccurredAt: time.Now()}
+	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "w1", OccurredAt: time.Now()}
 
 	if err := pub.EnsurePost(context.Background(), ref); err != nil {
 		t.Fatalf("EnsurePost: unexpected error %v", err)
@@ -47,7 +47,7 @@ func TestTimelinePublisher_FailureLoggedAndReturned(t *testing.T) {
 	sentinel := errors.New("boom")
 	repo := &fakeTimelineRepo{ensureErr: sentinel}
 	pub := newTimelinePublisher(repo)
-	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceRun, SourceID: "a1", OccurredAt: time.Now()}
+	ref := timeline.PostRef{UserID: "u1", SourceType: timeline.SourceActivity, SourceID: "a1", OccurredAt: time.Now()}
 
 	// Capture the log output to assert the failure is logged.
 	var buf bytes.Buffer

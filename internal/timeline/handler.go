@@ -166,9 +166,15 @@ type reactionsDTO struct {
 
 // postDTO is the wire shape of a feed post. content is the hydrated card;
 // reactions and comment_count are batch-loaded for the page (no N+1).
+//
+// activity_type sits beside source_type rather than inside content because
+// it is a discriminator, not card copy: clients switch rendering on it the
+// way they used to switch on the old per-sport source types. It is omitted
+// for pr/best_effort posts, which have no sport.
 type postDTO struct {
 	ID           string       `json:"id"`
 	SourceType   SourceType   `json:"source_type"`
+	ActivityType string       `json:"activity_type,omitempty"`
 	SourceID     string       `json:"source_id"`
 	OccurredAt   time.Time    `json:"occurred_at"`
 	Visibility   Visibility   `json:"visibility"`
@@ -422,6 +428,7 @@ func (h *Handler) assemblePosts(ctx context.Context, viewerID string, posts []Po
 		out = append(out, postDTO{
 			ID:           p.ID,
 			SourceType:   p.SourceType,
+			ActivityType: c.ActivityType,
 			SourceID:     p.SourceID,
 			OccurredAt:   p.OccurredAt,
 			Visibility:   p.Visibility,

@@ -1,3 +1,10 @@
+# [0.92.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.91.0...v0.92.0) (2026-08-01)
+
+
+### Features
+
+* **dashboard:** customizable tile layout + walking/cycling/hiking tiles ([#99](https://github.com/Prog-Strength/prog-strength-api/issues/99)) ([757fb8f](https://github.com/Prog-Strength/prog-strength-api/commit/757fb8f2355df0d1fd7765e8c47fc54f613605c0))
+
 # [0.91.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.90.2...v0.91.0) (2026-07-31)
 
 

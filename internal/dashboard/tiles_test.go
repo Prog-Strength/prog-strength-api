@@ -5,7 +5,7 @@ import "testing"
 func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 	all := []TileID{
 		TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
-		TileSteps, TileNutrition, TileBodyweight, TileRecovery, TileStreak,
+		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure, TileRecovery, TileStreak,
 	}
 	if len(Catalog) != len(all) {
 		t.Fatalf("Catalog has %d entries, expected %d", len(Catalog), len(all))
@@ -24,7 +24,7 @@ func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 func TestCatalog_Order(t *testing.T) {
 	want := []TileID{
 		TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
-		TileSteps, TileNutrition, TileBodyweight, TileRecovery, TileStreak,
+		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure, TileRecovery, TileStreak,
 	}
 	for i := range want {
 		if Catalog[i] != want[i] {

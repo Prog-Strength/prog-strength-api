@@ -69,6 +69,12 @@ func TestSummary_DefaultLayout_NoWhoop(t *testing.T) {
 	}
 	assertKeysPresent(t, data, "running", "lifting", "steps", "nutrition", "bodyweight", "streak")
 	assertKeysAbsent(t, data, "recovery", "walking", "cycling", "hiking")
+	// Blood pressure is a catalog tile but NOT part of the default layout — a
+	// fresh user should not land on a blood-pressure card they never opted into.
+	if indexOf(layout, string(TileBloodPressure)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileBloodPressure, layout)
+	}
+	assertKeysAbsent(t, data, "blood_pressure")
 }
 
 func TestSummary_DefaultLayout_WithConnectedWhoop(t *testing.T) {
@@ -209,7 +215,7 @@ func TestSummary_LayoutReadFailure_FallsBackToDefault(t *testing.T) {
 	_, rp, userID := newTestEnv(t)
 
 	// Rebuild the handler with a failing layout repo, reusing the real repos.
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{})
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{})
 	h.now = func() time.Time { return testNow }
 	r2 := chi.NewRouter()
 	h.Mount(r2)

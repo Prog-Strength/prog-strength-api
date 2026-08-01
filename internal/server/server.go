@@ -679,7 +679,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database)).Mount(r)
+		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database)).Mount(r)
 		// Training snapshot — the agent-facing holistic read across every
 		// domain (GET /training-snapshot). Separate surface from the web
 		// dashboard; composes the same domain repos defensively. Arg order

@@ -24,9 +24,9 @@ func (e *Entry) Category() Category { return Classify(e.Systolic, e.Diastolic) }
 
 // Validate enforces the shape invariants the schema's CHECK constraints
 // also enforce. Run handler-side so the caller gets a clean 400 instead
-// of a 500 from a constraint violation. Checks run in the same order the
-// table declares them so the error the user sees matches the first
-// constraint the DB would have tripped.
+// of a 500 from a constraint violation. Each invariant maps to a distinct
+// error so the message names the field the caller got wrong; the order is
+// first-error-wins, matching this repo's validation convention.
 func (e *Entry) Validate() error {
 	if e.Systolic < 50 || e.Systolic > 300 {
 		return ErrSystolicRange

@@ -1,3 +1,10 @@
+# [0.93.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.92.0...v0.93.0) (2026-08-01)
+
+
+### Features
+
+* **avatar:** make the upload ceiling a config knob and raise it to 5 MB ([#100](https://github.com/Prog-Strength/prog-strength-api/issues/100)) ([b962aa6](https://github.com/Prog-Strength/prog-strength-api/commit/b962aa648cb983db39e18152dd2bc425ca2068fc))
+
 # [0.92.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.91.0...v0.92.0) (2026-08-01)
 
 

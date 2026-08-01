@@ -1,3 +1,10 @@
+# [0.94.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.93.0...v0.94.0) (2026-08-01)
+
+
+### Features
+
+* **bloodpressure:** blood-pressure domain, API, and dashboard tile ([#101](https://github.com/Prog-Strength/prog-strength-api/issues/101)) ([6aa0f42](https://github.com/Prog-Strength/prog-strength-api/commit/6aa0f424414a6748da3f2da319e9aa546de8e0b9))
+
 # [0.93.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.92.0...v0.93.0) (2026-08-01)
 
 

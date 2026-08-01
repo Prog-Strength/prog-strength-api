@@ -65,6 +65,45 @@ type LatestRun struct {
 	StartTime       time.Time `json:"start_time"`
 }
 
+// WalkingSection is the walking tile. nil at the Summary level when the user has
+// no walking activity at all.
+type WalkingSection struct {
+	CurrentWeek         EnduranceCurrentWeek `json:"current_week"`
+	LatestSession       *EnduranceLatest     `json:"latest_session"`
+	WeeklyDistanceSpark []float64            `json:"weekly_distance_spark"`
+}
+
+// CyclingSection is the cycling tile. nil when the user has no cycling activity.
+type CyclingSection struct {
+	CurrentWeek         EnduranceCurrentWeek `json:"current_week"`
+	LatestSession       *EnduranceLatest     `json:"latest_session"`
+	WeeklyDistanceSpark []float64            `json:"weekly_distance_spark"`
+}
+
+// HikingSection is the hiking tile. nil when the user has no hiking activity.
+// ElevationGainMeters is this week's summed elevation gain (Activity.ElevationGainMeters).
+type HikingSection struct {
+	CurrentWeek         EnduranceCurrentWeek `json:"current_week"`
+	ElevationGainMeters float64              `json:"elevation_gain_meters"`
+	LatestSession       *EnduranceLatest     `json:"latest_session"`
+	WeeklyDistanceSpark []float64            `json:"weekly_distance_spark"`
+}
+
+// EnduranceCurrentWeek is the shared this-week rollup for the endurance tiles.
+type EnduranceCurrentWeek struct {
+	DistanceMeters  float64 `json:"distance_meters"`
+	SessionCount    int     `json:"session_count"`
+	DurationSeconds int     `json:"duration_seconds"`
+}
+
+// EnduranceLatest is a thin projection of the most recent session of a type.
+type EnduranceLatest struct {
+	Name            *string   `json:"name"`
+	DistanceMeters  float64   `json:"distance_meters"`
+	DurationSeconds int       `json:"duration_seconds"`
+	StartTime       time.Time `json:"start_time"`
+}
+
 // LiftingSection is the lifting tile. nil at the Summary level when the user
 // has logged no workouts.
 type LiftingSection struct {

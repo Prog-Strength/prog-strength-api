@@ -153,7 +153,8 @@ func newContractEnv(t *testing.T) *contractEnv {
 
 	dh := dashboard.NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps,
 		rp.nutrition, rp.bodyweight, rp.user,
-		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db))
+		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db),
+		dashboard.NewSQLiteLayoutRepository(db))
 
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {

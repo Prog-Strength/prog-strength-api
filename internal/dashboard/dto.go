@@ -1,6 +1,10 @@
 package dashboard
 
-import "time"
+import (
+	"time"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
+)
 
 // Summary is the aggregate payload for GET /dashboard/summary. Each section
 // is a nullable pointer so an absent domain (no runs, no workouts) serializes
@@ -19,6 +23,10 @@ type Summary struct {
 	// Recovery is the Whoop recovery tile. Present (non-nil) only when the user
 	// has a connected Whoop connection; nil otherwise so the card stays hidden.
 	Recovery *RecoverySection `json:"recovery,omitempty"`
+	// BloodPressure is the blood-pressure tile. Present (non-nil) only when the
+	// user has logged at least one reading; nil otherwise so the card stays
+	// hidden — mirrors how Recovery is declared with omitempty.
+	BloodPressure *BloodPressureSection `json:"blood_pressure,omitempty"`
 }
 
 // RecoverySection is the Whoop recovery tile. nil at the Summary level unless a
@@ -180,6 +188,27 @@ type BodyweightSection struct {
 type BodyweightGoal struct {
 	Weight float64 `json:"weight"`
 	Unit   string  `json:"unit"`
+}
+
+// BloodPressureSection is the blood-pressure tile. nil at the Summary level
+// when the user has logged no readings. The two sparks are computed from ONE
+// day-bucketed series so their indices align — the card draws them as two
+// lines on a shared x-axis.
+type BloodPressureSection struct {
+	Latest         BloodPressureLatest    `json:"latest"`
+	Category       bloodpressure.Category `json:"category"`
+	Avg30          *BloodPressureAvg      `json:"avg_30d"`
+	SystolicSpark  []float64              `json:"systolic_spark"`
+	DiastolicSpark []float64              `json:"diastolic_spark"`
+}
+type BloodPressureLatest struct {
+	Systolic   int       `json:"systolic"`
+	Diastolic  int       `json:"diastolic"`
+	MeasuredAt time.Time `json:"measured_at"`
+}
+type BloodPressureAvg struct {
+	Systolic  int `json:"systolic"`
+	Diastolic int `json:"diastolic"`
 }
 
 // StreakSection is the training-streak tile. Always present (a value on

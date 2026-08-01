@@ -8,16 +8,17 @@ package dashboard
 type TileID string
 
 const (
-	TileRunning    TileID = "running"
-	TileWalking    TileID = "walking"
-	TileCycling    TileID = "cycling"
-	TileHiking     TileID = "hiking"
-	TileLifting    TileID = "lifting"
-	TileSteps      TileID = "steps"
-	TileNutrition  TileID = "nutrition"
-	TileBodyweight TileID = "bodyweight"
-	TileRecovery   TileID = "recovery"
-	TileStreak     TileID = "streak"
+	TileRunning       TileID = "running"
+	TileWalking       TileID = "walking"
+	TileCycling       TileID = "cycling"
+	TileHiking        TileID = "hiking"
+	TileLifting       TileID = "lifting"
+	TileSteps         TileID = "steps"
+	TileNutrition     TileID = "nutrition"
+	TileBodyweight    TileID = "bodyweight"
+	TileBloodPressure TileID = "blood_pressure"
+	TileRecovery      TileID = "recovery"
+	TileStreak        TileID = "streak"
 )
 
 // Catalog is the ordered set of every tile. Order fixes how tiles appear in the
@@ -25,7 +26,7 @@ const (
 // (lib/dashboard-tiles.ts) assert this list stays identical across the boundary.
 var Catalog = []TileID{
 	TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
-	TileSteps, TileNutrition, TileBodyweight, TileRecovery, TileStreak,
+	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure, TileRecovery, TileStreak,
 }
 
 var catalogSet = func() map[TileID]bool {

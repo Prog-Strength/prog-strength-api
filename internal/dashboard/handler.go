@@ -12,6 +12,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
@@ -36,16 +37,17 @@ const sparkLookbackWeeks = 53
 // resiliently — a recoverable failure in one domain yields a nil section, never
 // a 500 — and assembling the envelope.
 type Handler struct {
-	activityRepo   activity.Repository
-	workoutRepo    strength.Repository
-	exerciseRepo   exercise.Repository
-	stepsRepo      steps.Repository
-	nutritionRepo  nutrition.Repository
-	bodyweightRepo bodyweight.Repository
-	userRepo       user.Repository
-	whoopConns     whoopconn.Repository
-	whoopRecovery  whooprecovery.Repository
-	layoutRepo     Repository
+	activityRepo      activity.Repository
+	workoutRepo       strength.Repository
+	exerciseRepo      exercise.Repository
+	stepsRepo         steps.Repository
+	nutritionRepo     nutrition.Repository
+	bodyweightRepo    bodyweight.Repository
+	bloodPressureRepo bloodpressure.Repository
+	userRepo          user.Repository
+	whoopConns        whoopconn.Repository
+	whoopRecovery     whooprecovery.Repository
+	layoutRepo        Repository
 
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
@@ -61,23 +63,25 @@ func NewHandler(
 	stepsRepo steps.Repository,
 	nutritionRepo nutrition.Repository,
 	bodyweightRepo bodyweight.Repository,
+	bloodPressureRepo bloodpressure.Repository,
 	userRepo user.Repository,
 	whoopConns whoopconn.Repository,
 	whoopRecovery whooprecovery.Repository,
 	layoutRepo Repository,
 ) *Handler {
 	return &Handler{
-		activityRepo:   activityRepo,
-		workoutRepo:    workoutRepo,
-		exerciseRepo:   exerciseRepo,
-		stepsRepo:      stepsRepo,
-		nutritionRepo:  nutritionRepo,
-		bodyweightRepo: bodyweightRepo,
-		userRepo:       userRepo,
-		whoopConns:     whoopConns,
-		whoopRecovery:  whoopRecovery,
-		layoutRepo:     layoutRepo,
-		now:            time.Now,
+		activityRepo:      activityRepo,
+		workoutRepo:       workoutRepo,
+		exerciseRepo:      exerciseRepo,
+		stepsRepo:         stepsRepo,
+		nutritionRepo:     nutritionRepo,
+		bodyweightRepo:    bodyweightRepo,
+		bloodPressureRepo: bloodPressureRepo,
+		userRepo:          userRepo,
+		whoopConns:        whoopConns,
+		whoopRecovery:     whoopRecovery,
+		layoutRepo:        layoutRepo,
+		now:               time.Now,
 	}
 }
 
@@ -212,6 +216,9 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	if enabled[TileBodyweight] {
 		out[string(TileBodyweight)] = h.buildBodyweightSection(ctx, r, userID, since8w)
 	}
+	if enabled[TileBloodPressure] {
+		out[string(TileBloodPressure)] = h.buildBloodPressureSection(ctx, r, userID, since8w, now, loc)
+	}
 	if enabled[TileRecovery] {
 		out[string(TileRecovery)] = h.buildRecoverySection(ctx, r, userID, now, loc)
 	}
@@ -297,6 +304,15 @@ func (h *Handler) buildBodyweightSection(ctx context.Context, r *http.Request, u
 		return h.bodyweightRepo.GetBodyweightGoal(ctx, userID)
 	})
 	return buildBodyweight(entries, goal)
+}
+
+// buildBloodPressureSection assembles the blood-pressure tile from the trailing
+// window of readings (since covers 30 days of average plus the daily sparks).
+func (h *Handler) buildBloodPressureSection(ctx context.Context, r *http.Request, userID string, since time.Time, now time.Time, loc *time.Location) *BloodPressureSection {
+	entries := defer1(ctx, r, "blood pressure", func() ([]bloodpressure.Entry, error) {
+		return h.bloodPressureRepo.List(ctx, userID, &since, nil)
+	})
+	return buildBloodPressure(entries, now, loc)
 }
 
 // buildRecoverySection assembles the Whoop recovery tile. It is present only

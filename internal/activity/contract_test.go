@@ -27,6 +27,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/dashboard"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
@@ -152,7 +153,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 	ah.SetPublisher(pub)
 
 	dh := dashboard.NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps,
-		rp.nutrition, rp.bodyweight, rp.user,
+		rp.nutrition, rp.bodyweight, bloodpressure.NewSQLiteRepository(db), rp.user,
 		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db),
 		dashboard.NewSQLiteLayoutRepository(db))
 

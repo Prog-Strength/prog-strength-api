@@ -17,6 +17,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarsync"
@@ -257,6 +258,9 @@ func New(cfg config.Config) (*Server, error) {
 	userRepo = user.NewSQLiteRepository(database)
 	nutritionRepo = nutrition.NewSQLiteRepository(database)
 	bodyweightRepo = bodyweight.NewSQLiteRepository(database)
+	// Declared as a plain local so both the mount below and the dashboard
+	// handler (constructed later in this same function) can reference it.
+	bloodPressureRepo := bloodpressure.NewSQLiteRepository(database)
 	plannedWorkoutRepo = plannedworkout.NewSQLiteRepository(database)
 	stepsRepo = steps.NewSQLiteRepository(database)
 	chatSQLiteRepo := chat.NewSQLiteRepository(database)
@@ -559,6 +563,10 @@ func New(cfg config.Config) (*Server, error) {
 		// router group. Needs the user repository to default unit
 		// from the user's preferred WeightUnit when omitted.
 		bodyweight.NewHandler(bodyweightRepo, userRepo).Mount(r)
+		// Blood pressure — its own package, same JWT-gated group as bodyweight.
+		// No user repository needed (no unit to default); the healthy-range
+		// classification is a code constant, not per-user state.
+		bloodpressure.NewHandler(bloodPressureRepo).Mount(r)
 		// Planned workouts — forward-looking scheduled training entries with
 		// an optional lift agenda and Google Calendar sync. Shares the JWT-gated
 		// group; needs the user repository to default a plan's timezone from the
@@ -671,7 +679,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database)).Mount(r)
+		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database)).Mount(r)
 		// Training snapshot — the agent-facing holistic read across every
 		// domain (GET /training-snapshot). Separate surface from the web
 		// dashboard; composes the same domain repos defensively. Arg order

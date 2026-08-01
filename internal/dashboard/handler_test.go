@@ -16,6 +16,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
@@ -40,16 +41,17 @@ var testNow = time.Date(2026, 6, 17, 13, 0, 0, 0, time.UTC)
 // repos bundles the real SQLite repositories backed by one shared *sql.DB so a
 // test can seed across domains and read them all back through the handler.
 type repos struct {
-	activity   *activity.SQLiteRepository
-	workout    *strength.SQLiteRepository
-	exercise   *exercise.SQLiteRepository
-	steps      *steps.SQLiteRepository
-	nutrition  *nutrition.SQLiteRepository
-	bodyweight *bodyweight.SQLiteRepository
-	user       *user.SQLiteRepository
-	whoopConn  *whoopconn.SQLiteRepository
-	whoopRec   *whooprecovery.SQLiteRepository
-	layout     *SQLiteRepository
+	activity      *activity.SQLiteRepository
+	workout       *strength.SQLiteRepository
+	exercise      *exercise.SQLiteRepository
+	steps         *steps.SQLiteRepository
+	nutrition     *nutrition.SQLiteRepository
+	bodyweight    *bodyweight.SQLiteRepository
+	bloodPressure *bloodpressure.SQLiteRepository
+	user          *user.SQLiteRepository
+	whoopConn     *whoopconn.SQLiteRepository
+	whoopRec      *whooprecovery.SQLiteRepository
+	layout        *SQLiteRepository
 }
 
 // newTestEnv builds the shared-DB repositories, syncs the exercise catalog (so
@@ -86,7 +88,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	}
 
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 	return r, rp, u.ID
@@ -366,16 +368,17 @@ func (errBodyweightRepo) List(ctx context.Context, userID string, since, until *
 func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 	db := dbtest.New(t)
 	rp := &repos{
-		activity:   activity.NewSQLiteRepository(db, activity.NewMemoryArchiver()),
-		workout:    strength.NewSQLiteRepository(db),
-		exercise:   exercise.NewSQLiteRepository(db),
-		steps:      steps.NewSQLiteRepository(db),
-		nutrition:  nutrition.NewSQLiteRepository(db),
-		bodyweight: bodyweight.NewSQLiteRepository(db),
-		user:       user.NewSQLiteRepository(db),
-		whoopConn:  whoopconn.NewSQLiteRepository(db),
-		whoopRec:   whooprecovery.NewSQLiteRepository(db),
-		layout:     NewSQLiteLayoutRepository(db),
+		activity:      activity.NewSQLiteRepository(db, activity.NewMemoryArchiver()),
+		workout:       strength.NewSQLiteRepository(db),
+		exercise:      exercise.NewSQLiteRepository(db),
+		steps:         steps.NewSQLiteRepository(db),
+		nutrition:     nutrition.NewSQLiteRepository(db),
+		bodyweight:    bodyweight.NewSQLiteRepository(db),
+		bloodPressure: bloodpressure.NewSQLiteRepository(db),
+		user:          user.NewSQLiteRepository(db),
+		whoopConn:     whoopconn.NewSQLiteRepository(db),
+		whoopRec:      whooprecovery.NewSQLiteRepository(db),
+		layout:        NewSQLiteLayoutRepository(db),
 	}
 	if err := rp.exercise.SyncCatalog(context.Background(), exercise.Catalog); err != nil {
 		t.Fatalf("SyncCatalog: %v", err)
@@ -403,7 +406,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 
 	// Wire the handler with the failing bodyweight repo; all others are real.
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 

@@ -207,6 +207,19 @@ type Config struct {
 	// upload ceiling S3 enforces, the container allowlist, the presign and
 	// upload-URL windows, and the poster derivative. See VideosConfig.
 	Videos VideosConfig
+
+	// Avatar configures the profile-avatar upload path (POST /me/avatar).
+	// See AvatarConfig.
+	Avatar AvatarConfig
+}
+
+// AvatarConfig groups the profile-avatar tunables. Non-secret public literals
+// (no ${VAR} interpolation, no env override), mirroring PhotosConfig.
+// MaxUploadBytes is the multipart request-body ceiling: the whole file is read
+// into memory to sniff its type and write it to S3, so it bounds per-request
+// memory as much as it bounds the product.
+type AvatarConfig struct {
+	MaxUploadBytes int64
 }
 
 // HRZonesConfig groups the heart-rate-zone engine tunables. All are non-secret
@@ -388,6 +401,9 @@ type fileConfig struct {
 		CaptionMaxChars       int   `toml:"caption_max_chars"`
 		PendingReapAfterHours int   `toml:"pending_reap_after_hours"`
 	} `toml:"videos"`
+	Avatar struct {
+		MaxUploadBytes int64 `toml:"max_upload_bytes"`
+	} `toml:"avatar"`
 }
 
 // toStringList normalizes a decoded list value — a native TOML array, a
@@ -552,6 +568,9 @@ func Load(defaultTOML []byte) (Config, error) {
 			PosterJPEGQuality:     fc.Videos.PosterJPEGQuality,
 			CaptionMaxChars:       fc.Videos.CaptionMaxChars,
 			PendingReapAfterHours: fc.Videos.PendingReapAfterHours,
+		},
+		Avatar: AvatarConfig{
+			MaxUploadBytes: fc.Avatar.MaxUploadBytes,
 		},
 	}
 

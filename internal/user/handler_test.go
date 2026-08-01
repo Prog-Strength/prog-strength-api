@@ -558,13 +558,71 @@ func TestUploadAvatar_OversizedRejected(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
 	store := NewFakeAvatarStore()
 	h := NewHandler(repo, store)
+	// Configure a small ceiling rather than allocating past the real one —
+	// the point under test is that the CONFIGURED limit is what's enforced.
+	h.SetAvatarConfig(AvatarConfig{MaxUploadBytes: 4 << 10})
 	u := seedUser(t, repo)
 
-	big := make([]byte, maxAvatarBytes+1)
+	big := make([]byte, (4<<10)+1)
 	copy(big, pngBytes())
 	w := doUpload(t, h, u.ID, big)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status: got %d want 413, body=%s", w.Code, w.Body.String())
+	}
+	// The message states the configured limit, not a hardcoded one.
+	if body := w.Body.String(); !strings.Contains(body, "4 KB") {
+		t.Errorf("413 body should name the configured limit, got %s", body)
+	}
+}
+
+func TestUploadAvatar_ConfiguredLimitAllowsLargerUpload(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	store := NewFakeAvatarStore()
+	h := NewHandler(repo, store)
+	h.SetAvatarConfig(AvatarConfig{MaxUploadBytes: 8 << 20})
+	u := seedUser(t, repo)
+
+	// Larger than the former hardcoded 2 MB cap, smaller than the configured one.
+	img := make([]byte, 3<<20)
+	copy(img, pngBytes())
+	w := doUpload(t, h, u.ID, img)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d want 200, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestUploadAvatar_UnconfiguredFallsBackToDefaultLimit(t *testing.T) {
+	repo := NewSQLiteRepository(dbtest.New(t))
+	store := NewFakeAvatarStore()
+	// No SetAvatarConfig: a handler wired without a manifest limit still
+	// enforces the package default rather than accepting anything.
+	h := NewHandler(repo, store)
+	u := seedUser(t, repo)
+
+	big := make([]byte, defaultMaxAvatarBytes+1)
+	copy(big, pngBytes())
+	w := doUpload(t, h, u.ID, big)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status: got %d want 413, body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestFormatByteLimit(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{5 << 20, "5 MB"},
+		{2 << 20, "2 MB"},
+		{5_500_000, "5.2 MB"},
+		{4 << 10, "4 KB"},
+		{1500, "1.5 KB"},
+		{512, "512 bytes"},
+	}
+	for _, c := range cases {
+		if got := formatByteLimit(c.in); got != c.want {
+			t.Errorf("formatByteLimit(%d) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 

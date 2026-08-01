@@ -632,6 +632,9 @@ func TestGoldenManifest(t *testing.T) {
 			CaptionMaxChars:       200,
 			PendingReapAfterHours: 24,
 		},
+		Avatar: AvatarConfig{
+			MaxUploadBytes: 5242880,
+		},
 	}
 
 	if !reflect.DeepEqual(cfg, want) {
@@ -733,5 +736,39 @@ func TestVideosSectionParses(t *testing.T) {
 	}
 	if !reflect.DeepEqual(cfg.Videos, want) {
 		t.Errorf("Videos = %#v, want %#v", cfg.Videos, want)
+	}
+}
+
+// TestAvatarSectionParses pins the [avatar] upload ceiling, mirroring the
+// photos/videos section tests: the committed manifest is the source of truth
+// for the limit POST /me/avatar enforces.
+func TestAvatarSectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "avatar-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := AvatarConfig{MaxUploadBytes: 5242880}
+	if !reflect.DeepEqual(cfg.Avatar, want) {
+		t.Errorf("Avatar = %#v, want %#v", cfg.Avatar, want)
+	}
+}
+
+// TestAvatarSectionOmittedIsZero documents that a manifest with no [avatar]
+// section decodes to a zero limit — the user handler, not config, supplies the
+// fallback (see user.defaultMaxAvatarBytes), matching how the other media
+// sections leave defaulting to their consumer.
+func TestAvatarSectionOmittedIsZero(t *testing.T) {
+	clearConfigEnv(t)
+	cfg := load(t, minimalTOML, nil)
+	if cfg.Avatar.MaxUploadBytes != 0 {
+		t.Errorf("Avatar.MaxUploadBytes = %d, want 0", cfg.Avatar.MaxUploadBytes)
 	}
 }

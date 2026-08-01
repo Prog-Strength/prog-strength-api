@@ -165,6 +165,18 @@ caption_max_chars   = 200
 # object for the bucket's existing lifecycle rule.
 pending_reap_after_hours = 24
 
+[avatar]
+# Tunable for the profile-avatar upload (POST /me/avatar). Public literal —
+# not a secret, not env-overridden.
+#
+# 5 MiB. The bytes land in this process (unlike videos): uploadAvatar reads the
+# whole file into a byte slice to sniff its content type and hand it to S3, so
+# this is a per-request memory bound as much as a product one. It sits well
+# below the photo ceiling because clients crop and re-encode an avatar to a
+# small square before uploading — the limit exists for the SOURCE photo a user
+# picks, and 5 MiB comfortably covers a phone camera JPEG.
+max_upload_bytes = 5242880
+
 [usage]
 # Per-user daily external-API spend ceiling (USD). 0 = disabled. Public
 # tunable — moved out of compose. ~$20/user/month at 0.67.

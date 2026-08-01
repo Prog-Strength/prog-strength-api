@@ -150,14 +150,6 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return h.activityRepo.ListInRange(ctx, userID, &since53w, nil, activity.TypeFilter{})
 	})
 	endurance := enduranceOnly(sessions)
-	// The lifting/streak builders operate on strength.Workout (sets drive
-	// volume and the completion check), so reconstruct them from the unified
-	// list's strength rows plus a batched exercise hydration. The strength
-	// module still owns its exercises/sets detail — this is a base-list read
-	// plus a type-detail read, not a second session-list query.
-	workouts := defer1(ctx, r, "workout exercises", func() ([]strength.Workout, error) {
-		return h.hydrateStrengthWorkouts(ctx, sessions)
-	})
 	stepEntries := defer1(ctx, r, "steps", func() ([]steps.Entry, error) {
 		entries, _, err := h.stepsRepo.List(ctx, userID, &since53wStr, &todayStr, 0, nil)
 		return entries, err
@@ -169,17 +161,65 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return h.stepsRepo.GetGoal(ctx, userID)
 	})
 
-	summary := Summary{
-		Running:    h.buildRunningSection(ctx, r, userID, endurance, now, loc),
-		Lifting:    h.buildLiftingSection(ctx, r, userID, workouts, unit, now, loc),
-		Steps:      h.buildStepsSection(ctx, r, userID, stepEntries, now, loc),
-		Nutrition:  h.buildNutritionSection(ctx, r, userID, todayStr, loc),
-		Bodyweight: h.buildBodyweightSection(ctx, r, userID, since8w),
-		Streak:     buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc),
-		Recovery:   h.buildRecoverySection(ctx, r, userID, now, loc),
+	// The layout decides which tiles this user sees; only enabled tiles are
+	// computed. A layout-read failure degrades to the default rather than 500
+	// (see resolveLayout) — the same resilience principle as the per-section
+	// defer1 reads. The two shared reads above (the unified activity list and
+	// steps entries + goal) stay UNGATED: the streak walks over them regardless
+	// of whether the Steps/Running tiles are enabled, so disabling a tile must
+	// not silently change the streak.
+	layout := h.resolveLayout(ctx, r, userID)
+	enabled := make(map[TileID]bool, len(layout))
+	for _, id := range layout {
+		enabled[id] = true
 	}
 
-	httpresp.OK(w, "dashboard summary", summary)
+	// Strength hydration is a second read; only run it when a tile actually
+	// consumes workouts — the lifting tile, or the streak's completion path.
+	var workouts []strength.Workout
+	if enabled[TileLifting] || enabled[TileStreak] {
+		workouts = defer1(ctx, r, "workout exercises", func() ([]strength.Workout, error) {
+			return h.hydrateStrengthWorkouts(ctx, sessions)
+		})
+	}
+
+	// Built as a map so a tile enabled-but-with-no-data serializes as JSON null
+	// (a nil typed pointer boxed in any marshals to null) while a tile absent
+	// from the layout is absent from the response — a distinction an omitempty
+	// struct cannot express.
+	out := map[string]any{"layout": layout}
+	if enabled[TileRunning] {
+		out[string(TileRunning)] = h.buildRunningSection(ctx, r, userID, endurance, now, loc)
+	}
+	if enabled[TileWalking] {
+		out[string(TileWalking)] = buildWalking(endurance, now, loc)
+	}
+	if enabled[TileCycling] {
+		out[string(TileCycling)] = buildCycling(endurance, now, loc)
+	}
+	if enabled[TileHiking] {
+		out[string(TileHiking)] = buildHiking(endurance, now, loc)
+	}
+	if enabled[TileLifting] {
+		out[string(TileLifting)] = h.buildLiftingSection(ctx, r, userID, workouts, unit, now, loc)
+	}
+	if enabled[TileSteps] {
+		out[string(TileSteps)] = h.buildStepsSection(ctx, r, userID, stepEntries, now, loc)
+	}
+	if enabled[TileNutrition] {
+		out[string(TileNutrition)] = h.buildNutritionSection(ctx, r, userID, todayStr, loc)
+	}
+	if enabled[TileBodyweight] {
+		out[string(TileBodyweight)] = h.buildBodyweightSection(ctx, r, userID, since8w)
+	}
+	if enabled[TileRecovery] {
+		out[string(TileRecovery)] = h.buildRecoverySection(ctx, r, userID, now, loc)
+	}
+	if enabled[TileStreak] {
+		out[string(TileStreak)] = buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc)
+	}
+
+	httpresp.OK(w, "dashboard summary", out)
 }
 
 // buildRunningSection fetches the running metrics and assembles the tile from

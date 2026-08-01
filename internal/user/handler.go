@@ -3,9 +3,12 @@ package user
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,10 +16,20 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
-// maxAvatarBytes caps the avatar multipart upload. 2 MB is generous for a
-// profile picture while bounding per-request memory (the whole file is read
-// into a byte slice to sniff its type and write it to S3).
-const maxAvatarBytes = 2 << 20
+// defaultMaxAvatarBytes is the fallback ceiling for the avatar multipart
+// upload when no limit is wired in. The operative value is the [avatar]
+// max_upload_bytes literal in config.toml; this exists so a handler built
+// without SetAvatarConfig (tests, a manifest missing the section) still bounds
+// per-request memory — the whole file is read into a byte slice to sniff its
+// type and write it to S3.
+const defaultMaxAvatarBytes = 5 << 20
+
+// AvatarConfig mirrors config.AvatarConfig for the avatar upload path. It is
+// declared here (rather than importing internal/config) so the user package
+// stays free of a config dependency; server wiring copies the field across.
+type AvatarConfig struct {
+	MaxUploadBytes int64
+}
 
 // Handler serves the authed user's own account at /me. GET reads the resolved
 // profile; PATCH is the preferences/profile write path; POST/DELETE /me/avatar
@@ -29,6 +42,10 @@ type Handler struct {
 	// configured — GET /me and PATCH /me still work (no presign attempted);
 	// the avatar upload/delete endpoints return 503.
 	store AvatarStore
+	// avatarCfg carries the upload ceiling. Injected post-construction via
+	// SetAvatarConfig from server wiring; a zero MaxUploadBytes falls back to
+	// defaultMaxAvatarBytes.
+	avatarCfg AvatarConfig
 }
 
 // NewHandler constructs the user handler. store may be nil when the deployment
@@ -36,6 +53,41 @@ type Handler struct {
 // reads/writes are unaffected).
 func NewHandler(repo Repository, store AvatarStore) *Handler {
 	return &Handler{repo: repo, store: store}
+}
+
+// SetAvatarConfig wires the avatar tunables in. Called from server wiring after
+// construction, mirroring the activity handler's SetPhotoStore. Safe to never
+// call — the upload path falls back to defaultMaxAvatarBytes.
+func (h *Handler) SetAvatarConfig(cfg AvatarConfig) { h.avatarCfg = cfg }
+
+// maxAvatarBytes is the configured upload ceiling, or the package default when
+// unset (or set to a nonsensical non-positive value, which would otherwise
+// reject every upload).
+func (h *Handler) maxAvatarBytes() int64 {
+	if h.avatarCfg.MaxUploadBytes <= 0 {
+		return defaultMaxAvatarBytes
+	}
+	return h.avatarCfg.MaxUploadBytes
+}
+
+// formatByteLimit renders a byte count for an error message: whole binary
+// MB/KB stay whole ("5 MB"), anything else gets one decimal ("5.2 MB"), and
+// sub-KB values are reported verbatim.
+func formatByteLimit(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return trimZeroDecimal(float64(n)/float64(1<<20)) + " MB"
+	case n >= 1<<10:
+		return trimZeroDecimal(float64(n)/float64(1<<10)) + " KB"
+	default:
+		return fmt.Sprintf("%d bytes", n)
+	}
+}
+
+// trimZeroDecimal formats v with one decimal, dropping a trailing ".0".
+func trimZeroDecimal(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 1, 64)
+	return strings.TrimSuffix(s, ".0")
 }
 
 // Mount registers routes on the given router. The router is expected to be
@@ -256,11 +308,13 @@ func (h *Handler) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 
 	// Cap the body before reading. MaxBytesReader makes the read error out
 	// once the cap is exceeded, so an oversized upload can't exhaust memory.
-	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarBytes)
-	if err := r.ParseMultipartForm(maxAvatarBytes); err != nil {
+	limit := h.maxAvatarBytes()
+	tooLarge := fmt.Sprintf("avatar exceeds %s limit", formatByteLimit(limit))
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	if err := r.ParseMultipartForm(limit); err != nil {
 		var mbErr *http.MaxBytesError
 		if errors.As(err, &mbErr) {
-			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "avatar exceeds 2 MB limit", "file_too_large")
+			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, tooLarge, "file_too_large")
 			return
 		}
 		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "expected a multipart upload with a file field", "unsupported_media_type")
@@ -279,7 +333,7 @@ func (h *Handler) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mbErr *http.MaxBytesError
 		if errors.As(err, &mbErr) {
-			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "avatar exceeds 2 MB limit", "file_too_large")
+			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, tooLarge, "file_too_large")
 			return
 		}
 		httpresp.ServerError(w, r.Context(), "read avatar upload", err)

@@ -700,7 +700,12 @@ func New(cfg config.Config) (*Server, error) {
 		// User self route — exposes the authed user (incl. weight_unit)
 		// for user-scoped frontend reads. Shares the JWT-gated group;
 		// getMe reads the user ID from context.
-		user.NewHandler(userRepo, avatarStore).Mount(r)
+		userHandler := user.NewHandler(userRepo, avatarStore)
+		// The upload ceiling is a manifest literal; the local AvatarConfig copy
+		// keeps the user package free of a config dependency (same shape as the
+		// activity handler's photo/video configs).
+		userHandler.SetAvatarConfig(user.AvatarConfig{MaxUploadBytes: cfg.Avatar.MaxUploadBytes})
+		userHandler.Mount(r)
 		// Usage self route — GET /me/usage reports the authed user's
 		// daily-spend percentage against the configured cap. Only mounted
 		// when telemetry is enabled (the ledger needs telemetry.db); in

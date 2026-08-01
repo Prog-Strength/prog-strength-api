@@ -158,6 +158,42 @@ func TestSummary_StreakUnchangedWhenStepsDisabled(t *testing.T) {
 	}
 }
 
+// TestSummary_StreakUsesWorkoutsWhenLiftingDisabled is the mirror of the steps
+// trap: the streak's completion path needs hydrated workouts, so hydration is
+// gated on lifting OR streak — not lifting alone. A completed workout on a day
+// in the current week must still light the streak when the Lifting tile is
+// disabled but Streak is enabled. This fails if hydration were gated on
+// lifting-only.
+func TestSummary_StreakUsesWorkoutsWhenLiftingDisabled(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	loc := time.UTC
+	now := testNow.In(loc)
+
+	// A completed workout today (Wed 2026-06-17). seedWorkout sets EndedAt and a
+	// logged set, so it satisfies the streak's completion check.
+	seedWorkout(t, rp, userID, now.Add(-2*time.Hour), "barbell-bench-press", 185, 5)
+
+	// Lifting DISABLED, Streak ENABLED.
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileStreak}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	assertKeysAbsent(t, data, "lifting")
+	var streak StreakSection
+	if err := json.Unmarshal(data["streak"], &streak); err != nil {
+		t.Fatalf("decode streak: %v", err)
+	}
+	idx := weekdayIndex(now, loc)
+	if !streak.Week[idx] {
+		t.Errorf("streak week[%d] not active; completed workout did not light the streak with lifting disabled", idx)
+	}
+	if streak.ActiveDaysThisWeek < 1 {
+		t.Errorf("active_days_this_week = %d, want >= 1 (workout hydration must run when streak is enabled)", streak.ActiveDaysThisWeek)
+	}
+}
+
 // failingLayoutRepo returns a non-ErrLayoutNotFound error from Get, exercising
 // the resolveLayout fallback-to-default path. Upsert is a no-op.
 type failingLayoutRepo struct{}

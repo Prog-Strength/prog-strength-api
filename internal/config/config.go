@@ -198,6 +198,12 @@ type Config struct {
 	// tunables and the five-zone percent-of-max model. See HRZonesConfig.
 	HRZones HRZonesConfig
 
+	// Recovery configures the dashboard recovery-trend engine
+	// (sows/dashboard-recovery-metrics-payload.md): baseline/trend window
+	// lengths, minimum sample sizes, and the per-user HRV balance thresholds.
+	// See RecoveryConfig.
+	Recovery RecoveryConfig
+
 	// Photos configures the Activity Photos feature: per-activity caps, the
 	// upload-size ceiling, the derivative image dimensions/quality, the
 	// presign window, and the caption length limit. See PhotosConfig.
@@ -237,6 +243,26 @@ type HRZonesConfig struct {
 	MaxReferenceBpm        int
 	ZoneUpperBounds        []float64
 	ZoneNames              []string
+}
+
+// RecoveryConfig groups the dashboard recovery-trend engine tunables
+// (internal/recoverytrend). All are non-secret public literals (no ${VAR}
+// interpolation, no env override). Thresholds are derived PER USER from their
+// own HRV spread; these knobs shape that derivation rather than being
+// population constants a user's numbers are compared against.
+// BaselineWindowDays is the trailing-day window (excluding today) behind every
+// average; MinBaselineDays is the sample floor before an average is emitted;
+// TrendWindowDays/MinTrendDays bound the near-term window; BalancedZ is the
+// balanced-band half-width in the user's own SDs; TrendZ is the rising/falling
+// threshold; MinStdDevMs floors the SD divisor.
+type RecoveryConfig struct {
+	BaselineWindowDays int
+	MinBaselineDays    int
+	TrendWindowDays    int
+	MinTrendDays       int
+	BalancedZ          float64
+	TrendZ             float64
+	MinStdDevMs        float64
 }
 
 // PhotosConfig groups the Activity Photos tunables. All are non-secret public
@@ -380,6 +406,15 @@ type fileConfig struct {
 		ZoneUpperBounds        []float64 `toml:"zone_upper_bounds"`
 		ZoneNames              []string  `toml:"zone_names"`
 	} `toml:"hr_zones"`
+	Recovery struct {
+		BaselineWindowDays int     `toml:"baseline_window_days"`
+		MinBaselineDays    int     `toml:"min_baseline_days"`
+		TrendWindowDays    int     `toml:"trend_window_days"`
+		MinTrendDays       int     `toml:"min_trend_days"`
+		BalancedZ          float64 `toml:"balanced_z"`
+		TrendZ             float64 `toml:"trend_z"`
+		MinStdDevMs        float64 `toml:"min_std_dev_ms"`
+	} `toml:"recovery"`
 	Photos struct {
 		MaxPerActivity     int   `toml:"max_per_activity"`
 		MaxUploadBytes     int64 `toml:"max_upload_bytes"`
@@ -547,6 +582,15 @@ func Load(defaultTOML []byte) (Config, error) {
 			MaxReferenceBpm:        fc.HRZones.MaxReferenceBpm,
 			ZoneUpperBounds:        fc.HRZones.ZoneUpperBounds,
 			ZoneNames:              fc.HRZones.ZoneNames,
+		},
+		Recovery: RecoveryConfig{
+			BaselineWindowDays: fc.Recovery.BaselineWindowDays,
+			MinBaselineDays:    fc.Recovery.MinBaselineDays,
+			TrendWindowDays:    fc.Recovery.TrendWindowDays,
+			MinTrendDays:       fc.Recovery.MinTrendDays,
+			BalancedZ:          fc.Recovery.BalancedZ,
+			TrendZ:             fc.Recovery.TrendZ,
+			MinStdDevMs:        fc.Recovery.MinStdDevMs,
 		},
 		Photos: PhotosConfig{
 			MaxPerActivity:     fc.Photos.MaxPerActivity,

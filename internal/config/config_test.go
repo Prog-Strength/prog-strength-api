@@ -611,6 +611,15 @@ func TestGoldenManifest(t *testing.T) {
 			ZoneUpperBounds:        []float64{0.60, 0.70, 0.80, 0.90},
 			ZoneNames:              []string{"Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"},
 		},
+		Recovery: RecoveryConfig{
+			BaselineWindowDays: 30,
+			MinBaselineDays:    14,
+			TrendWindowDays:    7,
+			MinTrendDays:       4,
+			BalancedZ:          1.0,
+			TrendZ:             0.5,
+			MinStdDevMs:        1.0,
+		},
 		Photos: PhotosConfig{
 			MaxPerActivity:     10,
 			MaxUploadBytes:     33554432,
@@ -670,6 +679,46 @@ func TestHRZonesSectionParses(t *testing.T) {
 	}
 	if len(cfg.HRZones.ZoneNames) != 5 || cfg.HRZones.ZoneNames[4] != "VO2max" {
 		t.Errorf("ZoneNames = %#v, want [...]/[4]==VO2max", cfg.HRZones.ZoneNames)
+	}
+}
+
+// TestRecoverySectionParses pins the [recovery] tunables: the committed
+// manifest decodes into the typed RecoveryConfig the recoverytrend engine
+// consumes. Plain literals (no ${VAR}, no env override), so a direct Load of
+// the golden config is the assertion surface.
+func TestRecoverySectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "recovery-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Recovery.BaselineWindowDays != 30 {
+		t.Errorf("BaselineWindowDays = %d, want 30", cfg.Recovery.BaselineWindowDays)
+	}
+	if cfg.Recovery.MinBaselineDays != 14 {
+		t.Errorf("MinBaselineDays = %d, want 14", cfg.Recovery.MinBaselineDays)
+	}
+	if cfg.Recovery.TrendWindowDays != 7 {
+		t.Errorf("TrendWindowDays = %d, want 7", cfg.Recovery.TrendWindowDays)
+	}
+	if cfg.Recovery.MinTrendDays != 4 {
+		t.Errorf("MinTrendDays = %d, want 4", cfg.Recovery.MinTrendDays)
+	}
+	if cfg.Recovery.BalancedZ != 1.0 {
+		t.Errorf("BalancedZ = %v, want 1.0", cfg.Recovery.BalancedZ)
+	}
+	if cfg.Recovery.TrendZ != 0.5 {
+		t.Errorf("TrendZ = %v, want 0.5", cfg.Recovery.TrendZ)
+	}
+	if cfg.Recovery.MinStdDevMs != 1.0 {
+		t.Errorf("MinStdDevMs = %v, want 1.0", cfg.Recovery.MinStdDevMs)
 	}
 }
 

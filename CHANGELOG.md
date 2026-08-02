@@ -1,3 +1,10 @@
+## [0.96.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.96.0...v0.96.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **upload:** lift the 10s request deadline on file-upload routes ([#104](https://github.com/Prog-Strength/prog-strength-api/issues/104)) ([bbd0ca7](https://github.com/Prog-Strength/prog-strength-api/commit/bbd0ca79de39e1ca1c39da95cc07889c32915776))
+
 # [0.96.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.95.0...v0.96.0) (2026-08-02)
 
 

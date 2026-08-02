@@ -18,6 +18,10 @@ const (
 	TileBodyweight    TileID = "bodyweight"
 	TileBloodPressure TileID = "blood_pressure"
 	TileRecovery      TileID = "recovery"
+	TileHRVBalance    TileID = "hrv_balance"
+	TileMorningVitals TileID = "morning_vitals"
+	TileRecoveryTrend TileID = "recovery_trend"
+	TileRecoveryLog   TileID = "recovery_log"
 	TileStreak        TileID = "streak"
 )
 
@@ -26,7 +30,9 @@ const (
 // (lib/dashboard-tiles.ts) assert this list stays identical across the boundary.
 var Catalog = []TileID{
 	TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
-	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure, TileRecovery, TileStreak,
+	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
+	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
+	TileStreak,
 }
 
 var catalogSet = func() map[TileID]bool {

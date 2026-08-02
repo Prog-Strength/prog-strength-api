@@ -227,8 +227,20 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	if enabled[TileBloodPressure] {
 		out[string(TileBloodPressure)] = h.buildBloodPressureSection(ctx, r, userID, since8w, now, loc)
 	}
-	if enabled[TileRecovery] {
-		out[string(TileRecovery)] = h.buildRecoverySection(ctx, r, userID, now, loc)
+	// Every recovery-family tile reads the ONE shared "recovery" section, so it
+	// is built once when ANY family tile is enabled and emitted only under the
+	// "recovery" key. This is the first place the response's section-key set
+	// deliberately diverges from layout: a layout of [hrv_balance] yields a
+	// "recovery" key and no "hrv_balance" key (pinned by the summary layout
+	// tests). The web adapter already reads it that way.
+	recoveryFamily := []TileID{
+		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
+	}
+	for _, id := range recoveryFamily {
+		if enabled[id] {
+			out[string(TileRecovery)] = h.buildRecoverySection(ctx, r, userID, now, loc)
+			break
+		}
 	}
 	if enabled[TileStreak] {
 		out[string(TileStreak)] = buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc)

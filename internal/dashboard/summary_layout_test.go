@@ -79,18 +79,7 @@ func TestSummary_DefaultLayout_NoWhoop(t *testing.T) {
 
 func TestSummary_DefaultLayout_WithConnectedWhoop(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
-
-	// A fresh Upsert sets status=connected (per Repository docs).
-	tokens := whoopconn.TokenBundle{
-		AccessTokenEnc:    []byte("a"),
-		AccessTokenNonce:  []byte("n"),
-		RefreshTokenEnc:   []byte("r"),
-		RefreshTokenNonce: []byte("n"),
-		ExpiresAt:         testNow.Add(time.Hour),
-	}
-	if err := rp.whoopConn.Upsert(context.Background(), userID, 12345, tokens, "read:recovery", testNow); err != nil {
-		t.Fatalf("whoop upsert: %v", err)
-	}
+	seedWhoopConnected(t, rp, userID)
 
 	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
 
@@ -267,4 +256,81 @@ func indexOf(s []string, v string) int {
 		}
 	}
 	return -1
+}
+
+// seedWhoopConnected upserts a CONNECTED Whoop connection so
+// buildRecoverySection passes its gate (a fresh Upsert sets status=connected,
+// per the Repository docs).
+func seedWhoopConnected(t *testing.T, rp *repos, userID string) {
+	t.Helper()
+	tokens := whoopconn.TokenBundle{
+		AccessTokenEnc:    []byte("a"),
+		AccessTokenNonce:  []byte("n"),
+		RefreshTokenEnc:   []byte("r"),
+		RefreshTokenNonce: []byte("n"),
+		ExpiresAt:         testNow.Add(time.Hour),
+	}
+	if err := rp.whoopConn.Upsert(context.Background(), userID, 12345, tokens, "read:recovery", testNow); err != nil {
+		t.Fatalf("whoop upsert: %v", err)
+	}
+}
+
+// TestSummary_FamilyTileAlone_YieldsRecoverySection pins the SOW's re-gate: a
+// layout containing ONLY hrv_balance (no recovery tile) must still produce a
+// populated "recovery" section — and no "hrv_balance" key. This is the first
+// place the response's section-key set is deliberately not a subset of layout.
+func TestSummary_FamilyTileAlone_YieldsRecoverySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileHRVBalance}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"hrv_balance"}) {
+		t.Errorf("layout = %v, want [hrv_balance]", layout)
+	}
+	assertKeysPresent(t, data, "recovery")
+	assertKeysAbsent(t, data, "hrv_balance")
+	if string(data["recovery"]) == "null" {
+		t.Error("recovery = null, want a populated section for a connected user")
+	}
+}
+
+// TestSummary_MultipleFamilyTiles_OneRecoverySection asserts the section is
+// built and emitted exactly once under the "recovery" key no matter how many
+// family tiles are on the layout — no per-tile section keys.
+func TestSummary_MultipleFamilyTiles_OneRecoverySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	ids := []TileID{TileRecovery, TileMorningVitals, TileRecoveryLog}
+	if err := rp.layout.Upsert(context.Background(), userID, ids); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"recovery", "morning_vitals", "recovery_log"}) {
+		t.Errorf("layout = %v, want [recovery morning_vitals recovery_log]", layout)
+	}
+	assertKeysPresent(t, data, "recovery")
+	assertKeysAbsent(t, data, "morning_vitals", "recovery_log", "hrv_balance", "recovery_trend")
+}
+
+// TestSummary_NoFamilyTile_NoRecoverySection asserts the inverse: with no
+// recovery-family tile enabled, the "recovery" key is absent entirely.
+func TestSummary_NoFamilyTile_NoRecoverySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning, TileStreak}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	assertKeysAbsent(t, data, "recovery", "hrv_balance", "morning_vitals", "recovery_trend", "recovery_log")
 }

@@ -238,3 +238,32 @@ max_reference_bpm         = 230
 # more entry than zone_upper_bounds (the open-ended top zone).
 zone_upper_bounds         = [0.60, 0.70, 0.80, 0.90]
 zone_names                = ["Recovery", "Aerobic", "Tempo", "Threshold", "VO2max"]
+
+[recovery]
+# Tunables for the dashboard recovery trend engine (internal/recoverytrend).
+# Public literals — not secrets, not env-overridden. Thresholds are derived
+# PER USER from their own HRV spread; these knobs shape that derivation, they
+# are not population constants a user's numbers are compared against.
+#
+# baseline_window_days: trailing local days behind every average. EXCLUDES
+#   today, so a day is measured against history, not a window it is inside.
+# min_baseline_days: non-null samples required before an average is emitted at
+#   all. Below it the payload reports the count and a null average — an honest
+#   "calibrating" state rather than a confident number backed by a few nights.
+# trend_window_days / min_trend_days: the near-term window (INCLUDING today)
+#   whose mean is compared against the baseline, and its minimum sample count.
+# balanced_z: half-width of the balanced band in the user's own standard
+#   deviations. 1.0 puts ~two-thirds of a typical athlete's own days inside it
+#   — "balanced" should describe an ordinary morning, not a rare one.
+# trend_z: how far the recent mean must sit off baseline to read rising or
+#   falling. Below balanced_z because a sustained 7-day shift is a stronger
+#   signal than one morning's reading.
+# min_std_dev_ms: floor on the standard deviation used as the divisor, so a
+#   near-flat history cannot produce an unbounded z-score.
+baseline_window_days = 30
+min_baseline_days    = 14
+trend_window_days    = 7
+min_trend_days       = 4
+balanced_z           = 1.0
+trend_z              = 0.5
+min_std_dev_ms       = 1.0

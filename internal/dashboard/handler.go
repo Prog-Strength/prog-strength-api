@@ -18,6 +18,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
@@ -49,6 +50,11 @@ type Handler struct {
 	whoopRecovery     whooprecovery.Repository
 	layoutRepo        Repository
 
+	// recovery derives the baseline/HRV blocks of the recovery tile from the
+	// fetched window. Mandatory: a handler without it would serve a half-built
+	// recovery payload, so it's a constructor arg rather than a setter.
+	recovery *recoverytrend.Engine
+
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
 	// week-boundary assertions don't flake on the real calendar.
@@ -68,6 +74,7 @@ func NewHandler(
 	whoopConns whoopconn.Repository,
 	whoopRecovery whooprecovery.Repository,
 	layoutRepo Repository,
+	recoveryEngine *recoverytrend.Engine,
 ) *Handler {
 	return &Handler{
 		activityRepo:      activityRepo,
@@ -81,6 +88,7 @@ func NewHandler(
 		whoopConns:        whoopConns,
 		whoopRecovery:     whoopRecovery,
 		layoutRepo:        layoutRepo,
+		recovery:          recoveryEngine,
 		now:               time.Now,
 	}
 }
@@ -318,9 +326,11 @@ func (h *Handler) buildBloodPressureSection(ctx context.Context, r *http.Request
 // buildRecoverySection assembles the Whoop recovery tile. It is present only
 // when the user has a CONNECTED Whoop connection: an absent/revoked/errored
 // connection (or a failed connection read) yields a nil section so the card
-// stays hidden. When connected, it fetches the trailing ~7 local days of
-// recovery and builds today's row + a 7-day resting-HR sparkline. A failed
-// recovery read degrades to nil (never a 500), like the other section reads.
+// stays hidden. When connected, it fetches the trailing baseline_window_days+1
+// local days of recovery and builds today's row, the 7-day resting-HR
+// sparkline, the date-aligned days history, and the derived baseline/HRV blocks.
+// A failed recovery read degrades to nil (never a 500), like the other section
+// reads.
 func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, userID string, now time.Time, loc *time.Location) *RecoverySection {
 	conn, err := h.whoopConns.Get(ctx, userID)
 	if err != nil {
@@ -333,13 +343,17 @@ func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, use
 		return nil
 	}
 
-	// Trailing 7 local days (inclusive of today) as a YYYY-MM-DD window.
-	sinceStr := now.In(loc).AddDate(0, 0, -(recoverySparkDays - 1)).Format("2006-01-02")
+	// baseline_window_days local dates BEFORE today through today inclusive — the
+	// full window the trend engine needs (31 dates at the default). Same single
+	// indexed ListRange call as before (idx_user_whoop_recovery_user_date covers
+	// (user_id, date DESC)); the read just returns ≤31 rows instead of ≤7.
+	win := h.recovery.BaselineWindowDays()
+	sinceStr := now.In(loc).AddDate(0, 0, -win).Format("2006-01-02")
 	untilStr := now.In(loc).Format("2006-01-02")
 	entries := defer1(ctx, r, "whoop recovery", func() ([]whooprecovery.Entry, error) {
 		return h.whoopRecovery.ListRange(ctx, userID, sinceStr, untilStr)
 	})
-	return buildWhoop(entries, now, loc)
+	return buildWhoop(entries, h.recovery, now, loc)
 }
 
 // thisWeekWorkoutIDs returns the IDs of workouts performed in the current local

@@ -30,11 +30,14 @@ type Summary struct {
 }
 
 // RecoverySection is the Whoop recovery tile. nil at the Summary level unless a
-// connected Whoop connection exists; when present but with no data, Today is nil
-// and RestingHRSpark is empty.
+// connected Whoop connection exists. Today and RestingHRSpark are unchanged in
+// shape, semantics, and content; Days, Baseline, and HRV are additive.
 type RecoverySection struct {
-	Today          *RecoveryDay `json:"today"`            // nil when no row today
-	RestingHRSpark []float64    `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted
+	Today          *RecoveryDay     `json:"today"`            // nil when no row today
+	RestingHRSpark []float64        `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted
+	Days           []RecoveryDay    `json:"days"`             // full window, date-aligned oldest→newest, missing days present with null metrics
+	Baseline       RecoveryBaseline `json:"baseline"`         // trailing averages + HRV spread; always present
+	HRV            RecoveryHRV      `json:"hrv"`              // today's HRV vs the user's own baseline; always present
 }
 
 // RecoveryDay is a single day's Whoop recovery snapshot for the tile. The three
@@ -45,6 +48,32 @@ type RecoveryDay struct {
 	RestingHeartRate *float64 `json:"resting_heart_rate"`
 	RecoveryScore    *float64 `json:"recovery_score"`
 	HRVRmssdMilli    *float64 `json:"hrv_rmssd_milli"`
+}
+
+// RecoveryBaseline carries the trailing averages and the spread behind the HRV
+// band. Averages are null until their metric has min_baseline_days samples; the
+// *Days counts are always populated so a client can render calibration progress.
+type RecoveryBaseline struct {
+	WindowDays        int      `json:"window_days"`
+	RestingHRAvg      *float64 `json:"resting_hr_avg"`
+	RestingHRDays     int      `json:"resting_hr_days"`
+	HRVAvg            *float64 `json:"hrv_avg"`
+	HRVStdDev         *float64 `json:"hrv_std_dev"`
+	HRVDays           int      `json:"hrv_days"`
+	RecoveryScoreAvg  *float64 `json:"recovery_score_avg"`
+	RecoveryScoreDays int      `json:"recovery_score_days"`
+}
+
+// RecoveryHRV is today's HRV read against the user's own baseline. Bounds and
+// z-score are derived from the same floored standard deviation, so they always
+// agree with Status.
+type RecoveryHRV struct {
+	Status       string   `json:"status"` // balanced | elevated | suppressed | unknown
+	BalancedLow  *float64 `json:"balanced_low"`
+	BalancedHigh *float64 `json:"balanced_high"`
+	ZScore       *float64 `json:"z_score"`
+	Trend        string   `json:"trend"` // rising | falling | steady | unknown
+	ShortAvg     *float64 `json:"short_avg"`
 }
 
 // RunningSection is the running tile. nil at the Summary level when the user

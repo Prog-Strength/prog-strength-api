@@ -14,6 +14,7 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/uploadwindow"
 )
 
 // defaultMaxAvatarBytes is the fallback ceiling for the avatar multipart
@@ -305,6 +306,11 @@ func (h *Handler) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
 		return
 	}
+
+	// Transfer + re-encode + S3 PUT in one request does not fit the server's
+	// global 10s Read/WriteTimeout on a slow upstream. Lift it before touching
+	// the body; the error only reports "no server here". See uploadwindow.
+	_ = uploadwindow.Extend(w, uploadwindow.Window)
 
 	// Cap the body before reading. MaxBytesReader makes the read error out
 	// once the cap is exceeded, so an oversized upload can't exhaust memory.

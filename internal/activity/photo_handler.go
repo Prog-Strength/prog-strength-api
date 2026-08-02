@@ -14,6 +14,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/uploadwindow"
 )
 
 // allowedPhotoContentTypes is the sniffed-content-type allowlist for a photo
@@ -99,6 +100,13 @@ func (h *Handler) uploadPhoto(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "get activity", getErr)
 		return
 	}
+
+	// One request has to cover the client's transfer, the image pipeline, and
+	// two S3 PUTs — which does not fit the server's global 10s Read/WriteTimeout
+	// for anything but a small photo. Lift it before touching the body. The
+	// error is ignored on purpose: it only reports "no server here", i.e. a
+	// handler unit test. See internal/uploadwindow.
+	_ = uploadwindow.Extend(w, uploadwindow.Window)
 
 	// Cap the body before reading. MaxBytesReader makes the read error out once
 	// the cap is exceeded, so an oversized upload can't exhaust memory.

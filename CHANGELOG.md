@@ -1,3 +1,10 @@
+# [0.95.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.94.0...v0.95.0) (2026-08-02)
+
+
+### Features
+
+* **dashboard:** extend recovery summary payload with days, baselines, and HRV balance ([#102](https://github.com/Prog-Strength/prog-strength-api/issues/102)) ([fac9033](https://github.com/Prog-Strength/prog-strength-api/commit/fac903352a7ed7357fcd66623762caf548865087))
+
 # [0.94.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.93.0...v0.94.0) (2026-08-01)
 
 

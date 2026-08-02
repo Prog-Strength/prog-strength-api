@@ -33,6 +33,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/snapshot"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
@@ -155,7 +156,11 @@ func newContractEnv(t *testing.T) *contractEnv {
 	dh := dashboard.NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps,
 		rp.nutrition, rp.bodyweight, bloodpressure.NewSQLiteRepository(db), rp.user,
 		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db),
-		dashboard.NewSQLiteLayoutRepository(db))
+		dashboard.NewSQLiteLayoutRepository(db),
+		recoverytrend.New(recoverytrend.Config{
+			BaselineWindowDays: 30, MinBaselineDays: 14, TrendWindowDays: 7,
+			MinTrendDays: 4, BalancedZ: 1.0, TrendZ: 0.5, MinStdDevMs: 1.0,
+		}))
 
 	r := chi.NewRouter()
 	r.Use(func(next http.Handler) http.Handler {

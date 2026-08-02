@@ -32,6 +32,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutritionlookup"
 	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/snapshot"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
@@ -674,12 +675,24 @@ func New(cfg config.Config) (*Server, error) {
 			ZoneNames:              cfg.HRZones.ZoneNames,
 		})
 		activityHandler.SetHRZonesEngine(hrEngine, time.Duration(cfg.HRZones.RecencyWindowDays)*24*time.Hour)
+		// Recovery-trend engine: tunables come from the [recovery] config
+		// section. Mandatory constructor arg for the dashboard handler so the
+		// recovery tile never serves a half-built baseline/HRV block.
+		recoveryEngine := recoverytrend.New(recoverytrend.Config{
+			BaselineWindowDays: cfg.Recovery.BaselineWindowDays,
+			MinBaselineDays:    cfg.Recovery.MinBaselineDays,
+			TrendWindowDays:    cfg.Recovery.TrendWindowDays,
+			MinTrendDays:       cfg.Recovery.MinTrendDays,
+			BalancedZ:          cfg.Recovery.BalancedZ,
+			TrendZ:             cfg.Recovery.TrendZ,
+			MinStdDevMs:        cfg.Recovery.MinStdDevMs,
+		})
 		activityHandler.SetDemographicsLoader(user.EstimateDemographicsLoader{Repo: userRepo})
 		activityHandler.Mount(r)
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database)).Mount(r)
+		dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database), recoveryEngine).Mount(r)
 		// Training snapshot — the agent-facing holistic read across every
 		// domain (GET /training-snapshot). Separate surface from the web
 		// dashboard; composes the same domain repos defensively. Arg order

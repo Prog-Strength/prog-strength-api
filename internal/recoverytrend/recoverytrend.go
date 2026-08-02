@@ -87,7 +87,73 @@ func (e *Engine) Compute(days []Day) (Baseline, HRV) {
 	if len(days) == 0 {
 		return b, h
 	}
-	return b, h // math filled in Task 2
+
+	today := days[len(days)-1]
+	// Baseline sample is every day EXCEPT today, so a day is measured against
+	// history rather than a window it belongs to.
+	sample := days[:len(days)-1]
+
+	rhr := collect(sample, func(d Day) *float64 { return d.RestingHR })
+	b.RestingHRDays = len(rhr)
+	if len(rhr) >= e.cfg.MinBaselineDays {
+		v := mean(rhr)
+		b.RestingHRAvg = &v
+	}
+
+	rs := collect(sample, func(d Day) *float64 { return d.RecoveryScore })
+	b.RecoveryScoreDays = len(rs)
+	if len(rs) >= e.cfg.MinBaselineDays {
+		v := mean(rs)
+		b.RecoveryScoreAvg = &v
+	}
+
+	hrv := collect(sample, func(d Day) *float64 { return d.HRV })
+	b.HRVDays = len(hrv)
+	if len(hrv) < e.cfg.MinBaselineDays {
+		// No HRV baseline: no band, no z-score, status and trend stay unknown.
+		return b, h
+	}
+
+	avg := mean(hrv)
+	b.HRVAvg = &avg
+	sd := stdDevPop(hrv, avg)
+	b.HRVStdDev = &sd
+	sdEff := math.Max(sd, e.cfg.MinStdDevMs)
+
+	low := avg - e.cfg.BalancedZ*sdEff
+	high := avg + e.cfg.BalancedZ*sdEff
+	h.BalancedLow = &low
+	h.BalancedHigh = &high
+
+	if today.HRV != nil {
+		z := (*today.HRV - avg) / sdEff
+		h.ZScore = &z
+		switch {
+		case math.Abs(z) <= e.cfg.BalancedZ:
+			h.Status = StatusBalanced
+		case z > e.cfg.BalancedZ:
+			h.Status = StatusElevated
+		default:
+			h.Status = StatusSuppressed
+		}
+	}
+
+	trendHRV := collect(lastN(days, e.cfg.TrendWindowDays), func(d Day) *float64 { return d.HRV })
+	if len(trendHRV) >= e.cfg.MinTrendDays {
+		short := mean(trendHRV)
+		h.ShortAvg = &short
+		delta := short - avg
+		switch {
+		case delta > e.cfg.TrendZ*sdEff:
+			h.Trend = TrendRising
+		case delta < -e.cfg.TrendZ*sdEff:
+			h.Trend = TrendFalling
+		default:
+			h.Trend = TrendSteady
+		}
+	}
+
+	return b, h
 }
 
 // collect returns the non-nil values of one metric across days, in order.

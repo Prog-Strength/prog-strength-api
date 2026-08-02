@@ -15,6 +15,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/uploadwindow"
 )
 
 // maxTCXUploadBytes caps the multipart upload size, matching the run
@@ -348,6 +349,11 @@ func (h *Handler) loadOwnedWorkout(w http.ResponseWriter, r *http.Request, userI
 // response itself and returns ok=false on failure. The caller must Close the
 // returned file.
 func readTCXUpload(w http.ResponseWriter, r *http.Request) (multipart.File, bool) {
+	// Transfer + parse + S3 archive in one request does not fit the server's
+	// global 10s Read/WriteTimeout for a large multi-hour file on a slow
+	// upstream. Lift it before touching the body. See uploadwindow.
+	_ = uploadwindow.Extend(w, uploadwindow.Window)
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxTCXUploadBytes)
 	if err := r.ParseMultipartForm(maxTCXUploadBytes); err != nil {
 		var mbErr *http.MaxBytesError

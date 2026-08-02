@@ -1,3 +1,10 @@
+# [0.96.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.95.0...v0.96.0) (2026-08-02)
+
+
+### Features
+
+* **dashboard:** recovery-family tile ids and shared-section gating ([#103](https://github.com/Prog-Strength/prog-strength-api/issues/103)) ([9956811](https://github.com/Prog-Strength/prog-strength-api/commit/9956811623f2749f850c65b50ea6796c7b6723d8))
+
 # [0.95.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.94.0...v0.95.0) (2026-08-02)
 
 

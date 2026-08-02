@@ -88,7 +88,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	}
 
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 	return r, rp, u.ID
@@ -406,7 +406,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 
 	// Wire the handler with the failing bodyweight repo; all others are real.
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout)
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 
@@ -571,5 +571,55 @@ func TestSummary_InvalidTimezone(t *testing.T) {
 	rec := get(t, r, userID, "?timezone=Not/AZone")
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// connectedWhoopConn is a whoopconn.Repository stub that reports a single
+// CONNECTED connection, so buildRecoverySection passes the connected gate and
+// reaches the recovery read. Only Get is exercised; the rest are unused.
+type connectedWhoopConn struct {
+	whoopconn.Repository
+}
+
+func (connectedWhoopConn) Get(_ context.Context, userID string) (*whoopconn.Connection, error) {
+	return &whoopconn.Connection{UserID: userID, Status: whoopconn.StatusConnected}, nil
+}
+
+// captureRecoveryRepo records the since/until it is called with so a test can
+// assert the fetched window width.
+type captureRecoveryRepo struct {
+	whooprecovery.Repository
+	since, until string
+}
+
+func (c *captureRecoveryRepo) ListRange(_ context.Context, _ string, since, until string) ([]whooprecovery.Entry, error) {
+	c.since, c.until = since, until
+	return nil, nil
+}
+
+// TestBuildRecoverySection_WidenedWindow asserts the recovery read now fetches
+// baseline_window_days (30) local dates before today through today inclusive,
+// rather than the legacy trailing 7. For now pinned to local 2026-08-01, the
+// window is since=2026-07-02, until=2026-08-01.
+func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
+	loc := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, loc)
+
+	capture := &captureRecoveryRepo{}
+	h := &Handler{
+		whoopConns:    connectedWhoopConn{},
+		whoopRecovery: capture,
+		recovery:      testRecoveryEngine(),
+		now:           func() time.Time { return now },
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/summary", nil)
+	h.buildRecoverySection(req.Context(), req, "user-1", now, loc)
+
+	if capture.since != "2026-07-02" {
+		t.Errorf("since = %q, want 2026-07-02 (30 days back)", capture.since)
+	}
+	if capture.until != "2026-08-01" {
+		t.Errorf("until = %q, want 2026-08-01 (today)", capture.until)
 	}
 }

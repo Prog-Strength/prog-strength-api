@@ -8,28 +8,32 @@ package dashboard
 type TileID string
 
 const (
-	TileRunning       TileID = "running"
-	TileWalking       TileID = "walking"
-	TileCycling       TileID = "cycling"
-	TileHiking        TileID = "hiking"
-	TileLifting       TileID = "lifting"
-	TileSteps         TileID = "steps"
-	TileNutrition     TileID = "nutrition"
-	TileBodyweight    TileID = "bodyweight"
-	TileBloodPressure TileID = "blood_pressure"
-	TileRecovery      TileID = "recovery"
-	TileHRVBalance    TileID = "hrv_balance"
-	TileMorningVitals TileID = "morning_vitals"
-	TileRecoveryTrend TileID = "recovery_trend"
-	TileRecoveryLog   TileID = "recovery_log"
-	TileStreak        TileID = "streak"
+	TileRunning         TileID = "running"
+	TileRunningLog      TileID = "running_log"
+	TileRunningEffort   TileID = "running_effort"
+	TileRunningVertical TileID = "running_vertical"
+	TileWalking         TileID = "walking"
+	TileCycling         TileID = "cycling"
+	TileHiking          TileID = "hiking"
+	TileLifting         TileID = "lifting"
+	TileSteps           TileID = "steps"
+	TileNutrition       TileID = "nutrition"
+	TileBodyweight      TileID = "bodyweight"
+	TileBloodPressure   TileID = "blood_pressure"
+	TileRecovery        TileID = "recovery"
+	TileHRVBalance      TileID = "hrv_balance"
+	TileMorningVitals   TileID = "morning_vitals"
+	TileRecoveryTrend   TileID = "recovery_trend"
+	TileRecoveryLog     TileID = "recovery_log"
+	TileStreak          TileID = "streak"
 )
 
 // Catalog is the ordered set of every tile. Order fixes how tiles appear in the
 // web add-tile tray. The contract test (tiles_test.go) and the TS mirror
 // (lib/dashboard-tiles.ts) assert this list stays identical across the boundary.
 var Catalog = []TileID{
-	TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
+	TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
+	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
 	TileStreak,

@@ -4,7 +4,8 @@ import "testing"
 
 func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 	all := []TileID{
-		TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
+		TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
+		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
 		TileStreak,
@@ -25,7 +26,8 @@ func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 
 func TestCatalog_Order(t *testing.T) {
 	want := []TileID{
-		TileRunning, TileWalking, TileCycling, TileHiking, TileLifting,
+		TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
+		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
 		TileStreak,
@@ -52,5 +54,14 @@ func TestValidTileID(t *testing.T) {
 	}
 	if !ValidTileID("recovery_log") {
 		t.Error("recovery_log should be valid")
+	}
+	if !ValidTileID("running_log") {
+		t.Error("running_log should be valid")
+	}
+	if !ValidTileID("running_effort") {
+		t.Error("running_effort should be valid")
+	}
+	if !ValidTileID("running_vertical") {
+		t.Error("running_vertical should be valid")
 	}
 }

@@ -1,3 +1,10 @@
+# [0.97.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.96.1...v0.97.0) (2026-08-03)
+
+
+### Features
+
+* **photos:** lossless JPEG metadata strip ([#106](https://github.com/Prog-Strength/prog-strength-api/issues/106)) ([b79b95f](https://github.com/Prog-Strength/prog-strength-api/commit/b79b95faf66a154f8adfbd863ed2d2148830cb46))
+
 ## [0.96.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.96.0...v0.96.1) (2026-08-02)
 
 

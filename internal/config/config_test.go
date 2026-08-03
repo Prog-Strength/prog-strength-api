@@ -621,14 +621,17 @@ func TestGoldenManifest(t *testing.T) {
 			MinStdDevMs:        1.0,
 		},
 		Photos: PhotosConfig{
-			MaxPerActivity:     10,
-			MaxUploadBytes:     33554432,
-			FullMaxEdgePx:      20000,
-			FullJPEGQuality:    95,
-			ThumbMaxEdgePx:     800,
-			ThumbJPEGQuality:   85,
-			PresignWindowHours: 6,
-			CaptionMaxChars:    200,
+			MaxPerActivity:      10,
+			MaxUploadBytes:      33554432,
+			UploadURLTTLMinutes: 15,
+			ProcessMaxAttempts:  3,
+			ReapAfterMinutes:    30,
+			FullMaxEdgePx:       20000,
+			FullJPEGQuality:     95,
+			ThumbMaxEdgePx:      800,
+			ThumbJPEGQuality:    85,
+			PresignWindowHours:  6,
+			CaptionMaxChars:     200,
 		},
 		Videos: VideosConfig{
 			MaxPerActivity:        10,
@@ -740,14 +743,17 @@ func TestPhotosSectionParses(t *testing.T) {
 	}
 
 	want := PhotosConfig{
-		MaxPerActivity:     10,
-		MaxUploadBytes:     33554432,
-		FullMaxEdgePx:      20000,
-		FullJPEGQuality:    95,
-		ThumbMaxEdgePx:     800,
-		ThumbJPEGQuality:   85,
-		PresignWindowHours: 6,
-		CaptionMaxChars:    200,
+		MaxPerActivity:      10,
+		MaxUploadBytes:      33554432,
+		UploadURLTTLMinutes: 15,
+		ProcessMaxAttempts:  3,
+		ReapAfterMinutes:    30,
+		FullMaxEdgePx:       20000,
+		FullJPEGQuality:     95,
+		ThumbMaxEdgePx:      800,
+		ThumbJPEGQuality:    85,
+		PresignWindowHours:  6,
+		CaptionMaxChars:     200,
 	}
 	if !reflect.DeepEqual(cfg.Photos, want) {
 		t.Errorf("Photos = %#v, want %#v", cfg.Photos, want)

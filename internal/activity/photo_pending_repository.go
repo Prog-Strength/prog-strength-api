@@ -211,3 +211,25 @@ func requireOneRow(res sql.Result) error {
 	}
 	return nil
 }
+
+// GetPending returns a live PENDING reservation for its owner. The ordinary
+// Get filters to visible statuses, which a reservation is deliberately not —
+// so commit needs its own read rather than a relaxed shared one. Keeping them
+// separate means no other caller can accidentally surface a reservation.
+func (r *SQLitePhotoRepository) GetPending(ctx context.Context, userID, activityID, photoID string) (ActivityPhoto, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT `+photoColumns+`
+		FROM activity_photo p
+		JOIN activities a ON a.id = p.activity_id
+		WHERE p.id = ? AND p.activity_id = ? AND p.user_id = ?
+		  AND p.status = ? AND p.deleted_at IS NULL AND a.deleted_at IS NULL
+	`, photoID, activityID, userID, PhotoStatusPending)
+	p, err := scanPhoto(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActivityPhoto{}, ErrNotFound
+	}
+	if err != nil {
+		return ActivityPhoto{}, err
+	}
+	return p, nil
+}

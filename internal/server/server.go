@@ -634,6 +634,10 @@ func New(cfg config.Config) (*Server, error) {
 			ThumbJPEGQuality:   cfg.Photos.ThumbJPEGQuality,
 			PresignWindowHours: cfg.Photos.PresignWindowHours,
 			CaptionMaxChars:    cfg.Photos.CaptionMaxChars,
+
+			UploadURLTTLMinutes: cfg.Photos.UploadURLTTLMinutes,
+			ProcessMaxAttempts:  cfg.Photos.ProcessMaxAttempts,
+			ReapAfterMinutes:    cfg.Photos.ReapAfterMinutes,
 		})
 		// Same wiring shape for videos. videoStore may be nil (bucket
 		// unconfigured); videoStorageReady() then 503s writes and omits the

@@ -29,19 +29,41 @@ var allowedPhotoContentTypes = map[string]bool{
 // presigned (windowed, cache-stable) GET URLs for the full and thumb variants.
 // Caption is present-as-null.
 type photoDTO struct {
-	ID       string  `json:"id"`
-	URL      string  `json:"url"`
-	ThumbURL string  `json:"thumb_url"`
+	ID string `json:"id"`
+	// URL/ThumbURL are null while a photo is still being processed — the
+	// objects do not exist yet. The client renders a placeholder at Position
+	// rather than a broken image.
+	URL      *string `json:"url"`
+	ThumbURL *string `json:"thumb_url"`
 	Width    int     `json:"width"`
 	Height   int     `json:"height"`
 	Caption  *string `json:"caption"`
 	Position int     `json:"position"`
+	// Status is 'ready' or 'processing'. Reads never surface 'pending' or
+	// 'failed', so those cannot appear here.
+	Status string `json:"status"`
 }
 
 // toPhotoDTO hydrates a stored photo into its wire shape, presigning both the
 // full and thumbnail variant keys. A presign failure is surfaced as an error so
 // the caller can 500 rather than emit a half-formed DTO.
 func (h *Handler) toPhotoDTO(ctx context.Context, p ActivityPhoto) (photoDTO, error) {
+	dto := photoDTO{
+		ID:       p.ID,
+		Width:    p.Width,
+		Height:   p.Height,
+		Caption:  p.Caption,
+		Position: p.Position,
+		Status:   p.Status,
+	}
+	// A photo the worker still holds has no objects to presign — its keys are
+	// the reservation's placeholders. Presigning those would mint URLs that
+	// 404, which reads to the client as a BROKEN photo rather than one that is
+	// simply not finished yet.
+	if p.Status != PhotoStatusReady {
+		return dto, nil
+	}
+
 	fullURL, err := h.photoStore.PresignGet(ctx, p.S3Key)
 	if err != nil {
 		return photoDTO{}, err
@@ -50,15 +72,9 @@ func (h *Handler) toPhotoDTO(ctx context.Context, p ActivityPhoto) (photoDTO, er
 	if err != nil {
 		return photoDTO{}, err
 	}
-	return photoDTO{
-		ID:       p.ID,
-		URL:      fullURL,
-		ThumbURL: thumbURL,
-		Width:    p.Width,
-		Height:   p.Height,
-		Caption:  p.Caption,
-		Position: p.Position,
-	}, nil
+	dto.URL = &fullURL
+	dto.ThumbURL = &thumbURL
+	return dto, nil
 }
 
 // photoStorageReady reports whether the photo write path is wired. When false

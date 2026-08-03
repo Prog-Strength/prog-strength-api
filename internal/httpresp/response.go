@@ -65,6 +65,13 @@ func Created(w http.ResponseWriter, message string, data any) {
 	writeSuccess(w, http.StatusCreated, message, data)
 }
 
+// Accepted writes a 202 response. Use when the request has been recorded but
+// the work it describes has not finished — the photo commit hands its row to a
+// background worker and returns before the image exists.
+func Accepted(w http.ResponseWriter, message string, data any) {
+	writeSuccess(w, http.StatusAccepted, message, data)
+}
+
 func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
 	writeJSON(w, status, Response{
 		Service:   service,

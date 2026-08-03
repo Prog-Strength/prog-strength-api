@@ -158,8 +158,8 @@ func TestUploadPhoto_HappyPath(t *testing.T) {
 	if env.Data.Caption == nil || *env.Data.Caption != "leg day" {
 		t.Errorf("caption = %v, want 'leg day'", env.Data.Caption)
 	}
-	if env.Data.URL == "" || env.Data.ThumbURL == "" {
-		t.Errorf("expected both presigned urls, got url=%q thumb=%q", env.Data.URL, env.Data.ThumbURL)
+	if env.Data.URL == nil || *env.Data.URL == "" || env.Data.ThumbURL == nil || *env.Data.ThumbURL == "" {
+		t.Errorf("expected both presigned urls, got url=%v thumb=%v", env.Data.URL, env.Data.ThumbURL)
 	}
 	if env.Data.Width <= 0 || env.Data.Height <= 0 {
 		t.Errorf("expected positive dimensions, got %dx%d", env.Data.Width, env.Data.Height)

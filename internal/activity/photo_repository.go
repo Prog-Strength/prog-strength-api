@@ -158,6 +158,11 @@ type PhotoRepository interface {
 	// SoftDeleteByID retires a row by id alone, for callers (the reaper, the
 	// commit cleanup path) that have no request user in hand.
 	SoftDeleteByID(ctx context.Context, photoID string) error
+
+	// GetPending returns a live PENDING reservation for its owner. Separate
+	// from Get, which filters to visible statuses — a reservation is
+	// deliberately not one, so only commit can see it.
+	GetPending(ctx context.Context, userID, activityID, photoID string) (ActivityPhoto, error)
 }
 
 // SQLitePhotoRepository is the SQLite-backed PhotoRepository. It holds only a

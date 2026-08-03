@@ -67,8 +67,8 @@ func TestGetDetail_IncludesPhotosOrdered(t *testing.T) {
 		if got[i].Position != i {
 			t.Errorf("photos[%d].position = %d, want %d", i, got[i].Position, i)
 		}
-		if got[i].URL == "" || got[i].ThumbURL == "" {
-			t.Errorf("photos[%d] missing presigned url(s): url=%q thumb=%q", i, got[i].URL, got[i].ThumbURL)
+		if got[i].URL == nil || *got[i].URL == "" || got[i].ThumbURL == nil || *got[i].ThumbURL == "" {
+			t.Errorf("photos[%d] missing presigned url(s): url=%v thumb=%v", i, got[i].URL, got[i].ThumbURL)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package activity
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -311,5 +312,53 @@ func TestBuildPhotoKey(t *testing.T) {
 				t.Errorf("buildPhotoKey =\n  %q\nwant\n  %q", got, c.want)
 			}
 		})
+	}
+}
+
+// The staged upload key must land under the prefix the bucket's lifecycle
+// rule reaps, and must not collide with the serving variants.
+func TestBuildPhotoUploadKey(t *testing.T) {
+	start := time.Date(2026, 8, 2, 14, 30, 0, 0, time.UTC)
+
+	got, err := buildPhotoUploadKey("u1", ActivityRunning, start, "a1", "p1", "image/jpeg")
+	if err != nil {
+		t.Fatalf("buildPhotoUploadKey: %v", err)
+	}
+
+	if !strings.HasPrefix(got, "uploads/") {
+		t.Errorf("key %q does not start with uploads/ — the lifecycle rule filters on that prefix", got)
+	}
+	if !strings.Contains(got, "variant=original") {
+		t.Errorf("key %q should mark itself as the original", got)
+	}
+	full, err := buildPhotoKey("u1", ActivityRunning, start, "a1", "p1", photoVariantFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == full {
+		t.Error("staged key collides with the serving key; the stripped copy would overwrite the original")
+	}
+	if strings.HasPrefix(full, "uploads/") {
+		t.Error("a SERVING key landed under uploads/, where the lifecycle rule would reap it")
+	}
+}
+
+func TestBuildPhotoUploadKeyExtensionPerContentType(t *testing.T) {
+	start := time.Date(2026, 8, 2, 14, 30, 0, 0, time.UTC)
+	for ct, wantExt := range map[string]string{
+		"image/jpeg": ".jpg",
+		"image/png":  ".png",
+		"image/webp": ".webp",
+	} {
+		got, err := buildPhotoUploadKey("u1", ActivityRunning, start, "a1", "p1", ct)
+		if err != nil {
+			t.Fatalf("%s: %v", ct, err)
+		}
+		if !strings.HasSuffix(got, wantExt) {
+			t.Errorf("%s -> %q, want suffix %q", ct, got, wantExt)
+		}
+	}
+	if _, err := buildPhotoUploadKey("u1", ActivityRunning, start, "a1", "p1", "image/gif"); err == nil {
+		t.Error("accepted an unsupported content type")
 	}
 }

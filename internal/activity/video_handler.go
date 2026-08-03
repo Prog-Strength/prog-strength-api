@@ -78,11 +78,11 @@ func videoStorageUnavailable(w http.ResponseWriter) {
 	httpresp.ErrorWithCode(w, http.StatusServiceUnavailable, "video storage is not configured", "video_storage_unavailable")
 }
 
-// resolveVideoParent pulls the authed user and the owned, live parent activity
-// off the request. Every video endpoint starts here, so ownership and existence
-// are enforced in exactly one place. Returns ok=false with the response already
-// written.
-func (h *Handler) resolveVideoParent(w http.ResponseWriter, r *http.Request) (userID string, a *Activity, activityID string, ok bool) {
+// resolveActivityParent pulls the authed user and the owned, live parent
+// activity off the request. Every video AND photo-upload endpoint starts here,
+// so ownership and existence are enforced in exactly one place. Returns
+// ok=false with the response already written.
+func (h *Handler) resolveActivityParent(w http.ResponseWriter, r *http.Request) (userID string, a *Activity, activityID string, ok bool) {
 	userID, found := auth.UserIDFrom(r.Context())
 	if !found {
 		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
@@ -133,7 +133,7 @@ func (h *Handler) reserveVideo(w http.ResponseWriter, r *http.Request) {
 		videoStorageUnavailable(w)
 		return
 	}
-	userID, a, activityID, ok := h.resolveVideoParent(w, r)
+	userID, a, activityID, ok := h.resolveActivityParent(w, r)
 	if !ok {
 		return
 	}
@@ -231,7 +231,7 @@ func (h *Handler) completeVideo(w http.ResponseWriter, r *http.Request) {
 		videoStorageUnavailable(w)
 		return
 	}
-	userID, a, activityID, ok := h.resolveVideoParent(w, r)
+	userID, a, activityID, ok := h.resolveActivityParent(w, r)
 	if !ok {
 		return
 	}
@@ -353,7 +353,7 @@ func (h *Handler) patchVideoCaption(w http.ResponseWriter, r *http.Request) {
 		videoStorageUnavailable(w)
 		return
 	}
-	userID, _, activityID, ok := h.resolveVideoParent(w, r)
+	userID, _, activityID, ok := h.resolveActivityParent(w, r)
 	if !ok {
 		return
 	}
@@ -391,7 +391,7 @@ func (h *Handler) reorderVideos(w http.ResponseWriter, r *http.Request) {
 		videoStorageUnavailable(w)
 		return
 	}
-	userID, _, activityID, ok := h.resolveVideoParent(w, r)
+	userID, _, activityID, ok := h.resolveActivityParent(w, r)
 	if !ok {
 		return
 	}
@@ -425,7 +425,7 @@ func (h *Handler) deleteVideo(w http.ResponseWriter, r *http.Request) {
 		videoStorageUnavailable(w)
 		return
 	}
-	userID, _, activityID, ok := h.resolveVideoParent(w, r)
+	userID, _, activityID, ok := h.resolveActivityParent(w, r)
 	if !ok {
 		return
 	}

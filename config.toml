@@ -128,6 +128,19 @@ thumb_max_edge_px    = 800
 thumb_jpeg_quality   = 85
 presign_window_hours = 6
 caption_max_chars    = 200
+# --- two-phase upload (see sows/photo-upload-direct-to-s3.md) ---
+# Lifetime of the presigned PUT the client uploads its original to. Generous
+# enough for a 32 MiB photo on a slow connection, short enough that an
+# abandoned reservation is reaped promptly.
+upload_url_ttl_minutes = 15
+# How many times the worker will pick up one photo before giving up. The
+# counter increments at CLAIM time, so a photo that kills the worker outright
+# is still bounded by this.
+process_max_attempts = 3
+# How long a reservation may sit unused before the reaper retires it and
+# deletes its staged object. Comfortably longer than the presign TTL, so a
+# slow-but-live upload is never reaped out from under itself.
+reap_after_minutes = 30
 
 [videos]
 # Tunables for the Activity Videos feature. Public literals — not secrets, not

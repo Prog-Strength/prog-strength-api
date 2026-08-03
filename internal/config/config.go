@@ -273,14 +273,17 @@ type RecoveryConfig struct {
 // is the lifetime of a generated presigned URL, and CaptionMaxChars bounds a
 // caption's length.
 type PhotosConfig struct {
-	MaxPerActivity     int
-	MaxUploadBytes     int64
-	FullMaxEdgePx      int
-	FullJPEGQuality    int
-	ThumbMaxEdgePx     int
-	ThumbJPEGQuality   int
-	PresignWindowHours int
-	CaptionMaxChars    int
+	MaxPerActivity      int
+	MaxUploadBytes      int64
+	UploadURLTTLMinutes int
+	ProcessMaxAttempts  int
+	ReapAfterMinutes    int
+	FullMaxEdgePx       int
+	FullJPEGQuality     int
+	ThumbMaxEdgePx      int
+	ThumbJPEGQuality    int
+	PresignWindowHours  int
+	CaptionMaxChars     int
 }
 
 // VideosConfig groups the Activity Videos tunables. All are non-secret public
@@ -416,14 +419,17 @@ type fileConfig struct {
 		MinStdDevMs        float64 `toml:"min_std_dev_ms"`
 	} `toml:"recovery"`
 	Photos struct {
-		MaxPerActivity     int   `toml:"max_per_activity"`
-		MaxUploadBytes     int64 `toml:"max_upload_bytes"`
-		FullMaxEdgePx      int   `toml:"full_max_edge_px"`
-		FullJPEGQuality    int   `toml:"full_jpeg_quality"`
-		ThumbMaxEdgePx     int   `toml:"thumb_max_edge_px"`
-		ThumbJPEGQuality   int   `toml:"thumb_jpeg_quality"`
-		PresignWindowHours int   `toml:"presign_window_hours"`
-		CaptionMaxChars    int   `toml:"caption_max_chars"`
+		MaxPerActivity      int   `toml:"max_per_activity"`
+		MaxUploadBytes      int64 `toml:"max_upload_bytes"`
+		UploadURLTTLMinutes int   `toml:"upload_url_ttl_minutes"`
+		ProcessMaxAttempts  int   `toml:"process_max_attempts"`
+		ReapAfterMinutes    int   `toml:"reap_after_minutes"`
+		FullMaxEdgePx       int   `toml:"full_max_edge_px"`
+		FullJPEGQuality     int   `toml:"full_jpeg_quality"`
+		ThumbMaxEdgePx      int   `toml:"thumb_max_edge_px"`
+		ThumbJPEGQuality    int   `toml:"thumb_jpeg_quality"`
+		PresignWindowHours  int   `toml:"presign_window_hours"`
+		CaptionMaxChars     int   `toml:"caption_max_chars"`
 	} `toml:"photos"`
 	Videos struct {
 		MaxPerActivity        int   `toml:"max_per_activity"`
@@ -593,14 +599,17 @@ func Load(defaultTOML []byte) (Config, error) {
 			MinStdDevMs:        fc.Recovery.MinStdDevMs,
 		},
 		Photos: PhotosConfig{
-			MaxPerActivity:     fc.Photos.MaxPerActivity,
-			MaxUploadBytes:     fc.Photos.MaxUploadBytes,
-			FullMaxEdgePx:      fc.Photos.FullMaxEdgePx,
-			FullJPEGQuality:    fc.Photos.FullJPEGQuality,
-			ThumbMaxEdgePx:     fc.Photos.ThumbMaxEdgePx,
-			ThumbJPEGQuality:   fc.Photos.ThumbJPEGQuality,
-			PresignWindowHours: fc.Photos.PresignWindowHours,
-			CaptionMaxChars:    fc.Photos.CaptionMaxChars,
+			MaxPerActivity:      fc.Photos.MaxPerActivity,
+			MaxUploadBytes:      fc.Photos.MaxUploadBytes,
+			UploadURLTTLMinutes: fc.Photos.UploadURLTTLMinutes,
+			ProcessMaxAttempts:  fc.Photos.ProcessMaxAttempts,
+			ReapAfterMinutes:    fc.Photos.ReapAfterMinutes,
+			FullMaxEdgePx:       fc.Photos.FullMaxEdgePx,
+			FullJPEGQuality:     fc.Photos.FullJPEGQuality,
+			ThumbMaxEdgePx:      fc.Photos.ThumbMaxEdgePx,
+			ThumbJPEGQuality:    fc.Photos.ThumbJPEGQuality,
+			PresignWindowHours:  fc.Photos.PresignWindowHours,
+			CaptionMaxChars:     fc.Photos.CaptionMaxChars,
 		},
 		Videos: VideosConfig{
 			MaxPerActivity:        fc.Videos.MaxPerActivity,

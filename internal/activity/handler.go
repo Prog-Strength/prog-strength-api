@@ -116,6 +116,16 @@ type PhotosConfig struct {
 	ThumbJPEGQuality   int
 	PresignWindowHours int
 	CaptionMaxChars    int
+	// UploadURLTTLMinutes bounds the presigned PUT the client uploads to.
+	// Long enough for a large photo on a slow connection, short enough that
+	// an abandoned reservation is reaped promptly.
+	UploadURLTTLMinutes int
+	// ProcessMaxAttempts caps how many times the worker will pick up one
+	// photo before giving up on it.
+	ProcessMaxAttempts int
+	// ReapAfterMinutes is how long a reservation may sit unused before the
+	// reaper retires it and deletes any staged object.
+	ReapAfterMinutes int
 }
 
 // VideosConfig mirrors config.VideosConfig for the activity video path, for the
@@ -254,6 +264,10 @@ func (h *Handler) Mount(r chi.Router) {
 		// Activity photos (write path). Reads are served elsewhere; these
 		// mutate the photo set for one activity. Nil-guarded in the handlers.
 		r.Post("/{id}/photos", h.uploadPhoto)
+		// Two-phase upload. The synchronous route above stays mounted until
+		// the web client has moved; see the SOW's sequencing.
+		r.Post("/{id}/photos/reserve", h.reservePhoto)
+		r.Post("/{id}/photos/{photo_id}/commit", h.commitPhoto)
 		r.Patch("/{id}/photos/{photo_id}", h.patchPhotoCaption)
 		r.Put("/{id}/photos/order", h.reorderPhotos)
 		r.Delete("/{id}/photos/{photo_id}", h.deletePhoto)

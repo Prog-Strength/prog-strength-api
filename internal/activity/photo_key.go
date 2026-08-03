@@ -3,6 +3,7 @@ package activity
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -76,5 +77,52 @@ func buildPhotoKey(userID string, activityType ActivityType, activityStart time.
 	return fmt.Sprintf(
 		"user_id=%s/activity_type=%s/year=%04d/month=%02d/day=%02d/activity_id=%s/variant=%s/%s.jpg",
 		userID, activityType, d.Year(), d.Month(), d.Day(), activityID, variant, photoID,
+	), nil
+}
+
+// uploadKeyPrefix is the bucket prefix every staged upload lands under.
+//
+// It is load-bearing infrastructure, not cosmetics: the bucket's lifecycle
+// rule expires objects under this exact prefix after one day, and that rule is
+// UNTAGGED and age-based — which is only safe because nothing serving-side
+// ever lives here. Changing this string without changing
+// modules/activity_photo_storage in prog-strength-infra would either strand
+// GPS-bearing originals forever or start reaping live photos.
+const uploadKeyPrefix = "uploads/"
+
+// uploadExtensions maps an accepted upload content type to the extension its
+// staged object carries. S3 does not care, but a key that says what it holds
+// is worth having when someone is staring at a bucket listing wondering what a
+// stray object is.
+var uploadExtensions = map[string]string{
+	"image/jpeg": "jpg",
+	"image/png":  "png",
+	"image/webp": "webp",
+}
+
+// buildPhotoUploadKey returns the key the CLIENT PUTs its original to.
+//
+// Distinct from buildPhotoKey's variants because the object is categorically
+// different: it is the user's bytes with their metadata intact, so it still
+// carries GPS. It is never presigned for GET, it is deleted the moment the
+// worker has written the stripped copy, and it lives under its own prefix so
+// the lifecycle rule can reap it aggressively without any risk of touching a
+// photo a row still points at.
+func buildPhotoUploadKey(userID string, activityType ActivityType, activityStart time.Time, activityID, photoID, contentType string) (string, error) {
+	ext, ok := uploadExtensions[contentType]
+	if !ok {
+		return "", fmt.Errorf("%w: content type %q", ErrInvalidVariant, contentType)
+	}
+	// Reuse the full-variant builder for its validation and partitioning, then
+	// re-point it at the uploads prefix. Sharing the validation is the whole
+	// point — two key builders with two copies of the id checks is how they
+	// drift.
+	base, err := buildPhotoKey(userID, activityType, activityStart, activityID, photoID, photoVariantFull)
+	if err != nil {
+		return "", err
+	}
+	return uploadKeyPrefix + strings.Replace(
+		strings.TrimSuffix(base, ".jpg")+"."+ext,
+		"variant=full", "variant=original", 1,
 	), nil
 }

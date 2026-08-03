@@ -3,7 +3,9 @@ package activity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -50,6 +52,22 @@ type PhotoStore interface {
 	PresignGet(ctx context.Context, key string) (string, error)
 	// TagOrphaned best-effort marks a superseded object for lifecycle reaping.
 	TagOrphaned(ctx context.Context, key string) error
+
+	// --- two-phase upload -------------------------------------------------
+
+	// PresignPut returns a short-lived URL the client PUTs the original to.
+	PresignPut(ctx context.Context, key, contentType string, ttl time.Duration) (string, error)
+	// Head returns the stored object's size in bytes, or ErrObjectNotFound.
+	// This is how commit learns the upload's REAL size — the client's claimed
+	// size is never trusted.
+	Head(ctx context.Context, key string) (int64, error)
+	// Get reads an object back. The worker uses it to fetch the staged
+	// original it is about to strip.
+	Get(ctx context.Context, key string) ([]byte, error)
+	// Delete removes an object outright. Used for the staged original, which
+	// is the only copy carrying the source's GPS and must stop existing as
+	// soon as it is redundant — not in a day, when the lifecycle rule runs.
+	Delete(ctx context.Context, key string) error
 }
 
 // windowedPresigner mints SigV4 presigned S3 GET URLs that are byte-identical
@@ -151,9 +169,14 @@ func escapeKeyPath(key string) string {
 // S3PhotoStore stores activity photos in an S3 bucket via aws-sdk-go-v2 and
 // hands out windowed presigned GET URLs.
 type S3PhotoStore struct {
-	client  *s3.Client
+	client *s3.Client
+	// presign mints windowed, cache-stable GET URLs for reads.
 	presign *windowedPresigner
-	bucket  string
+	// uploader mints one-shot presigned PUTs for the client's direct upload.
+	// Separate from presign because an upload URL wants a short, exact TTL,
+	// not a cache-stable window.
+	uploader *s3.PresignClient
+	bucket   string
 }
 
 // Compile-time check that *S3PhotoStore satisfies PhotoStore.
@@ -172,7 +195,8 @@ func NewS3PhotoStore(ctx context.Context, bucket, region string, window time.Dur
 	client := s3.NewFromConfig(cfg)
 
 	return &S3PhotoStore{
-		client: client,
+		client:   client,
+		uploader: s3.NewPresignClient(client),
 		presign: &windowedPresigner{
 			creds:  cfg.Credentials,
 			signer: v4.NewSigner(),
@@ -209,6 +233,83 @@ func (s *S3PhotoStore) TagOrphaned(ctx context.Context, key string) error {
 				{Key: aws.String(photoOrphanTagKey), Value: aws.String(photoOrphanTagValue)},
 			},
 		},
+	})
+	return err
+}
+
+// PresignPut returns a short-lived URL the browser PUTs the original photo to,
+// bypassing this process entirely.
+//
+// NOTHING may be set here that the browser will not send as a header. Every
+// field the SDK turns into a signed header becomes one the client MUST
+// reproduce byte-for-byte, or S3 answers 403 SignatureDoesNotMatch. The
+// uploader sends exactly one: Content-Type.
+//
+// This is not hypothetical. The video path set CacheControl here, which put
+// `cache-control` into X-Amz-SignedHeaders and made every upload 403 *after
+// appearing to transfer successfully* — see the same note on
+// S3VideoStore.PresignPut. Read-time caching is applied through the presigned
+// GET's response-cache-control override instead, which needs no client
+// cooperation.
+func (s *S3PhotoStore) PresignPut(ctx context.Context, key, contentType string, ttl time.Duration) (string, error) {
+	req, err := s.uploader.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", err
+	}
+	return req.URL, nil
+}
+
+// Head returns the stored object's size, or ErrObjectNotFound when the client
+// never completed its upload.
+func (s *S3PhotoStore) Head(ctx context.Context, key string) (int64, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var notFound *types.NotFound
+		if errors.As(err, &notFound) {
+			return 0, ErrObjectNotFound
+		}
+		return 0, err
+	}
+	if out.ContentLength == nil {
+		return 0, nil
+	}
+	return *out.ContentLength, nil
+}
+
+// Get reads an object into memory. Only the worker calls this, for the staged
+// original it is about to strip — which is why buffering a whole photo here is
+// acceptable: no request deadline, and a concurrency of one.
+func (s *S3PhotoStore) Get(ctx context.Context, key string) ([]byte, error) {
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var noSuchKey *types.NoSuchKey
+		if errors.As(err, &noSuchKey) {
+			return nil, ErrObjectNotFound
+		}
+		return nil, err
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
+}
+
+// Delete removes an object outright rather than tagging it for the lifecycle
+// rule. Reserved for the staged original: it is the only copy carrying the
+// source's EXIF/GPS, so once the stripped copy is written it should stop
+// existing immediately, not at the next lifecycle sweep.
+func (s *S3PhotoStore) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
 	})
 	return err
 }

@@ -137,6 +137,10 @@ upload_url_ttl_minutes = 15
 # counter increments at CLAIM time, so a photo that kills the worker outright
 # is still bounded by this.
 process_max_attempts = 3
+# Worker poll interval. Short because the user is watching a placeholder on the
+# activity page while it runs; the drain loop means a burst does not take one
+# tick per photo.
+process_tick_seconds = 2
 # How long a reservation may sit unused before the reaper retires it and
 # deletes its staged object. Comfortably longer than the presign TTL, so a
 # slow-but-live upload is never reaped out from under itself.

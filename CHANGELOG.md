@@ -1,3 +1,10 @@
+# [0.99.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.98.0...v0.99.0) (2026-08-03)
+
+
+### Features
+
+* **photos:** reserve and commit endpoints for the two-phase upload ([#109](https://github.com/Prog-Strength/prog-strength-api/issues/109)) ([81535e7](https://github.com/Prog-Strength/prog-strength-api/commit/81535e78cb323e3b5f7c5160d4c3a5582cdadf8a))
+
 # [0.98.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.97.0...v0.98.0) (2026-08-03)
 
 

@@ -1,3 +1,10 @@
+# [0.101.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.100.0...v0.101.0) (2026-08-03)
+
+
+### Features
+
+* **dashboard:** running section payload, catalog ids, and family gating from dx/running-tile ([#113](https://github.com/Prog-Strength/prog-strength-api/issues/113)) ([0813e00](https://github.com/Prog-Strength/prog-strength-api/commit/0813e003836bf39c30d168de0008c3778b4d0934))
+
 # [0.100.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.99.0...v0.100.0) (2026-08-03)
 
 

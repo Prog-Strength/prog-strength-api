@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"unicode/utf8"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/uploadwindow"
 )
 
 // allowedPhotoContentTypes is the sniffed-content-type allowlist for a photo
@@ -81,176 +78,6 @@ func (h *Handler) toPhotoDTO(ctx context.Context, p ActivityPhoto) (photoDTO, er
 // the endpoints degrade to a 503 rather than nil-panic.
 func (h *Handler) photoStorageReady() bool {
 	return h.photoStore != nil && h.photoRepo != nil
-}
-
-// uploadPhoto handles POST /activities/{id}/photos: a multipart upload of an
-// image under the "photo" field with an optional "caption" form field. It caps
-// the size (413), sniffs the content type against an allowlist (415), enforces
-// the per-activity limit (409), re-encodes two JPEG variants (stripping EXIF),
-// writes both to object storage, and records the row.
-func (h *Handler) uploadPhoto(w http.ResponseWriter, r *http.Request) {
-	if !h.photoStorageReady() {
-		httpresp.ErrorWithCode(w, http.StatusServiceUnavailable, "photo storage is not configured", "photo_storage_unavailable")
-		return
-	}
-
-	userID, ok := auth.UserIDFrom(r.Context())
-	if !ok {
-		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
-		return
-	}
-	activityID := chi.URLParam(r, "id")
-	if activityID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "activity id is required")
-		return
-	}
-
-	// Resolve the owned, live parent activity. ErrNotFound covers both a
-	// missing activity and one owned by another user — no existence leak.
-	a, getErr := h.repo.Get(r.Context(), userID, activityID)
-	if getErr != nil {
-		if errors.Is(getErr, ErrNotFound) {
-			httpresp.ErrorWithCode(w, http.StatusNotFound, "activity not found", "not_found")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "get activity", getErr)
-		return
-	}
-
-	// One request has to cover the client's transfer, the image pipeline, and
-	// two S3 PUTs — which does not fit the server's global 10s Read/WriteTimeout
-	// for anything but a small photo. Lift it before touching the body. The
-	// error is ignored on purpose: it only reports "no server here", i.e. a
-	// handler unit test. See internal/uploadwindow.
-	_ = uploadwindow.Extend(w, uploadwindow.Window)
-
-	// Cap the body before reading. MaxBytesReader makes the read error out once
-	// the cap is exceeded, so an oversized upload can't exhaust memory.
-	r.Body = http.MaxBytesReader(w, r.Body, h.photoCfg.MaxUploadBytes)
-	if err := r.ParseMultipartForm(h.photoCfg.MaxUploadBytes); err != nil {
-		var mbErr *http.MaxBytesError
-		if errors.As(err, &mbErr) {
-			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "photo exceeds the upload size limit", "file_too_large")
-			return
-		}
-		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "expected a multipart upload with a photo field", "unsupported_media_type")
-		return
-	}
-
-	file, _, err := r.FormFile("photo")
-	if err != nil {
-		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "missing photo field in multipart upload", "unsupported_media_type")
-		return
-	}
-	defer file.Close()
-
-	// MaxBytesReader can also fire here from the io.ReadAll over the part body.
-	body, err := io.ReadAll(file)
-	if err != nil {
-		var mbErr *http.MaxBytesError
-		if errors.As(err, &mbErr) {
-			httpresp.ErrorWithCode(w, http.StatusRequestEntityTooLarge, "photo exceeds the upload size limit", "file_too_large")
-			return
-		}
-		httpresp.ServerError(w, r.Context(), "read photo upload", err)
-		return
-	}
-
-	// Sniff the content type (don't trust the client header) and require it in
-	// the allowlist.
-	contentType := http.DetectContentType(body)
-	if !allowedPhotoContentTypes[contentType] {
-		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "photo must be a JPEG, PNG, or WebP image", "unsupported_media_type")
-		return
-	}
-
-	// Optional caption. Enforce the length cap up front.
-	var caption *string
-	if raw := r.FormValue("caption"); raw != "" {
-		if utf8.RuneCountInString(raw) > h.photoCfg.CaptionMaxChars {
-			httpresp.ErrorWithCode(w, http.StatusBadRequest, "caption is too long", "caption_too_long")
-			return
-		}
-		caption = &raw
-	}
-
-	// Enforce the per-activity photo limit against the live count.
-	count, err := h.photoRepo.CountLive(r.Context(), activityID)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "count live photos", err)
-		return
-	}
-	if count >= h.photoCfg.MaxPerActivity {
-		httpresp.ErrorWithCode(w, http.StatusConflict, "this activity already has the maximum number of photos", "photo_limit_reached")
-		return
-	}
-
-	// Re-encode the two JPEG variants (EXIF stripped by the pipeline). A decode
-	// failure means the bytes weren't a usable image → 415.
-	full, thumb, err := processPhoto(body, photoPipelineOpts{
-		FullMaxEdge:  h.photoCfg.FullMaxEdgePx,
-		FullQuality:  h.photoCfg.FullJPEGQuality,
-		ThumbMaxEdge: h.photoCfg.ThumbMaxEdgePx,
-		ThumbQuality: h.photoCfg.ThumbJPEGQuality,
-	})
-	if err != nil {
-		httpresp.ErrorWithCode(w, http.StatusUnsupportedMediaType, "photo could not be processed as an image", "unsupported_media_type")
-		return
-	}
-
-	photoID := id.New()
-	fullKey, err := buildPhotoKey(userID, a.ActivityType, a.StartTime, activityID, photoID, photoVariantFull)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "build full photo key", err)
-		return
-	}
-	thumbKey, err := buildPhotoKey(userID, a.ActivityType, a.StartTime, activityID, photoID, photoVariantThumb)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "build thumb photo key", err)
-		return
-	}
-
-	// Put the full variant first, then the thumb. Both are stored as JPEG.
-	if err = h.photoStore.Put(r.Context(), fullKey, "image/jpeg", full.Bytes); err != nil {
-		// Nothing durable exists yet — no object to orphan.
-		httpresp.ServerError(w, r.Context(), "put full photo", err)
-		return
-	}
-	if err = h.photoStore.Put(r.Context(), thumbKey, "image/jpeg", thumb.Bytes); err != nil {
-		// The full object is orphaned: best-effort tag it for lifecycle reaping
-		// so we don't leak it, and write NO row.
-		if tagErr := h.photoStore.TagOrphaned(r.Context(), fullKey); tagErr != nil {
-			log.Printf("activity photo: tag orphaned full key after thumb put failure: key=%s err=%v", fullKey, tagErr)
-		}
-		httpresp.ServerError(w, r.Context(), "put thumb photo", err)
-		return
-	}
-
-	now := h.now().UTC()
-	stored, err := h.photoRepo.Insert(r.Context(), ActivityPhoto{
-		ActivityID:  activityID,
-		UserID:      userID,
-		S3Key:       fullKey,
-		ThumbS3Key:  thumbKey,
-		ContentType: "image/jpeg",
-		ByteSize:    int64(len(full.Bytes)),
-		Width:       full.Width,
-		Height:      full.Height,
-		Caption:     caption,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	})
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "insert photo", err)
-		return
-	}
-
-	dto, err := h.toPhotoDTO(r.Context(), stored)
-	if err != nil {
-		httpresp.ServerError(w, r.Context(), "presign photo", err)
-		return
-	}
-	httpresp.Created(w, "uploaded photo", dto)
 }
 
 // patchPhotoCaption handles PATCH /activities/{id}/photos/{photo_id}: set or

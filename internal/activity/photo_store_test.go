@@ -187,6 +187,15 @@ type FakePhotoStore struct {
 	Orphaned []string
 	PutCount int
 	PutFunc  func(callN int) error
+
+	// Two-phase upload surface.
+	Presigned     []PresignedPut
+	Deleted       []string
+	HeadSize      int64 // when > 0, overrides the recorded object size
+	PresignPutErr error
+	HeadErr       error
+	GetErr        error
+	DeleteErr     error
 }
 
 // Compile-time check that *FakePhotoStore satisfies PhotoStore.
@@ -383,4 +392,81 @@ func TestFakePhotoStorePutFuncForcesFailure(t *testing.T) {
 	if f.PutCount != 2 {
 		t.Fatalf("PutCount = %d, want 2", f.PutCount)
 	}
+}
+
+// --- two-phase upload surface on the fake -------------------------------
+
+// PresignPut returns a deterministic stand-in URL and records the call, so a
+// test can assert what key and content type a reservation asked S3 for.
+func (f *FakePhotoStore) PresignPut(_ context.Context, key, contentType string, ttl time.Duration) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.PresignPutErr != nil {
+		return "", f.PresignPutErr
+	}
+	f.Presigned = append(f.Presigned, PresignedPut{Key: key, ContentType: contentType, TTL: ttl})
+	return "https://fake-bucket.example/" + key + "?upload=1", nil
+}
+
+// Head reports the size of whatever Put/SeedObject recorded under key, or
+// ErrObjectNotFound. HeadSize, when set, overrides the recorded size so a test
+// can simulate a client that uploaded more than it declared.
+func (f *FakePhotoStore) Head(_ context.Context, key string) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.HeadErr != nil {
+		return 0, f.HeadErr
+	}
+	body, ok := f.Puts[key]
+	if !ok {
+		return 0, ErrObjectNotFound
+	}
+	if f.HeadSize > 0 {
+		return f.HeadSize, nil
+	}
+	return int64(len(body)), nil
+}
+
+func (f *FakePhotoStore) Get(_ context.Context, key string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.GetErr != nil {
+		return nil, f.GetErr
+	}
+	body, ok := f.Puts[key]
+	if !ok {
+		return nil, ErrObjectNotFound
+	}
+	out := make([]byte, len(body))
+	copy(out, body)
+	return out, nil
+}
+
+func (f *FakePhotoStore) Delete(_ context.Context, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.DeleteErr != nil {
+		return f.DeleteErr
+	}
+	delete(f.Puts, key)
+	f.Deleted = append(f.Deleted, key)
+	return nil
+}
+
+// SeedObject plants bytes at key as though a client had PUT them directly,
+// which is the only way they get there on the two-phase path — the API never
+// writes the staged original itself.
+func (f *FakePhotoStore) SeedObject(key string, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([]byte, len(body))
+	copy(cp, body)
+	f.Puts[key] = cp
+}
+
+// PresignedPut records one PresignPut call.
+type PresignedPut struct {
+	Key         string
+	ContentType string
+	TTL         time.Duration
 }

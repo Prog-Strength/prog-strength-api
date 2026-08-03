@@ -95,24 +95,46 @@ aws_region = "${AWS_REGION}"
 # derived JPEG renditions (max edge in px + quality); presign_window_hours is a
 # presigned URL's lifetime; caption_max_chars bounds a caption's length.
 #
-# Fidelity policy: the `full` variant is the ARCHIVAL copy. No original bytes
-# are retained anywhere (unlike TCX uploads, which are archived to S3), so
-# whatever `full` stores is the best copy that will ever exist for that photo.
-# It is therefore kept at native resolution and near-lossless quality. The
-# re-encode itself stays unconditional — dropping the source's EXIF/GPS is the
-# privacy mechanism, and these photos are reachable via presigned URLs from the
-# social timeline. See sows/activity-photos.md.
+# Fidelity policy: a JPEG upload is STORED AS THE USER'S ORIGINAL BYTES. The
+# worker rewrites its metadata in place — keeping only the ICC profile and EXIF
+# Orientation, dropping GPS, XMP, IPTC, MakerNote and comments — without
+# touching the entropy-coded scan data. Dropping the source's location data is
+# still the privacy mechanism, and still unconditional; it just no longer costs
+# a re-encode.
+#
+# This block used to say the `full` variant was "the ARCHIVAL copy... the best
+# copy that will ever exist". It was the opposite: re-encoding an already-lossy
+# JPEG is generation loss, the output ran ~28% LARGER than its input, and
+# image/jpeg emits no APP2, so every ICC profile was silently discarded and
+# wide-gamut photos were stored as sRGB. See
+# sows/photo-upload-direct-to-s3.md.
+#
+# PNG and WebP still go through the re-encode — a deliberate v1 scope decision
+# (one new container parser rather than three), which is why the full_* knobs
+# below still exist.
 max_per_activity     = 10
-# 32 MiB. Covers any phone/camera JPEG or HEIC (a 24MP JPEG is ~8-12 MB, a 48MP
-# HEIC ~5-8 MB) with headroom. Deliberately not higher: uploadPhoto passes this
-# as ParseMultipartForm's maxMemory, so the whole upload buffers in RAM before
-# decode, and the host is a t4g.medium (4 GB) shared with MCP, the agent,
-# Caddy, Prometheus and Grafana.
+# 32 MiB. Covers any phone/camera JPEG with headroom (a 24MP JPEG is ~8-12 MB).
+#
+# NOT enforced by a request-body cap any more: the bytes go browser->S3 through
+# a presigned PUT and never reach this process, so the presign carries a
+# content-length-range and the commit step re-HEADs the object to check the
+# real size. The old rationale here (ParseMultipartForm's maxMemory bounding
+# per-request RAM on a shared host) no longer applies.
+#
+# HEIC is NOT covered, despite what this comment used to claim. Go's
+# http.DetectContentType implements WHATWG mimesniff, which has no HEIC branch,
+# so an ISOBMFF file sniffs as application/octet-stream and is rejected 415
+# before size is ever consulted. Tracked in issue #105.
 max_upload_bytes     = 33554432
+# APPLIES TO PNG/WebP AND THE JPEG FALLBACK ONLY. A JPEG that strips and
+# verifies cleanly is never re-encoded, so neither this nor full_jpeg_quality
+# touches it. They still govern PNG/WebP sources, and a JPEG whose rewrite
+# fails verification (watch api_photo_strip_fallback_total).
+#
 # NO DOWNSCALE. 20000 equals maxDecodeEdge in photo_pipeline.go, so nothing the
 # decoder accepts is ever resized — `resize` returns the source untouched when
-# both edges already fit. The stored `full` variant keeps the camera's native
-# resolution; the decode guard, not this number, is the real ceiling.
+# both edges already fit. The decode guard, not this number, is the real
+# ceiling.
 #
 # This was 2048, which threw away 75% of a 12MP phone photo's pixels (4032x3024
 # -> 2048x1536) and ~94% of a 48MP one. That clamp, not the JPEG quality, was

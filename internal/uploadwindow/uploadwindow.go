@@ -6,10 +6,13 @@
 // what keeps a slow-loris client from pinning a connection — but they apply to
 // EVERY route, and three routes cannot live inside them:
 //
-//   - POST /activities/{id}/photos      multipart upload + decode + two JPEG
-//     re-encodes + two S3 PUTs
-//   - POST /me/avatar                   multipart upload + re-encode + S3 PUT
-//   - the TCX upload routes             multipart upload + parse + S3 archive
+//   - POST /me/avatar          multipart upload + re-encode + S3 PUT
+//   - the TCX upload routes    multipart upload + parse + S3 archive
+//
+// Activity photos used to be the third and worst case. They no longer are:
+// that upload goes browser->S3 through a presigned PUT and the rendering
+// happens on a background worker, so nothing about it is bounded by a request
+// deadline. See prog-strength-docs/sows/photo-upload-direct-to-s3.md.
 //
 // ReadTimeout covers reading the entire request INCLUDING the body, and
 // WriteTimeout starts when the request headers are read and runs until the
@@ -20,10 +23,10 @@
 // the browser reports a transport error rather than a status code and no
 // status-based metric ever counts it.
 //
-// This package is a STOPGAP. The durable fix is to stop moving file bytes
-// through this process at all — see prog-strength-docs/sows/
-// photo-upload-direct-to-s3.md. When that lands and the synchronous upload
-// endpoints are retired, this package goes with them.
+// This package is a STOPGAP, and photos have already graduated out of it. The
+// durable fix for the two routes left is the same one photos took: stop moving
+// file bytes through this process at all. When avatar and TCX follow, this
+// package goes with them.
 package uploadwindow
 
 import (

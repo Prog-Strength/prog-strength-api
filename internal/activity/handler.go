@@ -265,9 +265,10 @@ func (h *Handler) Mount(r chi.Router) {
 		r.Delete("/{id}", h.delete)
 		// Activity photos (write path). Reads are served elsewhere; these
 		// mutate the photo set for one activity. Nil-guarded in the handlers.
-		r.Post("/{id}/photos", h.uploadPhoto)
-		// Two-phase upload. The synchronous route above stays mounted until
-		// the web client has moved; see the SOW's sequencing.
+		// Two-phase upload: the client PUTs the original straight to S3 and
+		// the worker renders it. The synchronous POST /{id}/photos this
+		// replaced was retired once the web client moved — see the SOW's
+		// sequencing step 5.
 		r.Post("/{id}/photos/reserve", h.reservePhoto)
 		r.Post("/{id}/photos/{photo_id}/commit", h.commitPhoto)
 		r.Patch("/{id}/photos/{photo_id}", h.patchPhotoCaption)

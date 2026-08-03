@@ -460,3 +460,166 @@ func TestVerifyRejectsMetadataHiddenAfterTheScan(t *testing.T) {
 		})
 	}
 }
+
+// --- error-path coverage ----------------------------------------------
+//
+// The cases above prove the happy path and the headline adversarial ones.
+// These target the remaining bounds checks individually, because this parser
+// reads attacker-controlled bytes and its error branches are the part that
+// must not be reasoned about only in the abstract.
+
+// A JPEG whose segment structure desyncs — a byte where a marker must be.
+func TestStripRejectsDesyncedSegmentStructure(t *testing.T) {
+	base := baseJPEG(t, 24, 24)
+	desynced := inject(base, seg(mCOM, []byte("x")))
+	// Corrupt the byte that must be 0xFF at the start of the next marker.
+	desynced[4+2+1+2] = 0x41
+
+	if _, err := jpegmeta.Strip(desynced); err == nil {
+		t.Error("Strip accepted a desynced segment structure")
+	}
+}
+
+// EOI before any scan: structurally a JPEG, but there is no image in it.
+func TestStripRejectsEOIBeforeScan(t *testing.T) {
+	in := []byte{0xFF, mSOI, 0xFF, mEOI}
+	if _, err := jpegmeta.Strip(in); err == nil {
+		t.Error("Strip accepted a file whose EOI precedes any scan")
+	}
+}
+
+// Segments that carry no length byte at all must not be treated as if they do.
+func TestStripSkipsStandaloneMarkers(t *testing.T) {
+	base := baseJPEG(t, 24, 24)
+	// TEM (0xFF01) is standalone: two bytes, no length field. Mis-parsing it
+	// as a length-bearing segment would read the following bytes as a size.
+	withTEM := inject(base, []byte{0xFF, 0x01})
+
+	got, err := jpegmeta.Strip(withTEM)
+	if err != nil {
+		t.Fatalf("Strip rejected a standalone marker: %v", err)
+	}
+	if _, err := jpeg.Decode(bytes.NewReader(got)); err != nil {
+		t.Fatalf("output does not decode: %v", err)
+	}
+}
+
+// APP2 that is not an ICC profile carries no color meaning and is dropped;
+// APP14/Adobe is kept, because image/jpeg reads it to decide how to interpret
+// CMYK/YCCK and losing it would change how the file decodes.
+func TestStripKeepsAdobeButDropsNonICCAPP2(t *testing.T) {
+	const mAPP14 = 0xEE
+	adobe := append([]byte("Adobe"), 0, 100, 0, 0, 0, 0, 1)
+	src := inject(baseJPEG(t, 24, 24),
+		seg(mAPP2, []byte("NOT-AN-ICC-PROFILE-JUST-DATA")),
+		seg(mAPP14, adobe),
+	)
+
+	got, err := jpegmeta.Strip(src)
+	if err != nil {
+		t.Fatalf("Strip: %v", err)
+	}
+	if bytes.Contains(got, []byte("NOT-AN-ICC-PROFILE")) {
+		t.Error("a non-ICC APP2 survived; only ICC profiles are color data")
+	}
+	if !bytes.Contains(got, []byte("Adobe")) {
+		t.Error("APP14/Adobe was dropped; image/jpeg needs it for CMYK/YCCK")
+	}
+}
+
+// Orientation parsing reads attacker-controlled offsets. Every malformed
+// shape must degrade to "no orientation" rather than panic or read wild.
+func TestOrientationDegradesOnMalformedEXIF(t *testing.T) {
+	base := baseJPEG(t, 24, 24)
+
+	// A well-formed little-endian EXIF, to prove both byte orders are read.
+	le := []byte("Exif\x00\x00")
+	le = append(le, 'I', 'I', 42, 0)
+	le = append(le, 8, 0, 0, 0)
+	le = append(le, 1, 0) // one entry
+	le = append(le, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 7, 0, 0, 0)
+	le = append(le, 0, 0, 0, 0)
+
+	cases := map[string]struct {
+		payload []byte
+		want    int
+	}{
+		"little-endian is read":  {le, 7},
+		"too short for a header": {[]byte("Exif\x00\x00MM"), 1},
+		"unknown byte order":     {append([]byte("Exif\x00\x00"), 'X', 'Y', 0, 42, 0, 0, 0, 8), 1},
+		"bad TIFF magic":         {append([]byte("Exif\x00\x00"), 'M', 'M', 0, 99, 0, 0, 0, 8), 1},
+		"IFD offset past end":    {append([]byte("Exif\x00\x00"), 'M', 'M', 0, 42, 0xFF, 0xFF, 0xFF, 0xF0), 1},
+		"entry count overruns":   {append([]byte("Exif\x00\x00"), 'M', 'M', 0, 42, 0, 0, 0, 8, 0xFF, 0xFF), 1},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("panicked: %v", r)
+				}
+			}()
+			src := inject(base, seg(mAPP1, c.payload))
+			if got := jpegmeta.Orientation(src); got != c.want {
+				t.Errorf("Orientation = %d, want %d", got, c.want)
+			}
+			// Whatever the EXIF said, the strip must still produce a valid file.
+			out, err := jpegmeta.Strip(src)
+			if err != nil {
+				t.Fatalf("Strip: %v", err)
+			}
+			if _, err := jpeg.Decode(bytes.NewReader(out)); err != nil {
+				t.Fatalf("output does not decode: %v", err)
+			}
+		})
+	}
+}
+
+// An out-of-range or wrongly-typed Orientation value is not trusted.
+func TestOrientationRejectsOutOfRangeAndWrongType(t *testing.T) {
+	base := baseJPEG(t, 24, 24)
+
+	outOfRange := exifPayload(99, false) // valid structure, silly value
+	wrongType := append([]byte{}, exifPayload(6, false)...)
+	// Flip the entry's type from SHORT (3) to LONG (4).
+	idx := bytes.Index(wrongType, []byte{0x01, 0x12, 0x00, 0x03})
+	if idx < 0 {
+		t.Fatal("could not locate the orientation entry in the fixture")
+	}
+	wrongType[idx+3] = 0x04
+
+	for name, payload := range map[string][]byte{
+		"value out of range": outOfRange,
+		"wrong tag type":     wrongType,
+	} {
+		t.Run(name, func(t *testing.T) {
+			src := inject(base, seg(mAPP1, payload))
+			if got := jpegmeta.Orientation(src); got != 1 {
+				t.Errorf("Orientation = %d, want 1 (identity) for %s", got, name)
+			}
+		})
+	}
+}
+
+// Orientation on input that is not a JPEG at all must be the identity, not a
+// crash — it is called on bytes that have not yet been validated.
+func TestOrientationOnNonJPEGIsIdentity(t *testing.T) {
+	for _, in := range [][]byte{nil, {}, []byte("GIF89a"), {0xFF, mSOI}} {
+		if got := jpegmeta.Orientation(in); got != 1 {
+			t.Errorf("Orientation(%v) = %d, want 1", in, got)
+		}
+	}
+}
+
+// Verify must reject a file whose scan data never terminates, which is what
+// scanAll sees when entropy data runs to EOF with no closing marker.
+func TestVerifyRejectsUnterminatedScanData(t *testing.T) {
+	good, err := jpegmeta.Strip(baseJPEG(t, 40, 28))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop the trailing EOI so the entropy walk finds no terminating marker.
+	if _, err := jpegmeta.Verify(good[:len(good)-2], 40, 28); err == nil {
+		t.Error("Verify accepted a file whose scan data never terminates")
+	}
+}

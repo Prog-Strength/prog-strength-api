@@ -1,3 +1,10 @@
+# [0.98.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.97.0...v0.98.0) (2026-08-03)
+
+
+### Features
+
+* **photos:** schema and repository for the two-phase upload ([#107](https://github.com/Prog-Strength/prog-strength-api/issues/107)) ([db6f455](https://github.com/Prog-Strength/prog-strength-api/commit/db6f4555ad47008f45bfc52148e578318c12972c))
+
 # [0.97.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.96.1...v0.97.0) (2026-08-03)
 
 

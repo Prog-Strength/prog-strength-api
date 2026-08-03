@@ -277,6 +277,7 @@ type PhotosConfig struct {
 	MaxUploadBytes      int64
 	UploadURLTTLMinutes int
 	ProcessMaxAttempts  int
+	ProcessTickSeconds  int
 	ReapAfterMinutes    int
 	FullMaxEdgePx       int
 	FullJPEGQuality     int
@@ -423,6 +424,7 @@ type fileConfig struct {
 		MaxUploadBytes      int64 `toml:"max_upload_bytes"`
 		UploadURLTTLMinutes int   `toml:"upload_url_ttl_minutes"`
 		ProcessMaxAttempts  int   `toml:"process_max_attempts"`
+		ProcessTickSeconds  int   `toml:"process_tick_seconds"`
 		ReapAfterMinutes    int   `toml:"reap_after_minutes"`
 		FullMaxEdgePx       int   `toml:"full_max_edge_px"`
 		FullJPEGQuality     int   `toml:"full_jpeg_quality"`
@@ -603,6 +605,7 @@ func Load(defaultTOML []byte) (Config, error) {
 			MaxUploadBytes:      fc.Photos.MaxUploadBytes,
 			UploadURLTTLMinutes: fc.Photos.UploadURLTTLMinutes,
 			ProcessMaxAttempts:  fc.Photos.ProcessMaxAttempts,
+			ProcessTickSeconds:  fc.Photos.ProcessTickSeconds,
 			ReapAfterMinutes:    fc.Photos.ReapAfterMinutes,
 			FullMaxEdgePx:       fc.Photos.FullMaxEdgePx,
 			FullJPEGQuality:     fc.Photos.FullJPEGQuality,

@@ -123,6 +123,8 @@ type PhotosConfig struct {
 	// ProcessMaxAttempts caps how many times the worker will pick up one
 	// photo before giving up on it.
 	ProcessMaxAttempts int
+	// ProcessTickSeconds is the worker's poll interval.
+	ProcessTickSeconds int
 	// ReapAfterMinutes is how long a reservation may sit unused before the
 	// reaper retires it and deletes any staged object.
 	ReapAfterMinutes int

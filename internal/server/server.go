@@ -637,6 +637,7 @@ func New(cfg config.Config) (*Server, error) {
 
 			UploadURLTTLMinutes: cfg.Photos.UploadURLTTLMinutes,
 			ProcessMaxAttempts:  cfg.Photos.ProcessMaxAttempts,
+			ProcessTickSeconds:  cfg.Photos.ProcessTickSeconds,
 			ReapAfterMinutes:    cfg.Photos.ReapAfterMinutes,
 		})
 		// Same wiring shape for videos. videoStore may be nil (bucket
@@ -657,6 +658,16 @@ func New(cfg config.Config) (*Server, error) {
 		// mid-upload leaves a pending row and maybe an object. At single-user
 		// volume one sweep per boot is enough (SOW Open Question 4); it is
 		// best-effort and never blocks startup.
+		// Photo processing worker: everything that used to run inside the
+		// upload request now runs here, with no deadline over it. bgCtx is
+		// cancelled on shutdown.
+		go activityHandler.RunPhotoWorker(bgCtx)
+		// Startup sweep for abandoned photo reservations, mirroring videos.
+		if n, err := activityHandler.ReapStalePendingPhotos(context.Background()); err != nil {
+			log.Printf("activity: pending-photo reap failed (non-fatal): %v", err)
+		} else if n > 0 {
+			log.Printf("activity: reaped %d abandoned photo reservation(s)", n)
+		}
 		if n, err := activityHandler.ReapStalePendingVideos(context.Background()); err != nil {
 			log.Printf("activity: pending-video reap failed (non-fatal): %v", err)
 		} else if n > 0 {

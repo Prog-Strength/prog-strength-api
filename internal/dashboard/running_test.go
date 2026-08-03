@@ -378,3 +378,22 @@ func TestBuildRunning_DSTWeekBoundary(t *testing.T) {
 		t.Errorf("prior bucket = %+v, want the DST-Sunday run in week 2026-03-02", prior)
 	}
 }
+
+func TestBuildRunning_Baseline_DurationTruncates(t *testing.T) {
+	ny := mustLoad(t, "America/New_York")
+	now := time.Date(2026, 8, 1, 18, 0, 0, 0, ny) // current week Mon 07-27
+	// Two run-holding window weeks summing to 7801s: 7801/2 truncates to 3900.
+	runs := []activity.Activity{
+		detailedRun("", 5000, 1801, time.Date(2026, 7, 21, 7, 0, 0, 0, ny), nil, nil, nil, ""),
+		detailedRun("", 10000, 6000, time.Date(2026, 7, 15, 7, 0, 0, 0, ny), nil, nil, nil, ""),
+	}
+	m := activity.Metrics{AllTime: activity.PeriodStat{RunCount: len(runs)}}
+
+	b := buildRunning(m, runs, now, ny).Baseline
+	if b == nil || b.Weeks != 2 {
+		t.Fatalf("baseline = %+v, want 2 run-holding weeks", b)
+	}
+	if b.DurationSeconds == nil || *b.DurationSeconds != 3900 {
+		t.Errorf("duration = %v, want 3900 (7801/2 truncates)", b.DurationSeconds)
+	}
+}

@@ -86,7 +86,7 @@ type RunningSection struct {
 	// week holds a run.
 	Baseline *RunningBaseline `json:"baseline"`
 	// RecentAvgPaceSecPerKm is a 30-DAY aggregate — a different figure from
-	// CurrentWeek.AvgPaceSecPerKm and labelled differently by every tile.
+	// CurrentWeek.AvgPaceSecPerKm and labeled differently by every tile.
 	RecentAvgPaceSecPerKm *float64   `json:"recent_avg_pace_sec_per_km"`
 	LatestRun             *LatestRun `json:"latest_run"`
 	// WeekRuns is this local week's runs, oldest→newest.

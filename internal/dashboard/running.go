@@ -261,6 +261,8 @@ func buildBaseline(runs []activity.Activity, now time.Time, loc *time.Location) 
 	b := &RunningBaseline{WindowWeeks: baselineWindowWeeks, Weeks: weeks}
 	avgDist := dist / float64(weeks)
 	b.DistanceMeters = &avgDist
+	// Integer division, truncating: sub-second precision is meaningless for
+	// a weekly duration average the tiles render as h:mm.
 	avgDur := dur / weeks
 	b.DurationSeconds = &avgDur
 	rpw := float64(len(window)) / float64(weeks)

@@ -334,3 +334,65 @@ func TestSummary_NoFamilyTile_NoRecoverySection(t *testing.T) {
 
 	assertKeysAbsent(t, data, "recovery", "hrv_balance", "morning_vitals", "recovery_trend", "recovery_log")
 }
+
+// TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family
+// re-gate: a layout containing ONLY running_vertical must still produce a
+// populated "running" section — and no "running_vertical" key. Second family
+// after recovery where the section-key set is deliberately not a subset of
+// layout.
+func TestSummary_RunningFamilyTileAlone_YieldsRunningSection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningVertical}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"running_vertical"}) {
+		t.Errorf("layout = %v, want [running_vertical]", layout)
+	}
+	assertKeysPresent(t, data, "running")
+	assertKeysAbsent(t, data, "running_vertical")
+	if string(data["running"]) == "null" {
+		t.Error("running = null, want a populated section (user has a run)")
+	}
+}
+
+// TestSummary_MultipleRunningFamilyTiles_OneRunningSection asserts the
+// section is built and emitted exactly once under "running" no matter how
+// many family tiles are on the layout.
+func TestSummary_MultipleRunningFamilyTiles_OneRunningSection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
+
+	ids := []TileID{TileRunning, TileRunningLog, TileRunningEffort}
+	if err := rp.layout.Upsert(context.Background(), userID, ids); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"running", "running_log", "running_effort"}) {
+		t.Errorf("layout = %v, want [running running_log running_effort]", layout)
+	}
+	assertKeysPresent(t, data, "running")
+	assertKeysAbsent(t, data, "running_log", "running_effort", "running_vertical")
+}
+
+// TestSummary_NoRunningFamilyTile_NoRunningSection asserts the inverse: with
+// no running-family tile enabled, the "running" key is absent even though the
+// user has runs.
+func TestSummary_NoRunningFamilyTile_NoRunningSection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileLifting, TileStreak}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	assertKeysAbsent(t, data, "running", "running_log", "running_effort", "running_vertical")
+}

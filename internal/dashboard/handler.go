@@ -16,6 +16,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
@@ -55,6 +56,15 @@ type Handler struct {
 	// recovery payload, so it's a constructor arg rather than a setter.
 	recovery *recoverytrend.Engine
 
+	// hrEngine classifies each week run's average HR into a zone for the
+	// Run Effort tile. Optional: injected post-construction via
+	// SetHRZonesEngine (mirroring activity.Handler); nil leaves every
+	// HeartRateZone nil.
+	hrEngine *hrzones.Engine
+	// hrWindow is the recency window RecentHRStats summarizes for the
+	// reference max-HR estimate.
+	hrWindow time.Duration
+
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
 	// week-boundary assertions don't flake on the real calendar.
@@ -91,6 +101,17 @@ func NewHandler(
 		recovery:          recoveryEngine,
 		now:               time.Now,
 	}
+}
+
+// SetHRZonesEngine wires the heart-rate-zone engine (and its recency window)
+// in so week runs carry a heart_rate_zone when the Run Effort tile is
+// enabled. Called from server wiring after construction, mirroring
+// activity.Handler's setter; a setter rather than a constructor arg keeps
+// NewHandler's signature and every existing test untouched. Safe to never
+// call — buildRunningSection nil-guards and leaves zones nil.
+func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
+	h.hrEngine = e
+	h.hrWindow = window
 }
 
 // Mount registers the dashboard route. Callers are expected to have already
@@ -200,8 +221,20 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	// from the layout is absent from the response — a distinction an omitempty
 	// struct cannot express.
 	out := map[string]any{"layout": layout}
-	if enabled[TileRunning] {
-		out[string(TileRunning)] = h.buildRunningSection(ctx, r, userID, endurance, now, loc)
+	// Every running-family tile reads the ONE shared "running" section, so it
+	// is built once when ANY family tile is enabled and emitted only under the
+	// "running" key — the same section-key/layout divergence the recovery
+	// family established below.
+	runningFamily := []TileID{
+		TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
+	}
+	for _, id := range runningFamily {
+		if enabled[id] {
+			out[string(TileRunning)] = h.buildRunningSection(
+				ctx, r, userID, endurance, now, loc, enabled[TileRunningEffort],
+			)
+			break
+		}
 	}
 	if enabled[TileWalking] {
 		out[string(TileWalking)] = buildWalking(endurance, now, loc)
@@ -249,15 +282,42 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "dashboard summary", out)
 }
 
-// buildRunningSection fetches the running metrics and assembles the tile from
-// them plus the already-fetched 53-week run list. RunningMetrics failing alone
-// still yields a tile (zeroed current-week) when there are runs; the section is
-// nil only when there's no running data at all (the builder's own nil-on-empty).
-func (h *Handler) buildRunningSection(ctx context.Context, r *http.Request, userID string, runs []activity.Activity, now time.Time, loc *time.Location) *RunningSection {
+// buildRunningSection fetches the running metrics and assembles the section
+// from them plus the already-fetched 53-week run list. withZones additionally
+// classifies each HR-bearing week run against the user's max-HR reference —
+// only when the Run Effort tile is enabled, because the reference is the
+// family's one extra read. A nil engine or a failed reference read leaves
+// every zone nil (degraded, never a 500, never a fabricated zone): the defer1
+// wrapper yields a nil *Reference on error, which skips classification.
+func (h *Handler) buildRunningSection(ctx context.Context, r *http.Request, userID string, runs []activity.Activity, now time.Time, loc *time.Location, withZones bool) *RunningSection {
 	metrics := defer1(ctx, r, "running metrics", func() (activity.Metrics, error) {
 		return h.activityRepo.RunningMetrics(ctx, userID, now, loc)
 	})
-	return buildRunning(metrics, runs, now, loc)
+	section := buildRunning(metrics, runs, now, loc)
+	if section == nil || !withZones || h.hrEngine == nil {
+		return section
+	}
+
+	ref := defer1(ctx, r, "running hr reference", func() (*hrzones.Reference, error) {
+		stats, err := h.activityRepo.RecentHRStats(ctx, userID, h.hrWindow, "")
+		if err != nil {
+			return nil, err
+		}
+		estimated := h.hrEngine.EstimateReference(stats)
+		return &estimated, nil
+	})
+	if ref == nil {
+		return section
+	}
+	for i := range section.WeekRuns {
+		if bpm := section.WeekRuns[i].AvgHeartRateBpm; bpm != nil {
+			// The engine is 0-indexed; the wire field is 1-indexed to match
+			// the web's --zone-1..5 tokens.
+			zone := h.hrEngine.ZoneForBPM(*ref, *bpm) + 1
+			section.WeekRuns[i].HeartRateZone = &zone
+		}
+	}
+	return section
 }
 
 // buildLiftingSection assembles the lifting tile: weekly volume + duration from

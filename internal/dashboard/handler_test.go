@@ -20,6 +20,7 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
@@ -90,6 +91,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	r := chi.NewRouter()
 	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
 	h.Mount(r)
 	return r, rp, u.ID
 }
@@ -621,5 +623,140 @@ func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
 	}
 	if capture.until != "2026-08-01" {
 		t.Errorf("until = %q, want 2026-08-01 (today)", capture.until)
+	}
+}
+
+// testHRZonesEngine mirrors the production config shape with round numbers:
+// population default 190 puts a 150-bpm run in zone 3 (bounds 114/133/152/171).
+func testHRZonesEngine() *hrzones.Engine {
+	return hrzones.New(hrzones.Config{
+		PopulationDefaultMaxHR: 190,
+		CalibratedRunThreshold: 8,
+		RecencyWindowDays:      90,
+		MinReferenceBpm:        120,
+		MaxReferenceBpm:        220,
+		ZoneUpperBounds:        []float64{0.60, 0.70, 0.80, 0.90},
+		ZoneNames:              []string{"Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"},
+	})
+}
+
+// seedRunWithHR seeds a current-week run carrying an average HR.
+func seedRunWithHR(t *testing.T, rp *repos, userID string, start time.Time, distanceMeters float64, hr int) {
+	t.Helper()
+	bpm := hr
+	a := &activity.Activity{
+		UserID:           userID,
+		ActivityType:     activity.ActivityRunning,
+		IngestSource:     activity.IngestManualTCX,
+		SourceActivityID: start.Format("20060102T150405") + "hr",
+		StartTime:        start,
+		DistanceMeters:   distanceMeters,
+		DurationSeconds:  1800,
+		AvgHeartRateBpm:  &bpm,
+	}
+	if err := rp.activity.Create(context.Background(), a, []byte("<tcx/>")); err != nil {
+		t.Fatalf("seed run with hr: %v", err)
+	}
+}
+
+func runningSectionFrom(t *testing.T, data map[string]json.RawMessage) RunningSection {
+	t.Helper()
+	var section RunningSection
+	if err := json.Unmarshal(data["running"], &section); err != nil {
+		t.Fatalf("decode running section: %v; raw=%s", err, data["running"])
+	}
+	return section
+}
+
+// TestSummary_HeartRateZones_OnlyWhenEffortEnabled: zones are the family's
+// one extra read, gated on the Run Effort tile. Without it every
+// HeartRateZone is nil; with it an HR-bearing run classifies against the
+// reference (150 bpm at the 190 population default → zone 3).
+func TestSummary_HeartRateZones_OnlyWhenEffortEnabled(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRunWithHR(t, rp, userID, testNow.Add(-24*time.Hour), 5000, 150)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+	section := runningSectionFrom(t, data)
+	if len(section.WeekRuns) != 1 {
+		t.Fatalf("week runs = %d, want 1", len(section.WeekRuns))
+	}
+	if section.WeekRuns[0].HeartRateZone != nil {
+		t.Errorf("zone = %v, want nil when running_effort is not enabled", section.WeekRuns[0].HeartRateZone)
+	}
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningEffort}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+	_, data = dataEnvelope(t, r, userID, "?timezone=UTC")
+	section = runningSectionFrom(t, data)
+	if len(section.WeekRuns) != 1 || section.WeekRuns[0].HeartRateZone == nil {
+		t.Fatalf("zone nil, want populated when running_effort is enabled; runs=%+v", section.WeekRuns)
+	}
+	if *section.WeekRuns[0].HeartRateZone != 3 {
+		t.Errorf("zone = %d, want 3 (150 bpm at a 190 reference)", *section.WeekRuns[0].HeartRateZone)
+	}
+}
+
+// errHRStatsRepo fails only RecentHRStats, proving a reference-read failure
+// degrades to nil zones — never a 500, never a fabricated population-default
+// zone.
+type errHRStatsRepo struct {
+	activity.Repository
+}
+
+func (errHRStatsRepo) RecentHRStats(ctx context.Context, userID string, window time.Duration, excludeActivityID string) (hrzones.Stats, error) {
+	return hrzones.Stats{}, errors.New("hr stats boom")
+}
+
+func TestSummary_HeartRateZones_ReferenceReadFailure_DegradesToNil(t *testing.T) {
+	_, rp, userID := newTestEnv(t)
+	seedRunWithHR(t, rp, userID, testNow.Add(-24*time.Hour), 5000, 150)
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningEffort}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	h := NewHandler(errHRStatsRepo{rp.activity}, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, testRecoveryEngine())
+	h.now = func() time.Time { return testNow }
+	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
+	r2 := chi.NewRouter()
+	h.Mount(r2)
+
+	_, data := dataEnvelope(t, r2, userID, "?timezone=UTC")
+	section := runningSectionFrom(t, data)
+	if len(section.WeekRuns) != 1 {
+		t.Fatalf("week runs = %d, want 1 (section must survive the failed read)", len(section.WeekRuns))
+	}
+	if section.WeekRuns[0].HeartRateZone != nil {
+		t.Errorf("zone = %v, want nil after a failed reference read", section.WeekRuns[0].HeartRateZone)
+	}
+}
+
+// TestSummary_RunningMetricsAgreeWithWeekRuns pins SOW Open Question 1: the
+// metrics path (SQL scan) and the slice path (week_runs) see the same rows
+// for the current week, so their figures must agree — drift fails loudly.
+func TestSummary_RunningMetricsAgreeWithWeekRuns(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
+	seedRun(t, rp, userID, testNow.Add(-48*time.Hour), 8000)
+
+	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning}); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+	section := runningSectionFrom(t, data)
+
+	var sum float64
+	for _, wr := range section.WeekRuns {
+		sum += wr.DistanceMeters
+	}
+	if sum != section.CurrentWeek.DistanceMeters {
+		t.Errorf("Σ week_runs distance = %v, metrics distance = %v — the two provenances drifted", sum, section.CurrentWeek.DistanceMeters)
+	}
+	if len(section.WeekRuns) != section.CurrentWeek.RunCount {
+		t.Errorf("len(week_runs) = %d, metrics run_count = %d", len(section.WeekRuns), section.CurrentWeek.RunCount)
 	}
 }

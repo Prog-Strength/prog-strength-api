@@ -76,14 +76,28 @@ type RecoveryHRV struct {
 	ShortAvg     *float64 `json:"short_avg"`
 }
 
-// RunningSection is the running tile. nil at the Summary level when the user
-// has no running activity at all.
+// RunningSection is the ONE shared payload every running-family tile reads
+// (running / running_log / running_effort / running_vertical). nil at the
+// Summary level when the user has no running activity at all.
 type RunningSection struct {
-	CurrentWeek           RunningCurrentWeek `json:"current_week"`
-	RecentAvgPaceSecPerKm *float64           `json:"recent_avg_pace_sec_per_km"`
-	LatestRun             *LatestRun         `json:"latest_run"`
-	// WeeklyDistanceSpark is ~8 weekly distance_meters totals, oldest→newest,
-	// zero-filled for weeks without a run.
+	CurrentWeek RunningCurrentWeek `json:"current_week"`
+	// Baseline is the trailing 4-week average EXCLUDING the current week —
+	// what "normal" means for this athlete. nil until at least one prior
+	// week holds a run.
+	Baseline *RunningBaseline `json:"baseline"`
+	// RecentAvgPaceSecPerKm is a 30-DAY aggregate — a different figure from
+	// CurrentWeek.AvgPaceSecPerKm and labeled differently by every tile.
+	RecentAvgPaceSecPerKm *float64   `json:"recent_avg_pace_sec_per_km"`
+	LatestRun             *LatestRun `json:"latest_run"`
+	// WeekRuns is this local week's runs, oldest→newest.
+	WeekRuns []RunningWeekRun `json:"week_runs"`
+	// WeeklyLoad is 8 week-anchored buckets, oldest→newest. A bucket with no
+	// runs is a real zero — the distinction the bare spark could not make.
+	WeeklyLoad []RunningWeekPoint `json:"weekly_load"`
+	// WeeklyDistanceSpark is the legacy series the retired card read. It
+	// survives this (expand) step because the deployed web build maps it
+	// with no null guard; a follow-up contract PR deletes it once web has
+	// stopped reading it.
 	WeeklyDistanceSpark []float64 `json:"weekly_distance_spark"`
 }
 
@@ -91,6 +105,65 @@ type RunningCurrentWeek struct {
 	DistanceMeters      float64  `json:"distance_meters"`
 	RunCount            int      `json:"run_count"`
 	DeltaPctVsPriorWeek *float64 `json:"delta_pct_vs_prior_week"`
+	DurationSeconds     int      `json:"duration_seconds"`
+	// AvgPaceSecPerKm is the week AGGREGATE (Σduration / Σkm), not a mean of
+	// per-run paces — the long run is exactly what separates the two.
+	AvgPaceSecPerKm *float64 `json:"avg_pace_sec_per_km"`
+	// AvgHeartRateBpm is duration-weighted over HR-bearing runs; nil when
+	// none carry HR. HeartRateRuns says how many contributed.
+	AvgHeartRateBpm *int `json:"avg_heart_rate_bpm"`
+	// ElevationGainMeters sums gain over gain-bearing runs and is nil —
+	// never 0 — when none carry it: an indoor-only week must stay
+	// distinguishable from a flat week.
+	ElevationGainMeters *float64 `json:"elevation_gain_meters"`
+	HeartRateRuns       int      `json:"heart_rate_runs"`
+	ElevationRuns       int      `json:"elevation_runs"`
+	LongestRunMeters    float64  `json:"longest_run_meters"`
+	// DaysRun counts distinct local dates run, 0–7.
+	DaysRun int `json:"days_run"`
+}
+
+// RunningWeekRun is one of this week's runs, projected for the tiles.
+type RunningWeekRun struct {
+	ActivityID      string    `json:"activity_id"`
+	Name            *string   `json:"name"`
+	StartTime       time.Time `json:"start_time"`
+	LocalDate       string    `json:"local_date"` // YYYY-MM-DD in the user's tz
+	DistanceMeters  float64   `json:"distance_meters"`
+	DurationSeconds int       `json:"duration_seconds"`
+	AvgPaceSecPerKm *float64  `json:"avg_pace_sec_per_km"`
+	AvgHeartRateBpm *int      `json:"avg_heart_rate_bpm"`
+	// HeartRateZone is 1..5, nil unless the Run Effort tile is enabled (the
+	// handler classifies against the max-HR reference; zone thresholds stay
+	// single-sourced in Go rather than mirrored into TypeScript).
+	HeartRateZone       *int     `json:"heart_rate_zone"`
+	ElevationGainMeters *float64 `json:"elevation_gain_meters"`
+	Environment         string   `json:"environment"` // outdoor | indoor
+}
+
+// RunningWeekPoint is one weekly bucket of the load rail.
+type RunningWeekPoint struct {
+	WeekStart           string   `json:"week_start"` // YYYY-MM-DD, local Monday
+	DistanceMeters      float64  `json:"distance_meters"`
+	DurationSeconds     int      `json:"duration_seconds"`
+	RunCount            int      `json:"run_count"`
+	ElevationGainMeters *float64 `json:"elevation_gain_meters"`
+}
+
+// RunningBaseline is the trailing 4-week average EXCLUDING the current week.
+// The denominator is Weeks — weeks that actually held a run — not a flat 4,
+// so a runner three weeks into the product isn't diluted by pre-signup zeros
+// (SOW Open Question 2). Pace and HR are aggregates over the window's runs,
+// the same method RecentAvgPaceSecPerKm uses, so the figures are comparable.
+type RunningBaseline struct {
+	WindowWeeks         int      `json:"window_weeks"` // 4
+	Weeks               int      `json:"weeks"`        // weeks with >=1 run behind it
+	DistanceMeters      *float64 `json:"distance_meters"`
+	DurationSeconds     *int     `json:"duration_seconds"`
+	AvgPaceSecPerKm     *float64 `json:"avg_pace_sec_per_km"`
+	AvgHeartRateBpm     *int     `json:"avg_heart_rate_bpm"`
+	ElevationGainMeters *float64 `json:"elevation_gain_meters"`
+	RunsPerWeek         *float64 `json:"runs_per_week"`
 }
 
 // LatestRun is a thin projection of the user's most recent run. Name is

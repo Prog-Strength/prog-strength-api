@@ -1,3 +1,10 @@
+# [0.100.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.99.0...v0.100.0) (2026-08-03)
+
+
+### Features
+
+* **photos:** processing worker and pending reaper ([#110](https://github.com/Prog-Strength/prog-strength-api/issues/110)) ([4fab327](https://github.com/Prog-Strength/prog-strength-api/commit/4fab3272fbb05a445700e009f0b233db2248f76b))
+
 # [0.99.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.98.0...v0.99.0) (2026-08-03)
 
 

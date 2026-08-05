@@ -72,9 +72,19 @@ allowed_origins = [
   "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
 ]
 # Origins /auth/google/login may redirect back to via ?return_to. Public.
+# Superset of [cors] allowed_origins: every credentialed browser origin must
+# be able to complete login, plus non-browser callbacks that are never an
+# Origin header.
+#
+# "progstrength://" is the mobile app's custom scheme. It is the whole origin,
+# not a typo for "progstrength://auth/callback": the deep link the app sends is
+# expo-linking's "progstrength:///auth/callback", which has no authority
+# component, so scheme + host is the bare scheme. A path-carrying entry here
+# would never match. See manifest_test.go.
 return_to_allowed_origins = [
   "https://progstrength.fitness",
   "https://prog-strength-web-*-jimmy-wallaces-projects.vercel.app",
+  "progstrength://",
 ]
 
 [storage]

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
 )
 
 // TestEmbeddedConfigLoads guards that the shipped config.toml decodes cleanly.
@@ -47,5 +48,35 @@ func TestCORSOriginsAreReturnToAllowed(t *testing.T) {
 				"permitted OAuth return_to target, or login from that origin fails "+
 				"with \"return_to origin is not allowed\"", origin)
 		}
+	}
+}
+
+// TestMobileDeepLinkIsReturnToAllowed guards the mobile app's OAuth callback.
+//
+// The native login opens /auth/google/login?return_to=<deep link>, where the
+// deep link is expo-linking's Linking.createURL("/auth/callback"). In a real
+// (non-Expo-Go) build that renders as "progstrength:///auth/callback" — a
+// custom scheme with NO authority component, so url.Parse leaves Host empty and
+// the guarded origin is the bare "progstrength://".
+//
+// That entry lived in the RETURN_TO_ALLOWED_ORIGINS GitHub secret and was lost
+// when the whitelist moved into config.toml: only the two web origins were
+// ported, so every mobile login 400'd with "return_to origin is not allowed".
+// This test pins the literal the guard actually compares against — note that
+// the fuller-looking "progstrength://auth/callback" does NOT work, because the
+// match is on origin (scheme + host), not on the whole URL.
+func TestMobileDeepLinkIsReturnToAllowed(t *testing.T) {
+	t.Setenv("JWT_SIGNING_KEY", "test-signing-key")
+	cfg, err := config.Load(DefaultConfigTOML)
+	if err != nil {
+		t.Fatalf("Load(DefaultConfigTOML) error = %v", err)
+	}
+
+	const deepLink = "progstrength:///auth/callback"
+	if !originmatch.AllowReturnTo(deepLink, cfg.ReturnToAllowedOrigins) {
+		t.Errorf("return_to %q rejected by return_to_allowed_origins %q; "+
+			"the mobile OAuth callback needs the bare \"progstrength://\" origin "+
+			"in the whitelist or native login fails with "+
+			"\"return_to origin is not allowed\"", deepLink, cfg.ReturnToAllowedOrigins)
 	}
 }

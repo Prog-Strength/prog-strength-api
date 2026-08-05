@@ -1,3 +1,10 @@
+## [0.101.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.0...v0.101.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **auth:** restore the mobile custom scheme in return_to_allowed_origins ([#114](https://github.com/Prog-Strength/prog-strength-api/issues/114)) ([4ceac89](https://github.com/Prog-Strength/prog-strength-api/commit/4ceac89bcb02a1bd1dbbc07d54f955ed1dff0a00)), closes [#53](https://github.com/Prog-Strength/prog-strength-api/issues/53)
+
 # [0.101.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.100.0...v0.101.0) (2026-08-03)
 
 

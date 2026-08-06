@@ -1,3 +1,10 @@
+## [0.101.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.1...v0.101.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* **whoop:** alert on a durable sync timestamp, not a per-process counter ([#115](https://github.com/Prog-Strength/prog-strength-api/issues/115)) ([6c71719](https://github.com/Prog-Strength/prog-strength-api/commit/6c7171947bed1dd371411ba0fed3b0a35bfda980))
+
 ## [0.101.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.0...v0.101.1) (2026-08-05)
 
 

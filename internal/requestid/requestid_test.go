@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
 )
 
 // TestMiddleware_GeneratesIDWhenAbsent verifies that an incoming request

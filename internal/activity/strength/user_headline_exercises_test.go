@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
 )
 
 func TestReplaceAndListUserHeadlineExercises_Roundtrip(t *testing.T) {

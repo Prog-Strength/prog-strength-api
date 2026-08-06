@@ -13,10 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/calendarconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
 )
 
 // testCipher builds a deterministic AES-256 cipher for tests.

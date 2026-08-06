@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
 )
 
 // ErrReconnectNeeded means the user's WHOOP connection is no longer usable

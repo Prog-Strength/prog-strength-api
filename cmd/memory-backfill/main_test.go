@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/vectormemory"
 )
 
 // fakeDistiller returns a fixed observation set per conversation index and

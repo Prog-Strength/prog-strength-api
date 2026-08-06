@@ -10,8 +10,8 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/hrzones"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // Compile-time check that *SQLiteRepository satisfies Repository.

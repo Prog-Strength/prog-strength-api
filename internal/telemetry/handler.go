@@ -10,8 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // IntentSink is the subset of chat.Repository the telemetry handler

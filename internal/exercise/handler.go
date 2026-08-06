@@ -6,7 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // Handler exposes HTTP endpoints for the exercise catalog.

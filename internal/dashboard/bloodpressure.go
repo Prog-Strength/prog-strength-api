@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
+	"github.com/Prog-Strength/prog-strength-api/internal/bloodpressure"
 )
 
 // bpSparkMax is the maximum number of points in each blood-pressure sparkline.

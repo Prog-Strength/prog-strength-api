@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
 )
 
 // openWorkoutNoteTestDB returns a fully-migrated temp app.db for the workout

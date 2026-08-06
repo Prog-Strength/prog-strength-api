@@ -12,9 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/follow"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // listLimitDefault / listLimitMax bound the page size for the discovery list and

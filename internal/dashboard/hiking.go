@@ -3,7 +3,7 @@ package dashboard
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 // buildHiking assembles the hiking tile: like walking/cycling plus this week's

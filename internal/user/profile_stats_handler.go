@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/follow"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // statsWeeks is the number of dense weekly buckets the profile-stats series

@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
 )
 
 // testPhotosConfig returns a PhotosConfig with sane defaults for the write-path

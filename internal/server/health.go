@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 func HealthCheck(w http.ResponseWriter, r *http.Request) {

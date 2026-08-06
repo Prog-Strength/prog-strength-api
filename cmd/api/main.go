@@ -12,9 +12,9 @@ import (
 	// developer's macOS laptop.
 	_ "time/tzdata"
 
-	progstrength "github.com/jwallace145/progressive-overload-fitness-tracker"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/server"
+	progstrength "github.com/Prog-Strength/prog-strength-api"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/server"
 )
 
 func main() {

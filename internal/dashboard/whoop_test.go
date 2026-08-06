@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/recoverytrend"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
 )
 
 func rhrPtr(f float64) *float64 { return &f }

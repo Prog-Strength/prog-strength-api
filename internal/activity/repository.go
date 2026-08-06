@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
+	"github.com/Prog-Strength/prog-strength-api/internal/hrzones"
 )
 
 // Repository persists activities and their downsampled trackpoint

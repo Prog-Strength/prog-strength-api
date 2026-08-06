@@ -5,9 +5,9 @@ import (
 	"errors"
 	"log"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/follow"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/follow"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // followProfileProvider adapts the user domain to follow.ProfileProvider so the

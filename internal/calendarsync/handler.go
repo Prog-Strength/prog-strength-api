@@ -10,11 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"golang.org/x/oauth2"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/calendarconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/originmatch"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
 )
 
 // Cookie names for the calendar OAuth flow. Deliberately distinct from the

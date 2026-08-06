@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 func bike(name string, dist float64, dur int, start time.Time) activity.Activity {

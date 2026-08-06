@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // fakeTimelineRepo is a timeline.Repository whose EnsurePost behavior is

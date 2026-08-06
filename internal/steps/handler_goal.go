@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // goalDTO is the wire shape for GET /me/steps-goal and the response from

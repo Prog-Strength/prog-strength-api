@@ -37,7 +37,7 @@ ENV CGO_CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du
 # -ldflags injects the version string into internal/version.Version.
 RUN CGO_ENABLED=1 GOOS=linux go build \
     -a -installsuffix cgo \
-    -ldflags="-X github.com/jwallace145/progressive-overload-fitness-tracker/internal/version.Version=${APP_VERSION}" \
+    -ldflags="-X github.com/Prog-Strength/prog-strength-api/internal/version.Version=${APP_VERSION}" \
     -o api ./cmd/api
 
 # Runtime stage

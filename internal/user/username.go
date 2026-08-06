@@ -1,6 +1,6 @@
 package user
 
-import "github.com/jwallace145/progressive-overload-fitness-tracker/internal/user/handle"
+import "github.com/Prog-Strength/prog-strength-api/internal/user/handle"
 
 // Username validation lives in the leaf internal/user/handle package so that
 // internal/db (the username backfill migration) can reuse the exact same logic

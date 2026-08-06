@@ -1,6 +1,6 @@
 package strength
 
-import "github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+import "github.com/Prog-Strength/prog-strength-api/internal/user"
 
 // Set is a single set of an exercise: a number of reps performed
 // against a given weight. Bodyweight exercises use Weight=0.

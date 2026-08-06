@@ -3,7 +3,7 @@ package bodyweight
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // MaxGoalWeight is the upper bound on a bodyweight goal, mirrored as a

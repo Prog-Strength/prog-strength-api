@@ -83,7 +83,7 @@ repos:
       - id: goimports
         name: goimports
         description: Organize Go imports
-        entry: goimports -w -local github.com/jwallace145/progressive-overload-fitness-tracker
+        entry: goimports -w -local github.com/Prog-Strength/prog-strength-api
         language: system
         types: [go]
 

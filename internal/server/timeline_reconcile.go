@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"log"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // reconcileTimeline makes timeline_post whole: every live activity, PR event,

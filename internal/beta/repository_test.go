@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
 )
 
 // newSQLiteBetaRepo spins up a migrated, file-backed SQLite database and

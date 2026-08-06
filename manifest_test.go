@@ -3,8 +3,8 @@ package progstrength
 import (
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/originmatch"
 )
 
 // TestEmbeddedConfigLoads guards that the shipped config.toml decodes cleanly.

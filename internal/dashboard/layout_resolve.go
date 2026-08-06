@@ -6,8 +6,8 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 )
 
 // resolveLayout returns the user's stored layout, or the default when none is

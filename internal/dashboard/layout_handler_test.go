@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
 )
 
 // putLayout drives PUT /dashboard/layout for userID with the given raw JSON

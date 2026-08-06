@@ -41,13 +41,13 @@ import (
 
 	_ "time/tzdata"
 
-	progstrength "github.com/jwallace145/progressive-overload-fitness-tracker"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/server"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	progstrength "github.com/Prog-Strength/prog-strength-api"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/chat"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/server"
+	"github.com/Prog-Strength/prog-strength-api/internal/vectormemory"
 )
 
 // backfillHTTPTimeout bounds each individual HTTP call (upload, create, one

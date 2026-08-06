@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // recoveryDateLayout is the wire + storage format for a recovery day. Recovery

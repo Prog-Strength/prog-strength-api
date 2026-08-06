@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // mustExec runs a statement and fatals on error so test bodies stay readable.

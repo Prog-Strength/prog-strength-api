@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
 )
 
 // These tests lock the completion-REVERT symmetry between the two plan-matcher

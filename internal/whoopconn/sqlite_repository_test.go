@@ -7,7 +7,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
 )
 
 // newMigratedDB opens a fresh migrated database in a temp dir, mirroring the

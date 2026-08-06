@@ -12,7 +12,7 @@ package bodyweight
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // Entry is one bodyweight measurement. Unit is denormalized per row

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/calendarconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // fakeClient is an in-memory CalendarClient recording calls and returning

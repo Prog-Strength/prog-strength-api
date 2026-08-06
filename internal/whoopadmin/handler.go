@@ -15,10 +15,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsync"
 )
 
 // connReader is the subset of whoopconn.Repository this handler needs: list all

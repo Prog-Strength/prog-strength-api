@@ -14,12 +14,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/hrzones"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/running/estimate"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // maxTCXBytes caps the multipart upload size. A typical activity TCX is

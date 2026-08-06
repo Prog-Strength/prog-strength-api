@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // timelinePublisher adapts the timeline Repository to the timeline.Publisher

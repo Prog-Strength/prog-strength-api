@@ -4,7 +4,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/logging"
+	"github.com/Prog-Strength/prog-strength-api/internal/logging"
 )
 
 // NewLogger builds the lookup workflow's structured logger. The request-id

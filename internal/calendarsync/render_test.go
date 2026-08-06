@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
 )
 
 func strPtr(s string) *string                                                  { return &s }

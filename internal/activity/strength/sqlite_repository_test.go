@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/testutil/sqlcount"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/testutil/sqlcount"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // Statement-count regression test. ListByUser must issue exactly three

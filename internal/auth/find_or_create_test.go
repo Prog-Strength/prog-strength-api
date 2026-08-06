@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/beta"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/beta"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // newFindOrCreateHandler builds a minimal Handler backed by an ephemeral SQLite

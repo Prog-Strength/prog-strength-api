@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/calendarconn"
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/calendarconn"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // ErrNotConnected is returned when a sync is attempted but the user has no

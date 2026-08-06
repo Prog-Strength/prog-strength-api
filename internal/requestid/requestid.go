@@ -12,7 +12,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // HeaderName is the canonical header. Lowercase usage works via Go's

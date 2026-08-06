@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user/handle"
+	"github.com/Prog-Strength/prog-strength-api/internal/user/handle"
 )
 
 var (

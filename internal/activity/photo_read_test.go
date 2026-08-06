@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
 )
 
 // doGetDetail drives the detail GET (h.get) for activityID as userID and

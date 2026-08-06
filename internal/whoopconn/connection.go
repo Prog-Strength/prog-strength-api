@@ -33,6 +33,18 @@ type Connection struct {
 	TokenExpiresAt time.Time
 	ConnectedAt    time.Time
 	UpdatedAt      time.Time
+
+	// LastWindowSyncAt is when a webhook-driven window sync last succeeded for
+	// this user — the durable liveness signal the dead-ingestion alert reads
+	// (via the whoopadmin gauge exporter). Deliberately NOT advanced by
+	// backfill or admin resync: those are operator/connect actions, and
+	// letting them move it would let a manual resync paper over a dead webhook
+	// path, which is the outage the alert exists to catch.
+	//
+	// nil means no sync has ever been recorded. Upsert seeds it at connect and
+	// migration 052 backfilled existing rows, so nil should not occur in
+	// practice; readers still handle it rather than assuming.
+	LastWindowSyncAt *time.Time
 }
 
 // TokenBundle is the encrypted access+refresh token pair stored/read together.

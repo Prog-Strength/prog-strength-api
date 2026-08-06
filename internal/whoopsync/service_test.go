@@ -476,6 +476,119 @@ func TestSyncSince_LabelsAdminResync(t *testing.T) {
 	}
 }
 
+// syncKindFixture is the two-scored-recoveries API fake shared by the
+// last_window_sync_at tests below; each asserts which sync kinds are allowed to
+// advance the durable liveness timestamp.
+func syncKindFixture() *fakeAPI {
+	return &fakeAPI{
+		cycles: []Cycle{
+			{ID: 1, Start: "2026-01-15T12:00:00Z", TimezoneOffset: "-08:00"},
+			{ID: 2, Start: "2026-01-16T12:00:00Z", TimezoneOffset: "-08:00"},
+		},
+		recoveries: []Recovery{
+			{CycleID: 1, SleepID: "s1", CreatedAt: "2026-01-15T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(72)}},
+			{CycleID: 2, SleepID: "s2", CreatedAt: "2026-01-16T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}},
+		},
+	}
+}
+
+// TestSyncWindow_RecordsLastWindowSyncAt pins the durable half of the ingestion
+// liveness signal. The in-process counter cannot carry this: the API restarts
+// about as often as WHOOP nudges us, so increase() over the counter reads 0
+// even when syncs are landing (see migration 052). The alert therefore reads a
+// persisted timestamp, and only a real webhook-driven sync may advance it.
+func TestSyncWindow_RecordsLastWindowSyncAt(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	connectedAt := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	syncedAt := connectedAt.Add(30 * time.Hour)
+	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", syncedAt.Add(time.Hour), connectedAt)
+
+	svc := NewService(conns, rec, cipher, syncKindFixture(), &fakeRefresher{}, http.DefaultClient, func() time.Time { return syncedAt })
+	if err := svc.SyncWindow(ctx, "u1", 25); err != nil {
+		t.Fatalf("SyncWindow: %v", err)
+	}
+
+	got, err := conns.Get(ctx, "u1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastWindowSyncAt == nil || !got.LastWindowSyncAt.Equal(syncedAt) {
+		t.Fatalf("last_window_sync_at = %v, want %v", got.LastWindowSyncAt, syncedAt)
+	}
+}
+
+// TestSyncWindow_FailedSyncDoesNotRecordLastWindowSyncAt pins that the
+// timestamp tracks SUCCESS, not attempts. A sync that dies upstream has landed
+// no data, so advancing the clock would hide exactly the outage being watched.
+func TestSyncWindow_FailedSyncDoesNotRecordLastWindowSyncAt(t *testing.T) {
+	ctx := context.Background()
+	conns, rec := newRepos(t)
+	cipher := newCipher(t)
+	connectedAt := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	attemptedAt := connectedAt.Add(30 * time.Hour)
+	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", attemptedAt.Add(time.Hour), connectedAt)
+
+	api := syncKindFixture()
+	api.recErr = errors.New("whoop is down")
+	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return attemptedAt })
+	if err := svc.SyncWindow(ctx, "u1", 25); err == nil {
+		t.Fatal("SyncWindow: err = nil, want an upstream failure")
+	}
+
+	got, err := conns.Get(ctx, "u1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.LastWindowSyncAt == nil || !got.LastWindowSyncAt.Equal(connectedAt) {
+		t.Fatalf("last_window_sync_at = %v, want it left at the connect seed %v", got.LastWindowSyncAt, connectedAt)
+	}
+}
+
+// TestBackfillAndSyncSince_DoNotRecordLastWindowSyncAt is the durable-state
+// twin of TestSyncSince_LabelsAdminResync: connect-time backfill and operator
+// resync both land data, but neither proves the WEBHOOK path is alive. If they
+// moved the timestamp, an operator resyncing to investigate an outage would
+// silence the alert that told them about it.
+func TestBackfillAndSyncSince_DoNotRecordLastWindowSyncAt(t *testing.T) {
+	connectedAt := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	ranAt := connectedAt.Add(30 * time.Hour)
+
+	for _, tc := range []struct {
+		name string
+		run  func(ctx context.Context, svc *Service) error
+	}{
+		{"Backfill", func(ctx context.Context, svc *Service) error {
+			return svc.Backfill(ctx, "u1")
+		}},
+		{"SyncSince", func(ctx context.Context, svc *Service) error {
+			_, err := svc.SyncSince(ctx, "u1", 30*24*time.Hour, 25)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			conns, rec := newRepos(t)
+			cipher := newCipher(t)
+			seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", ranAt.Add(time.Hour), connectedAt)
+
+			svc := NewService(conns, rec, cipher, syncKindFixture(), &fakeRefresher{}, http.DefaultClient, func() time.Time { return ranAt })
+			if err := tc.run(ctx, svc); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+
+			got, err := conns.Get(ctx, "u1")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.LastWindowSyncAt == nil || !got.LastWindowSyncAt.Equal(connectedAt) {
+				t.Fatalf("last_window_sync_at = %v, want it left at the connect seed %v", got.LastWindowSyncAt, connectedAt)
+			}
+		})
+	}
+}
+
 // TestSyncSince_UpstreamErrorIsClassified pins that a WHOOP fetch failure is
 // wrapped in ErrUpstream (so callers can map it to 502) and returns a zero-value
 // result.

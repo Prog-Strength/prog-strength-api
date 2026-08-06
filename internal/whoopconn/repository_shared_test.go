@@ -314,10 +314,122 @@ func runRepositoryContract(t *testing.T, newRepo func(t *testing.T) Repository) 
 		}
 	})
 
+	t.Run("Upsert_SeedsLastWindowSyncAt", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+
+		if err := repo.Upsert(ctx, "u1", whoopID, tokens, "s", t0); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		got, err := repo.Get(ctx, "u1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		// Connecting runs a 30-day backfill, so the "webhook path has gone
+		// quiet" clock starts at connect — not at the epoch. Without this seed
+		// the freshness alert would fire the moment a user connects.
+		if got.LastWindowSyncAt == nil {
+			t.Fatal("last_window_sync_at = nil after Upsert, want the connect time")
+		}
+		if !got.LastWindowSyncAt.Equal(t0) {
+			t.Fatalf("last_window_sync_at = %v, want %v", got.LastWindowSyncAt, t0)
+		}
+	})
+
+	t.Run("MarkWindowSync_AdvancesTimestampWithoutTouchingUpdatedAt", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+		synced := t0.Add(6 * time.Hour)
+
+		if err := repo.Upsert(ctx, "u1", whoopID, tokens, "s", t0); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		if err := repo.MarkWindowSync(ctx, "u1", synced); err != nil {
+			t.Fatalf("MarkWindowSync: %v", err)
+		}
+		got, err := repo.Get(ctx, "u1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LastWindowSyncAt == nil || !got.LastWindowSyncAt.Equal(synced) {
+			t.Fatalf("last_window_sync_at = %v, want %v", got.LastWindowSyncAt, synced)
+		}
+		// updated_at describes connection-metadata changes and orders List.
+		// A sync is not a connection change, so it must not reorder the admin
+		// table or the gauge exporter's view.
+		if !got.UpdatedAt.Equal(t0) {
+			t.Fatalf("updated_at = %v, want it left at %v", got.UpdatedAt, t0)
+		}
+	})
+
+	t.Run("MarkWindowSync_SurfacesInListAndByWhoopUserID", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+		synced := t0.Add(9 * time.Hour)
+
+		if err := repo.Upsert(ctx, "u1", whoopID, tokens, "s", t0); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		if err := repo.MarkWindowSync(ctx, "u1", synced); err != nil {
+			t.Fatalf("MarkWindowSync: %v", err)
+		}
+
+		// The gauge exporter reads List, so the column has to survive that
+		// path too — not just Get.
+		listed, err := repo.List(ctx)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(listed) != 1 {
+			t.Fatalf("List = %d rows, want 1", len(listed))
+		}
+		if listed[0].LastWindowSyncAt == nil || !listed[0].LastWindowSyncAt.Equal(synced) {
+			t.Fatalf("List last_window_sync_at = %v, want %v", listed[0].LastWindowSyncAt, synced)
+		}
+
+		byWhoop, err := repo.GetByWhoopUserID(ctx, whoopID)
+		if err != nil {
+			t.Fatalf("GetByWhoopUserID: %v", err)
+		}
+		if byWhoop.LastWindowSyncAt == nil || !byWhoop.LastWindowSyncAt.Equal(synced) {
+			t.Fatalf("GetByWhoopUserID last_window_sync_at = %v, want %v", byWhoop.LastWindowSyncAt, synced)
+		}
+	})
+
+	t.Run("Reconnect_ResetsLastWindowSyncAt", func(t *testing.T) {
+		repo := newRepo(t)
+		ctx := context.Background()
+		stale := t0.Add(-72 * time.Hour)
+		reconnect := t0.Add(time.Hour)
+
+		if err := repo.Upsert(ctx, "u1", whoopID, tokens, "s", t0); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		if err := repo.MarkWindowSync(ctx, "u1", stale); err != nil {
+			t.Fatalf("MarkWindowSync: %v", err)
+		}
+		// Reconnecting restarts the webhook clock: the old timestamp describes
+		// a subscription that no longer exists, and carrying it forward would
+		// page the operator for an outage they just fixed.
+		if err := repo.Upsert(ctx, "u1", whoopID, tokens, "s", reconnect); err != nil {
+			t.Fatalf("re-Upsert: %v", err)
+		}
+		got, err := repo.Get(ctx, "u1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if got.LastWindowSyncAt == nil || !got.LastWindowSyncAt.Equal(reconnect) {
+			t.Fatalf("last_window_sync_at = %v, want reset to %v", got.LastWindowSyncAt, reconnect)
+		}
+	})
+
 	t.Run("AbsentUser_ReturnsErrNotFound", func(t *testing.T) {
 		repo := newRepo(t)
 		ctx := context.Background()
 
+		if err := repo.MarkWindowSync(ctx, "ghost", t0); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("MarkWindowSync: err = %v, want ErrNotFound", err)
+		}
 		if _, err := repo.Get(ctx, "ghost"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("Get: err = %v, want ErrNotFound", err)
 		}

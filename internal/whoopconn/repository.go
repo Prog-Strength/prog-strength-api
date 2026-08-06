@@ -37,6 +37,12 @@ type Repository interface {
 	// SetStatus updates status + updated_at. ErrNotFound when absent.
 	SetStatus(ctx context.Context, userID string, status Status, now time.Time) error
 
+	// MarkWindowSync records that a webhook-driven window sync succeeded at
+	// now. Deliberately does NOT bump updated_at: a sync is not a change to
+	// connection metadata, and List orders by updated_at. ErrNotFound when
+	// absent.
+	MarkWindowSync(ctx context.Context, userID string, now time.Time) error
+
 	// Revoke marks status=revoked and wipes token columns (disconnect). ErrNotFound when absent.
 	Revoke(ctx context.Context, userID string, now time.Time) error
 

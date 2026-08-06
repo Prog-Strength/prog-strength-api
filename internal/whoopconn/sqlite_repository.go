@@ -26,13 +26,19 @@ func (r *SQLiteRepository) Upsert(ctx context.Context, userID string, whoopUserI
 	// the first insert and intentionally NOT touched by the UPDATE clause, so
 	// re-connecting (even after a revoke/error) preserves the original
 	// timestamp while resetting status back to connected.
+	// last_window_sync_at is seeded at connect (and RESET on reconnect, unlike
+	// connected_at): connecting runs a 30-day backfill, so the "webhook path
+	// has gone quiet" clock legitimately starts now. Carrying a stale value
+	// across a reconnect would page the operator for an outage they just
+	// fixed by reconnecting.
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO user_whoop_connection (
 			user_id, whoop_user_id,
 			access_token_enc, access_token_nonce,
 			refresh_token_enc, refresh_token_nonce,
-			token_expires_at, scopes, status, connected_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'connected', ?, ?)
+			token_expires_at, scopes, status, connected_at, updated_at,
+			last_window_sync_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'connected', ?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET
 			whoop_user_id       = excluded.whoop_user_id,
 			access_token_enc    = excluded.access_token_enc,
@@ -42,19 +48,20 @@ func (r *SQLiteRepository) Upsert(ctx context.Context, userID string, whoopUserI
 			token_expires_at    = excluded.token_expires_at,
 			scopes              = excluded.scopes,
 			status              = 'connected',
-			updated_at          = excluded.updated_at
+			updated_at          = excluded.updated_at,
+			last_window_sync_at = excluded.last_window_sync_at
 	`,
 		userID, whoopUserID,
 		tokens.AccessTokenEnc, tokens.AccessTokenNonce,
 		tokens.RefreshTokenEnc, tokens.RefreshTokenNonce,
-		tokens.ExpiresAt.UTC(), scopes, now, now,
+		tokens.ExpiresAt.UTC(), scopes, now, now, now,
 	)
 	return err
 }
 
 func (r *SQLiteRepository) Get(ctx context.Context, userID string) (*Connection, error) {
 	return r.scanConnection(r.db.QueryRowContext(ctx, `
-		SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at
+		SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at, last_window_sync_at
 		FROM user_whoop_connection
 		WHERE user_id = ?
 	`, userID))
@@ -63,7 +70,7 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID string) (*Connection,
 func (r *SQLiteRepository) List(ctx context.Context) ([]Connection, error) {
 	// Same metadata column list/mapping as Get — never token material. Ordered
 	// newest-first for the admin surface and gauge exporter.
-	const q = `SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at
+	const q = `SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at, last_window_sync_at
 FROM user_whoop_connection ORDER BY updated_at DESC`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
@@ -73,13 +80,17 @@ FROM user_whoop_connection ORDER BY updated_at DESC`
 	var out []Connection
 	for rows.Next() {
 		var (
-			c         Connection
-			statusStr string
+			c          Connection
+			statusStr  string
+			lastSynced sql.NullTime
 		)
-		if err := rows.Scan(&c.UserID, &c.WhoopUserID, &c.Scopes, &statusStr, &c.TokenExpiresAt, &c.ConnectedAt, &c.UpdatedAt); err != nil {
+		if err := rows.Scan(&c.UserID, &c.WhoopUserID, &c.Scopes, &statusStr, &c.TokenExpiresAt, &c.ConnectedAt, &c.UpdatedAt, &lastSynced); err != nil {
 			return nil, fmt.Errorf("whoopconn: list scan: %w", err)
 		}
 		c.Status = Status(statusStr)
+		if lastSynced.Valid {
+			c.LastWindowSyncAt = &lastSynced.Time
+		}
 		out = append(out, c)
 	}
 	if err := rows.Err(); err != nil {
@@ -90,7 +101,7 @@ FROM user_whoop_connection ORDER BY updated_at DESC`
 
 func (r *SQLiteRepository) GetByWhoopUserID(ctx context.Context, whoopUserID int64) (*Connection, error) {
 	return r.scanConnection(r.db.QueryRowContext(ctx, `
-		SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at
+		SELECT user_id, whoop_user_id, scopes, status, token_expires_at, connected_at, updated_at, last_window_sync_at
 		FROM user_whoop_connection
 		WHERE whoop_user_id = ?
 	`, whoopUserID))
@@ -98,10 +109,11 @@ func (r *SQLiteRepository) GetByWhoopUserID(ctx context.Context, whoopUserID int
 
 func (r *SQLiteRepository) scanConnection(row *sql.Row) (*Connection, error) {
 	var (
-		c         Connection
-		statusStr string
+		c          Connection
+		statusStr  string
+		lastSynced sql.NullTime
 	)
-	err := row.Scan(&c.UserID, &c.WhoopUserID, &c.Scopes, &statusStr, &c.TokenExpiresAt, &c.ConnectedAt, &c.UpdatedAt)
+	err := row.Scan(&c.UserID, &c.WhoopUserID, &c.Scopes, &statusStr, &c.TokenExpiresAt, &c.ConnectedAt, &c.UpdatedAt, &lastSynced)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -109,6 +121,9 @@ func (r *SQLiteRepository) scanConnection(row *sql.Row) (*Connection, error) {
 		return nil, err
 	}
 	c.Status = Status(statusStr)
+	if lastSynced.Valid {
+		c.LastWindowSyncAt = &lastSynced.Time
+	}
 	return &c, nil
 }
 
@@ -155,6 +170,19 @@ func (r *SQLiteRepository) SetStatus(ctx context.Context, userID string, status 
 		SET status = ?, updated_at = ?
 		WHERE user_id = ?
 	`, string(status), now.UTC(), userID)
+	if err != nil {
+		return err
+	}
+	return errIfNoRows(res)
+}
+
+func (r *SQLiteRepository) MarkWindowSync(ctx context.Context, userID string, now time.Time) error {
+	// updated_at is deliberately untouched — see the Repository doc comment.
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE user_whoop_connection
+		SET last_window_sync_at = ?
+		WHERE user_id = ?
+	`, now.UTC(), userID)
 	if err != nil {
 		return err
 	}

@@ -49,6 +49,19 @@ const (
 	backfillLimit  = 25
 )
 
+// Sync kinds. These are not cosmetic: kindWindow is the ONLY one that marks the
+// connection's durable ingestion-liveness stamp and the only one the
+// dead-ingestion alert treats as proof the webhook path is alive. Named
+// constants keep that contract from being broken by a rename at one call site
+// while the comparison in syncWindow still matches the old literal — a change
+// that would silently stop the alert from ever clearing. They double as the
+// `kind` metric label.
+const (
+	kindWindow      = "window"
+	kindBackfill    = "backfill"
+	kindAdminResync = "admin_resync"
+)
+
 // whoopAPI is the subset of the WHOOP REST client the service needs. Defining
 // it here (rather than depending on *Client) lets tests inject a fake.
 type whoopAPI interface {
@@ -114,7 +127,7 @@ func NewService(
 // small value covering the handful of recoveries it announced).
 func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) error {
 	now := s.now()
-	_, err := s.syncWindow(ctx, "window", userID, now.Add(-recentWindow), now, limit)
+	_, err := s.syncWindow(ctx, kindWindow, userID, now.Add(-recentWindow), now, limit)
 	return err
 }
 
@@ -122,17 +135,18 @@ func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) erro
 // shot, used when a connection is first established.
 func (s *Service) Backfill(ctx context.Context, userID string) error {
 	now := s.now()
-	_, err := s.syncWindow(ctx, "backfill", userID, now.Add(-backfillWindow), now, backfillLimit)
+	_, err := s.syncWindow(ctx, kindBackfill, userID, now.Add(-backfillWindow), now, backfillLimit)
 	return err
 }
 
 // SyncSince runs an operator-triggered resync over [now-window, now]. Thin
-// wrapper over syncWindow with kind="admin_resync" — a deliberate label so an
-// operator investigating an outage does not increment the window-sync
-// liveness counter the dead-ingestion alert watches.
+// wrapper over syncWindow with kindAdminResync — a deliberate label so an
+// operator investigating an outage neither increments the window-sync metric
+// nor advances the durable liveness stamp the dead-ingestion alert reads.
+// Resyncing to diagnose an outage must not silence the alert reporting it.
 func (s *Service) SyncSince(ctx context.Context, userID string, window time.Duration, limit int) (SyncResult, error) {
 	now := s.now()
-	return s.syncWindow(ctx, "admin_resync", userID, now.Add(-window), now, limit)
+	return s.syncWindow(ctx, kindAdminResync, userID, now.Add(-window), now, limit)
 }
 
 // syncWindow is the shared core: obtain a valid token, fetch recoveries + cycles
@@ -231,6 +245,23 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 		"skipped_no_cycle", skippedNoCycle,
 		"skipped_bad_date", skippedBadDate,
 	)
+	// Durable liveness stamp for the dead-ingestion alert. ONLY kind="window"
+	// advances it: backfill runs at connect and admin_resync is an operator
+	// action, so neither is evidence the webhook path is alive — the same
+	// reasoning that gives SyncSince its own metric label.
+	//
+	// A failure here does not fail the sync: the recovery rows are already
+	// committed, and reporting an error would make the webhook return 500 and
+	// have WHOOP redeliver data we successfully stored. It is warned instead,
+	// and the alert's own fail-loud direction covers it — a stamp we cannot
+	// write eventually reads as stale, which is the safe way to be wrong.
+	if kind == kindWindow {
+		if err := s.conns.MarkWindowSync(ctx, userID, now); err != nil {
+			slog.WarnContext(ctx, "whoopsync: could not record last window sync; ingestion liveness may read stale",
+				"user_id", userID, "error", err)
+		}
+	}
+
 	result = "ok"
 	return SyncResult{Upserted: upserted, SkippedUnscored: skippedUnscored, SkippedNoCycle: skippedNoCycle, SkippedBadDate: skippedBadDate}, nil
 }

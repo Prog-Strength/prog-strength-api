@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // completePlan marks a seeded plan completed via the complete endpoint so the

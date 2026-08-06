@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // Video lifecycle states. A row is created 'pending' when the client reserves

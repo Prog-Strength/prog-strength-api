@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
 )
 
 // SQLite tests exercise the same contract the in-memory tests do,

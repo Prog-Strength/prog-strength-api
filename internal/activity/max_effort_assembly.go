@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/hrzones"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
+	"github.com/Prog-Strength/prog-strength-api/internal/hrzones"
+	"github.com/Prog-Strength/prog-strength-api/internal/running/estimate"
 )
 
 // DemographicsLoader supplies profile fields for the max-effort engine. Optional

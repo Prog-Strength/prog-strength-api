@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
+	"github.com/Prog-Strength/prog-strength-api/internal/steps"
 )
 
 func TestBuildSteps_EmptyReturnsNil(t *testing.T) {

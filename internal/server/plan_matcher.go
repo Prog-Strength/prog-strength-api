@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
 )
 
 // The two adapters below bridge the activity and strength packages' PlanMatcher

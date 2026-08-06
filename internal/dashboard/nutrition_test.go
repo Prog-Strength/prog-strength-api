@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/Prog-Strength/prog-strength-api/internal/nutrition"
 )
 
 func TestBuildNutrition_EmptyReturnsNil(t *testing.T) {

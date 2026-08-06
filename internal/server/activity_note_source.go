@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/vectormemory"
 )
 
 // activityNotePromptHint frames an endurance session's note for the distiller.

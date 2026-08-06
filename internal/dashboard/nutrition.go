@@ -1,7 +1,7 @@
 package dashboard
 
 import (
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
+	"github.com/Prog-Strength/prog-strength-api/internal/nutrition"
 )
 
 // buildNutrition assembles the nutrition tile from the local-day macro

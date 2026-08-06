@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 func TestGoal_Validate(t *testing.T) {

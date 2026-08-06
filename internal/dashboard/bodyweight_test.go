@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/bodyweight"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 func bwEntry(weight float64, at time.Time) bodyweight.Entry {

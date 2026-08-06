@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // TestGetPersonalRecordEventsByIDs_SQLite seeds PR events by creating a

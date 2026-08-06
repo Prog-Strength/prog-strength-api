@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 // NewDescriptor builds the strength_training descriptor for the activity

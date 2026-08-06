@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // seedPantry helper: create a pantry item and return its ID.

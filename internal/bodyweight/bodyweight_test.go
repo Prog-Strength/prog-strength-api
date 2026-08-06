@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 func TestEntry_ValidateRejectsNonPositiveWeight(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // entryEnvelope mirrors the httpresp success shape with the entry DTO typed.

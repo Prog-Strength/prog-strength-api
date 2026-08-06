@@ -9,12 +9,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/originmatch"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/tokencrypt"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/originmatch"
+	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
 )
 
 // Cookie names for the WHOOP OAuth flow. Deliberately distinct from the login

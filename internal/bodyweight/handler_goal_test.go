@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // goalEnvelope mirrors the httpresp success shape with the goal DTO typed

@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // OneRepMaxEntry is a single row of the exercise_one_rep_max_history

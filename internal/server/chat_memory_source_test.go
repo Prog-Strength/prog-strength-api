@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/chat"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db"
+	"github.com/Prog-Strength/prog-strength-api/internal/chat"
+	"github.com/Prog-Strength/prog-strength-api/internal/db"
 )
 
 // openChatMemoryTestDB returns a fully-migrated temp app.db for the chat source

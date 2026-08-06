@@ -3,7 +3,7 @@ package strength
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // PersonalRecord is the current heaviest set the user has logged on a

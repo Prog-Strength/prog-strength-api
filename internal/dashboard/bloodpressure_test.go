@@ -6,7 +6,7 @@ import (
 
 	_ "time/tzdata"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
+	"github.com/Prog-Strength/prog-strength-api/internal/bloodpressure"
 )
 
 // bpNow is a fixed reference instant so the trailing-30-day window is

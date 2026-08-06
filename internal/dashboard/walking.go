@@ -3,7 +3,7 @@ package dashboard
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 // buildWalking assembles the walking tile from the already-fetched endurance

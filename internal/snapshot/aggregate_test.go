@@ -4,11 +4,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/nutrition"
+	"github.com/Prog-Strength/prog-strength-api/internal/steps"
 )
 
 func mustLoc(t *testing.T) *time.Location {

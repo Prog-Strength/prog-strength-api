@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
 )
 
 // Service orchestrates retrieval (the shared path for the agent endpoint

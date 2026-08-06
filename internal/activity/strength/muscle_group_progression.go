@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
 )
 
 // baselineModelRecencyWeighted is the discriminator the UI uses to label

@@ -1,4 +1,4 @@
-module github.com/jwallace145/progressive-overload-fitness-tracker
+module github.com/Prog-Strength/prog-strength-api
 
 go 1.25.12
 

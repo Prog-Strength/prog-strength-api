@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
 )
 
 // recoveryReadEnvelope mirrors the httpresp success shape with the recovery list DTO

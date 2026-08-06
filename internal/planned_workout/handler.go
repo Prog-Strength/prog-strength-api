@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/daterange"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/daterange"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // Handler serves /planned-workouts: scheduled training entries with an

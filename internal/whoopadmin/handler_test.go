@@ -13,10 +13,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopadmin"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopsync"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopadmin"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsync"
 )
 
 // --- fakes implementing the three narrow consumer interfaces ---

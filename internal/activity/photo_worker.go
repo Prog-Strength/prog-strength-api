@@ -10,7 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/jpegmeta"
+	"github.com/Prog-Strength/prog-strength-api/internal/jpegmeta"
 )
 
 // The photo processing worker. Everything that used to happen inside

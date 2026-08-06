@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // putLayout handles PUT /dashboard/layout — the write path for a user's

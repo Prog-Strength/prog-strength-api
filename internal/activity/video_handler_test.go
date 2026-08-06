@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	authctx "github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	authctx "github.com/Prog-Strength/prog-strength-api/internal/auth"
 )
 
 // --- fake store ------------------------------------------------------------

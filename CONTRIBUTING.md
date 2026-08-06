@@ -159,7 +159,7 @@ stages:
   OAuth client secrets.
 - **Go formatting** — `gofmt` and `goimports` rewrite changed `.go`
   files in place. `goimports` uses
-  `-local github.com/jwallace145/progressive-overload-fitness-tracker`
+  `-local github.com/Prog-Strength/prog-strength-api`
   so the module's own packages cluster in a separate import group.
 
 **On `git push` (`pre-push` stage):**

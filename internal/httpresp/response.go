@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/version"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/version"
 )
 
 const service = "Prog Strength Backend"

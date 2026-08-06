@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 // sparkWeeks is the number of weekly buckets the sparklines cover.

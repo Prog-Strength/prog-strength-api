@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
 )
 
 // seedNoteUser inserts the user row the source joins for the timezone.

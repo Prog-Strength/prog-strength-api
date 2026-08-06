@@ -10,9 +10,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/logging"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/logging"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
 )
 
 // withRequestID writes the X-Request-ID header onto a fresh recorder.

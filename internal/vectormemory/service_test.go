@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/config"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // fakeEmbedder maps known strings to fixed 1536-dim vectors via a deterministic

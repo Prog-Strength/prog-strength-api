@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
 )
 
 // headlineOneRM picks the user's flagship estimated one-rep max for the lifting

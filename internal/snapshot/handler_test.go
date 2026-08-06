@@ -9,8 +9,8 @@ import (
 
 	_ "time/tzdata"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // newTestHandler wires a Handler over all-empty (healthy) fakes and pins now

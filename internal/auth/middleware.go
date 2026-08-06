@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // RequireUser returns middleware that validates the caller's token and

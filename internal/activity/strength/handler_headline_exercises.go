@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 )
 
 // headlineExerciseDTO is one row in the user's effective selection.

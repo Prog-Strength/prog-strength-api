@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/uploadwindow"
+	"github.com/Prog-Strength/prog-strength-api/internal/uploadwindow"
 )
 
 // serverTimeout is the stand-in for the API's global 10s Read/WriteTimeout,

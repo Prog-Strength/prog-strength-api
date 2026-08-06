@@ -215,7 +215,7 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/jwallace145/progressive-overload-fitness-tracker
+        - github.com/Prog-Strength/prog-strength-api
 
 issues:
   # 0 = no cap. Default is 3 per linter, which silently truncates results

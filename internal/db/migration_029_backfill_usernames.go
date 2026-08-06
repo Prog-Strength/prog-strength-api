@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user/handle"
+	"github.com/Prog-Strength/prog-strength-api/internal/user/handle"
 )
 
 // migration029 backfills handles for existing users created before usernames

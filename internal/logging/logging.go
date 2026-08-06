@@ -18,7 +18,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
 )
 
 // NewLogger builds a JSON slog logger writing to w, gated at level, with every

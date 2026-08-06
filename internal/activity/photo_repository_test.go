@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // newPhotoRepo returns a photo repository backed by a fresh migrated DB,

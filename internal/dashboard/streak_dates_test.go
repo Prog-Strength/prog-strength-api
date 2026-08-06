@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	"github.com/Prog-Strength/prog-strength-api/internal/steps"
 )
 
 // completedWorkout builds a workout that is finished (EndedAt set) and has at

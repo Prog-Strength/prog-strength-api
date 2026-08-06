@@ -5,14 +5,14 @@ import (
 	"log"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/nutrition"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	"github.com/Prog-Strength/prog-strength-api/internal/bodyweight"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/nutrition"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/steps"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // Narrow consumer interfaces: only the methods the snapshot needs, so

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	plannedworkout "github.com/jwallace145/progressive-overload-fitness-tracker/internal/planned_workout"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	plannedworkout "github.com/Prog-Strength/prog-strength-api/internal/planned_workout"
 )
 
 // divider is the horizontal rule used to frame the branded event body.

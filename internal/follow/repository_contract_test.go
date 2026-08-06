@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // newRepo builds a fresh SQLite-backed Repository over an ephemeral migrated

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // envelope mirrors the success shape from httpresp, with Data typed as a

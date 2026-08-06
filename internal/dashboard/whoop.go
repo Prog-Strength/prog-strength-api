@@ -3,8 +3,8 @@ package dashboard
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/recoverytrend"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/recoverytrend"
+	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
 )
 
 // recoverySparkDays is the number of trailing local days the recovery tile's

@@ -2,7 +2,7 @@
 //
 // Version is set at link time by the release pipeline via:
 //
-//	go build -ldflags="-X github.com/jwallace145/progressive-overload-fitness-tracker/internal/version.Version=v1.2.3"
+//	go build -ldflags="-X github.com/Prog-Strength/prog-strength-api/internal/version.Version=v1.2.3"
 //
 // Local builds without ldflags get the literal "dev". The value surfaces
 // in every API response's "version" field so operators can tell which

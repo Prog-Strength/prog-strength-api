@@ -7,7 +7,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 )
 
 // api_whoop_connections gauges connection health by status, refreshed every

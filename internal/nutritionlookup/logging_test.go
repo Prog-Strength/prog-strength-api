@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/requestid"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/requestid"
 )
 
 // testLogger discards all records — logging behavior itself is pinned

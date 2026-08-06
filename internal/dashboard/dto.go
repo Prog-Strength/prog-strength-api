@@ -3,7 +3,7 @@ package dashboard
 import (
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bloodpressure"
+	"github.com/Prog-Strength/prog-strength-api/internal/bloodpressure"
 )
 
 // Summary is the aggregate payload for GET /dashboard/summary. Each section

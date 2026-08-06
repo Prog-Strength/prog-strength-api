@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/running/estimate"
+	"github.com/Prog-Strength/prog-strength-api/internal/running/estimate"
 )
 
 // EstimateDemographicsLoader adapts the user repository for max-effort

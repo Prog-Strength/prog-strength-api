@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // chestFilter is the single-muscle filter the legacy tests run under.

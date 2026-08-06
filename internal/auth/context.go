@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth/authctx"
+	"github.com/Prog-Strength/prog-strength-api/internal/auth/authctx"
 )
 
 // The context-key plumbing lives in the authctx leaf package so that

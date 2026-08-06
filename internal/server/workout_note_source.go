@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/vectormemory"
+	"github.com/Prog-Strength/prog-strength-api/internal/vectormemory"
 )
 
 // workoutNotePromptHint frames a workout's free-text notes for the distiller so

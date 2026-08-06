@@ -4,7 +4,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/steps"
+	"github.com/Prog-Strength/prog-strength-api/internal/steps"
 )
 
 // sparkDays is the number of daily buckets the steps sparkline covers.

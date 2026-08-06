@@ -3,7 +3,7 @@ package dashboard
 import (
 	"sort"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/bodyweight"
+	"github.com/Prog-Strength/prog-strength-api/internal/bodyweight"
 )
 
 // bwSparkMax is the maximum number of points in the bodyweight trend sparkline.

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
 // mustInsertUser inserts a minimal live user row so layouts can satisfy the

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // ActivityPhoto is one uploaded photo attached to an activity, with its full

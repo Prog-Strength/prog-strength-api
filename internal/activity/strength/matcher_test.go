@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/db/dbtest"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
+	"github.com/Prog-Strength/prog-strength-api/internal/exercise"
+	"github.com/Prog-Strength/prog-strength-api/internal/user"
 )
 
 // fakePlanMatcher records the OnSessionLogged refs and OnSessionDeleted ids it

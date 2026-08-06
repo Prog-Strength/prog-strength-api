@@ -6,9 +6,9 @@ import (
 	"log"
 	"strings"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/activity/strength"
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/timeline"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity"
+	"github.com/Prog-Strength/prog-strength-api/internal/activity/strength"
+	"github.com/Prog-Strength/prog-strength-api/internal/timeline"
 )
 
 // timelineHydrator renders timeline post content from the live activity

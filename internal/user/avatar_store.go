@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
-	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
+	"github.com/Prog-Strength/prog-strength-api/internal/id"
 )
 
 // presignExpiry bounds the lifetime of a GET URL handed to the client. Long

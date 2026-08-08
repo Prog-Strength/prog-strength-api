@@ -26,6 +26,10 @@ const (
 	TileRecoveryTrend   TileID = "recovery_trend"
 	TileRecoveryLog     TileID = "recovery_log"
 	TileStreak          TileID = "streak"
+	// TileQuote is the one tile with no user data behind it: its content is a
+	// static corpus compiled into the binary (internal/quotes), so it has no
+	// repository, no window, and no empty state.
+	TileQuote TileID = "quote"
 )
 
 // Catalog is the ordered set of every tile. Order fixes how tiles appear in the
@@ -36,7 +40,7 @@ var Catalog = []TileID{
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
-	TileStreak,
+	TileStreak, TileQuote,
 }
 
 var catalogSet = func() map[TileID]bool {

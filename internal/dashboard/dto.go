@@ -27,6 +27,27 @@ type Summary struct {
 	// user has logged at least one reading; nil otherwise so the card stays
 	// hidden — mirrors how Recovery is declared with omitempty.
 	BloodPressure *BloodPressureSection `json:"blood_pressure,omitempty"`
+	// Quote is the daily quote tile. A value rather than a pointer, like
+	// Streak: it is served from an embedded corpus, so when the tile is enabled
+	// it is always populated and there is no "no data" case to express.
+	Quote QuoteSection `json:"quote"`
+}
+
+// QuoteSection is the daily quote tile's wire shape — the subset of a
+// quotes.Quote the client renders. Tags stay server-side; they exist for future
+// selection logic, not for display.
+type QuoteSection struct {
+	ID     string `json:"id"`
+	Text   string `json:"text"`
+	Author string `json:"author"`
+	// Source is the work the quote comes from, omitted when the attribution
+	// has not been verified. See internal/quotes/data/README.md.
+	Source string `json:"source,omitempty"`
+	// Offset is the reroll position this quote was served at: 0 is the day's
+	// quote, and the client sends back offset+1 to advance. Echoing it keeps
+	// the client from having to track the count it asked for against the one
+	// it got.
+	Offset int `json:"offset"`
 }
 
 // RecoverySection is the Whoop recovery tile. nil at the Summary level unless a

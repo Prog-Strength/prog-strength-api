@@ -1,0 +1,76 @@
+[
+  {
+    "id": "buddha-unguarded-thoughts",
+    "text": "Your worst enemy cannot harm you as much as your own thoughts unguarded.",
+    "author": "Buddha",
+    "tags": ["mindset"]
+  },
+  {
+    "id": "camus-invincible-summer",
+    "text": "In the depth of winter, I finally learned that within me there lay an invincible summer.",
+    "author": "Albert Camus",
+    "source": "Return to Tipasa",
+    "tags": ["resilience"]
+  },
+  {
+    "id": "coelho-dream-come-true",
+    "text": "It's the possibility of having a dream come true that makes life interesting.",
+    "author": "Paulo Coelho",
+    "source": "The Alchemist",
+    "tags": ["hope"]
+  },
+  {
+    "id": "dalai-lama-happiness-from-actions",
+    "text": "Happiness is not something ready made. It comes from your own actions.",
+    "author": "Dalai Lama",
+    "tags": ["action"]
+  },
+  {
+    "id": "earhart-decision-to-act",
+    "text": "The most difficult thing is the decision to act; the rest is merely tenacity.",
+    "author": "Amelia Earhart",
+    "tags": ["action"]
+  },
+  {
+    "id": "emerson-insist-on-yourself",
+    "text": "Insist on yourself; never imitate.",
+    "author": "Ralph Waldo Emerson",
+    "tags": ["independence"]
+  },
+  {
+    "id": "frost-it-goes-on",
+    "text": "In three words I can sum up everything I've learned about life: It goes on.",
+    "author": "Robert Frost",
+    "tags": ["resilience"]
+  },
+  {
+    "id": "laozi-change-your-direction",
+    "text": "If you don't change your direction, you may end up where you are going.",
+    "author": "Lao Tzu",
+    "tags": ["direction"]
+  },
+  {
+    "id": "nietzsche-why-to-live",
+    "text": "He who has a why to live can bear almost any how.",
+    "author": "Friedrich Nietzsche",
+    "tags": ["purpose"]
+  },
+  {
+    "id": "picasso-action-foundational-key",
+    "text": "Action is the foundational key to all success.",
+    "author": "Pablo Picasso",
+    "tags": ["action"]
+  },
+  {
+    "id": "sinatra-best-revenge",
+    "text": "The best revenge is massive success.",
+    "author": "Frank Sinatra",
+    "tags": ["success"]
+  },
+  {
+    "id": "twain-side-of-the-majority",
+    "text": "Whenever you find yourself on the side of the majority, it is time to pause and reflect.",
+    "author": "Mark Twain",
+    "tags": ["independence"]
+  }
+]

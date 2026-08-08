@@ -119,6 +119,7 @@ func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 // context and assumes it's present.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/dashboard/summary", h.summary)
+	r.Get("/dashboard/quote", h.quote)
 	r.Put("/dashboard/layout", h.putLayout)
 }
 
@@ -277,6 +278,12 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	}
 	if enabled[TileStreak] {
 		out[string(TileStreak)] = buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc)
+	}
+	// The quote needs no repo read, so it is built inline rather than through
+	// defer1 — there is nothing to degrade. Offset 0 is the day's quote; the
+	// reroll button advances from here via GET /dashboard/quote.
+	if enabled[TileQuote] {
+		out[string(TileQuote)] = buildQuote(userID, todayStr, 0)
 	}
 
 	httpresp.OK(w, "dashboard summary", out)

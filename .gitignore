@@ -19,7 +19,10 @@ go.work
 /cmd/api/api
 
 # Database files - SQLite
-data/
+# Anchored to the repo root: unanchored, this matched EVERY nested directory
+# named data/, which silently excluded embedded content like
+# internal/quotes/data/ — compiling locally but failing the Docker build.
+/data/
 *.db
 *.db-shm
 *.db-wal

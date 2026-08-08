@@ -1,3 +1,10 @@
+# [0.107.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.106.0...v0.107.0) (2026-08-08)
+
+
+### Features
+
+* **dashboard:** sectioned layout contract ([#122](https://github.com/Prog-Strength/prog-strength-api/issues/122)) ([f27c8e1](https://github.com/Prog-Strength/prog-strength-api/commit/f27c8e17738417d70798f8843f48ba4a2d1fe9b8))
+
 # [0.106.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.105.0...v0.106.0) (2026-08-08)
 
 

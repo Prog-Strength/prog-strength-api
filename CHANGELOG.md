@@ -1,3 +1,10 @@
+# [0.104.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.103.0...v0.104.0) (2026-08-08)
+
+
+### Features
+
+* **dashboard:** daily quote tile served from an embedded corpus ([#119](https://github.com/Prog-Strength/prog-strength-api/issues/119)) ([f3416c3](https://github.com/Prog-Strength/prog-strength-api/commit/f3416c33273c60c93a382f691ab1aadfd7d09a5d))
+
 # [0.103.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.102.0...v0.103.0) (2026-08-08)
 
 

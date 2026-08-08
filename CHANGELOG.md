@@ -1,3 +1,10 @@
+# [0.102.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.2...v0.102.0) (2026-08-08)
+
+
+### Features
+
+* **memory:** carry source type and both provenance FKs on a search Match ([#117](https://github.com/Prog-Strength/prog-strength-api/issues/117)) ([f337ee3](https://github.com/Prog-Strength/prog-strength-api/commit/f337ee3736c2992e81ec2f33650f2d7a046293c9))
+
 ## [0.101.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.1...v0.101.2) (2026-08-06)
 
 

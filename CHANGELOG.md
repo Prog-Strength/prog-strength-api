@@ -1,3 +1,10 @@
+# [0.105.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.104.0...v0.105.0) (2026-08-08)
+
+
+### Features
+
+* **exercises:** add Machine Lat Pulldown to catalog ([#120](https://github.com/Prog-Strength/prog-strength-api/issues/120)) ([27067c7](https://github.com/Prog-Strength/prog-strength-api/commit/27067c7fc17a4c02dd7afc1edfbc121bd940769c))
+
 # [0.104.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.103.0...v0.104.0) (2026-08-08)
 
 

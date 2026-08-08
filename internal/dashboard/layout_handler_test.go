@@ -29,6 +29,31 @@ func putLayout(t *testing.T, r *chi.Mux, userID, body string) *httptest.Response
 func TestPutLayout_Valid(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 
+	rec := putLayout(t, r, userID, `{"sections":[
+		{"id":"a","title":"Endurance","collapsed":false,"tile_ids":["running","steps"]},
+		{"id":"b","title":"Strength","collapsed":true,"tile_ids":["lifting"]}
+	]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "a", Title: "Endurance", TileIDs: []TileID{TileRunning, TileSteps}},
+		{ID: "b", Title: "Strength", Collapsed: true, TileIDs: []TileID{TileLifting}},
+	})
+}
+
+// TestPutLayout_TileIDsBodyWrapped pins the compatibility path: a pre-055
+// client (a browser tab left open across the deploy) sends a bare tile_ids
+// body, and it is accepted and wrapped into one untitled section rather than
+// 422-ing.
+func TestPutLayout_TileIDsBodyWrapped(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
 	rec := putLayout(t, r, userID, `{"tile_ids":["running","steps"]}`)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
@@ -38,22 +63,15 @@ func TestPutLayout_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("layout Get: %v", err)
 	}
-	want := []TileID{TileRunning, TileSteps}
-	if len(got.TileIDs) != len(want) {
-		t.Fatalf("stored tile ids = %v, want %v", got.TileIDs, want)
-	}
-	for i := range want {
-		if got.TileIDs[i] != want[i] {
-			t.Errorf("stored tile ids = %v, want %v", got.TileIDs, want)
-			break
-		}
-	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "s1", Title: "", TileIDs: []TileID{TileRunning, TileSteps}},
+	})
 }
 
 func TestPutLayout_UnknownID(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 
-	rec := putLayout(t, r, userID, `{"tile_ids":["running","bogus"]}`)
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","tile_ids":["running","bogus"]}]}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -68,10 +86,10 @@ func TestPutLayout_UnknownID(t *testing.T) {
 	}
 }
 
-func TestPutLayout_DuplicateID(t *testing.T) {
+func TestPutLayout_DuplicateTileWithinSection(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 
-	rec := putLayout(t, r, userID, `{"tile_ids":["running","running"]}`)
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","tile_ids":["running","running"]}]}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
 	}
@@ -80,32 +98,137 @@ func TestPutLayout_DuplicateID(t *testing.T) {
 	}
 }
 
+// TestPutLayout_DuplicateTileAcrossSections is the invariant sections
+// introduced: uniqueness is global, not per section. The same tile in two
+// sections would render twice and desync the moment one copy is removed.
+func TestPutLayout_DuplicateTileAcrossSections(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[
+		{"id":"a","tile_ids":["running"]},
+		{"id":"b","tile_ids":["steps","running"]}
+	]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "running") {
+		t.Errorf("body %q does not name the duplicated tile", rec.Body.String())
+	}
+}
+
+func TestPutLayout_DuplicateSectionID(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[
+		{"id":"a","tile_ids":["running"]},
+		{"id":"a","tile_ids":["steps"]}
+	]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "section id") {
+		t.Errorf("body %q does not mention the section id", rec.Body.String())
+	}
+}
+
+func TestPutLayout_EmptySectionID(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"  ","tile_ids":["running"]}]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPutLayout_TooManySections(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	var b strings.Builder
+	b.WriteString(`{"sections":[`)
+	for i := 0; i <= MaxSections; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(`{"id":"s`)
+		b.WriteString(string(rune('a' + i)))
+		b.WriteString(`","tile_ids":[]}`)
+	}
+	b.WriteString(`]}`)
+
+	rec := putLayout(t, r, userID, b.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "too many sections") {
+		t.Errorf("body %q does not explain the cap", rec.Body.String())
+	}
+}
+
+func TestPutLayout_TitleTooLong(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID,
+		`{"sections":[{"id":"a","title":"`+strings.Repeat("x", MaxSectionTitleLen+1)+`","tile_ids":[]}]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "too long") {
+		t.Errorf("body %q does not explain the cap", rec.Body.String())
+	}
+}
+
+// TestPutLayout_TitleTrimmedOnStore checks the split between validation (which
+// reports what the client got wrong) and normalization (which canonicalizes
+// what it got right).
+func TestPutLayout_TitleTrimmedOnStore(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","title":"  Recovery  ","tile_ids":["recovery"]}]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	if got.Sections[0].Title != "Recovery" {
+		t.Errorf("stored title = %q, want %q", got.Sections[0].Title, "Recovery")
+	}
+}
+
 func TestPutLayout_Empty(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 
-	rec := putLayout(t, r, userID, `{"tile_ids":[]}`)
+	rec := putLayout(t, r, userID, `{"sections":[]}`)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
 
 	// An empty dashboard is a real, persisted preference: Get must resolve the
-	// stored row (not ErrLayoutNotFound) and return a non-nil, len-0 slice.
+	// stored row (not ErrLayoutNotFound) and return the one-empty-section floor.
 	got, err := rp.layout.Get(context.Background(), userID)
 	if err != nil {
 		t.Fatalf("layout Get: %v", err)
 	}
-	if got.TileIDs == nil {
-		t.Fatal("stored tile ids nil, want non-nil empty slice")
-	}
-	if len(got.TileIDs) != 0 {
-		t.Errorf("stored tile ids = %v, want empty", got.TileIDs)
+	assertSections(t, got.Sections, []Section{{ID: "s1", TileIDs: []TileID{}}})
+}
+
+// TestPutLayout_NoRecognizedField rejects a body carrying neither field rather
+// than reading it as "empty layout" — silently wiping a dashboard on a
+// malformed-but-parseable body is the wrong failure mode.
+func TestPutLayout_NoRecognizedField(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"layout":["running"]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestPutLayout_MalformedJSON(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 
-	rec := putLayout(t, r, userID, `{"tile_ids":`)
+	rec := putLayout(t, r, userID, `{"sections":`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
 	}
@@ -116,7 +239,7 @@ func TestPutLayout_NoAuth(t *testing.T) {
 
 	// No auth context → the handler treats a missing user as a server fault
 	// (auth middleware not applied), mirroring the summary handler.
-	rec := putLayout(t, r, "", `{"tile_ids":["running"]}`)
+	rec := putLayout(t, r, "", `{"sections":[{"id":"a","tile_ids":["running"]}]}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500; body=%s", rec.Code, rec.Body.String())
 	}

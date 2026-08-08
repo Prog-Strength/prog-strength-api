@@ -1,3 +1,10 @@
+# [0.103.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.102.0...v0.103.0) (2026-08-08)
+
+
+### Features
+
+* **calendar:** sync logged activities to google calendar ([#118](https://github.com/Prog-Strength/prog-strength-api/issues/118)) ([e6cdbd6](https://github.com/Prog-Strength/prog-strength-api/commit/e6cdbd6ad95fbd238879255650de00a9ec3ce57e))
+
 # [0.102.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.101.2...v0.102.0) (2026-08-08)
 
 

@@ -679,7 +679,7 @@ func TestSummary_HeartRateZones_OnlyWhenEffortEnabled(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedRunWithHR(t, rp, userID, testNow.Add(-24*time.Hour), 5000, 150)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunning})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
@@ -691,7 +691,7 @@ func TestSummary_HeartRateZones_OnlyWhenEffortEnabled(t *testing.T) {
 		t.Errorf("zone = %v, want nil when running_effort is not enabled", section.WeekRuns[0].HeartRateZone)
 	}
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningEffort}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunningEffort})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 	_, data = dataEnvelope(t, r, userID, "?timezone=UTC")
@@ -718,7 +718,7 @@ func (errHRStatsRepo) RecentHRStats(ctx context.Context, userID string, window t
 func TestSummary_HeartRateZones_ReferenceReadFailure_DegradesToNil(t *testing.T) {
 	_, rp, userID := newTestEnv(t)
 	seedRunWithHR(t, rp, userID, testNow.Add(-24*time.Hour), 5000, 150)
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningEffort}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunningEffort})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -746,7 +746,7 @@ func TestSummary_RunningMetricsAgreeWithWeekRuns(t *testing.T) {
 	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
 	seedRun(t, rp, userID, testNow.Add(-48*time.Hour), 8000)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunning})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")

@@ -205,7 +205,11 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	// steps entries + goal) stay UNGATED: the streak walks over them regardless
 	// of whether the Steps/Running tiles are enabled, so disabling a tile must
 	// not silently change the streak.
-	layout := h.resolveLayout(ctx, r, userID)
+	// Section structure never reaches the builders: which tiles to compute is
+	// the flattened union across sections, so a tile behaves identically in the
+	// first section and the fifth.
+	sections := h.resolveLayout(ctx, r, userID)
+	layout := Layout{Sections: sections}.TileIDs()
 	enabled := make(map[TileID]bool, len(layout))
 	for _, id := range layout {
 		enabled[id] = true
@@ -224,7 +228,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	// (a nil typed pointer boxed in any marshals to null) while a tile absent
 	// from the layout is absent from the response — a distinction an omitempty
 	// struct cannot express.
-	out := map[string]any{"layout": layout}
+	out := map[string]any{"sections": sections}
 	// Every running-family tile reads the ONE shared "running" section, so it
 	// is built once when ANY family tile is enabled and emitted only under the
 	// "running" key — the same section-key/layout divergence the recovery

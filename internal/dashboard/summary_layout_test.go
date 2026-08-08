@@ -17,11 +17,29 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 )
 
-// dataEnvelope drives the summary endpoint and returns the decoded `layout`
-// list plus the `data` object as raw section messages (layout key included), so
-// a test can distinguish an ABSENT key (tile not in layout) from a
-// present-but-null key (tile enabled, no data). Asserts 200.
+// dataEnvelope drives the summary endpoint and returns the response's sections
+// FLATTENED to a tile list, plus the `data` object as raw section messages
+// (sections key included), so a test can distinguish an ABSENT key (tile not in
+// layout) from a present-but-null key (tile enabled, no data). Asserts 200.
+//
+// Flattening here is deliberate: section structure is a presentation concern
+// and every gating test below is about which tiles get built, which is exactly
+// the flattened union. sectionsEnvelope covers the structure itself.
 func dataEnvelope(t *testing.T, r *chi.Mux, userID, query string) ([]string, map[string]json.RawMessage) {
+	t.Helper()
+	sections, data := sectionsEnvelope(t, r, userID, query)
+	var layout []string
+	for _, s := range sections {
+		for _, id := range s.TileIDs {
+			layout = append(layout, string(id))
+		}
+	}
+	return layout, data
+}
+
+// sectionsEnvelope is dataEnvelope without the flattening — for the tests that
+// assert on section structure rather than on which tiles were built.
+func sectionsEnvelope(t *testing.T, r *chi.Mux, userID, query string) ([]Section, map[string]json.RawMessage) {
 	t.Helper()
 	rec := get(t, r, userID, query)
 	if rec.Code != http.StatusOK {
@@ -33,11 +51,11 @@ func dataEnvelope(t *testing.T, r *chi.Mux, userID, query string) ([]string, map
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, rec.Body.String())
 	}
-	var layout []string
-	if err := json.Unmarshal(env.Data["layout"], &layout); err != nil {
-		t.Fatalf("decode layout: %v; body=%s", err, rec.Body.String())
+	var sections []Section
+	if err := json.Unmarshal(env.Data["sections"], &sections); err != nil {
+		t.Fatalf("decode sections: %v; body=%s", err, rec.Body.String())
 	}
-	return layout, env.Data
+	return sections, env.Data
 }
 
 func assertKeysPresent(t *testing.T, data map[string]json.RawMessage, keys ...string) {
@@ -98,7 +116,7 @@ func TestSummary_DefaultLayout_WithConnectedWhoop(t *testing.T) {
 func TestSummary_StoredLayout_GatesSections(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning, TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunning, TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -128,13 +146,13 @@ func TestSummary_StreakUnchangedWhenStepsDisabled(t *testing.T) {
 	seedSteps(t, rp, userID, monday.AddDate(0, 0, 2).Format("2006-01-02"), 9000)
 
 	// Layout with Steps enabled.
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileSteps, TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSteps, TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 	_, withSteps := dataEnvelope(t, r, userID, "?timezone=UTC")
 
 	// Layout with Steps disabled.
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 	_, withoutSteps := dataEnvelope(t, r, userID, "?timezone=UTC")
@@ -169,7 +187,7 @@ func TestSummary_StreakUsesWorkoutsWhenLiftingDisabled(t *testing.T) {
 	seedWorkout(t, rp, userID, now.Add(-2*time.Hour), "barbell-bench-press", 185, 5)
 
 	// Lifting DISABLED, Streak ENABLED.
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -196,7 +214,7 @@ type failingLayoutRepo struct{}
 func (failingLayoutRepo) Get(ctx context.Context, userID string) (Layout, error) {
 	return Layout{}, errors.New("boom")
 }
-func (failingLayoutRepo) Upsert(ctx context.Context, userID string, tileIDs []TileID) error {
+func (failingLayoutRepo) Upsert(ctx context.Context, userID string, sections []Section) error {
 	return nil
 }
 
@@ -283,7 +301,7 @@ func TestSummary_FamilyTileAlone_YieldsRecoverySection(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedWhoopConnected(t, rp, userID)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileHRVBalance}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileHRVBalance})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -307,7 +325,7 @@ func TestSummary_MultipleFamilyTiles_OneRecoverySection(t *testing.T) {
 	seedWhoopConnected(t, rp, userID)
 
 	ids := []TileID{TileRecovery, TileMorningVitals, TileRecoveryLog}
-	if err := rp.layout.Upsert(context.Background(), userID, ids); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection(ids)); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -326,7 +344,7 @@ func TestSummary_NoFamilyTile_NoRecoverySection(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedWhoopConnected(t, rp, userID)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunning, TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunning, TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -344,7 +362,7 @@ func TestSummary_RunningFamilyTileAlone_YieldsRunningSection(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileRunningVertical}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunningVertical})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -368,7 +386,7 @@ func TestSummary_MultipleRunningFamilyTiles_OneRunningSection(t *testing.T) {
 	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
 
 	ids := []TileID{TileRunning, TileRunningLog, TileRunningEffort}
-	if err := rp.layout.Upsert(context.Background(), userID, ids); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection(ids)); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
@@ -388,11 +406,83 @@ func TestSummary_NoRunningFamilyTile_NoRunningSection(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
 
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileLifting, TileStreak}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileLifting, TileStreak})); err != nil {
 		t.Fatalf("layout upsert: %v", err)
 	}
 
 	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
 
 	assertKeysAbsent(t, data, "running", "running_log", "running_effort", "running_vertical")
+}
+
+// TestSummary_SectionsRoundTripToResponse pins the structure itself: the stored
+// sections come back on the wire with their ids, titles, collapsed flags, and
+// per-section tile order intact. The gating tests above all flatten, so this is
+// the only place the shape is asserted.
+func TestSummary_SectionsRoundTripToResponse(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	stored := []Section{
+		{ID: "a", Title: "Endurance", TileIDs: []TileID{TileRunning, TileSteps}},
+		{ID: "b", Title: "Recovery", Collapsed: true, TileIDs: []TileID{TileRecovery}},
+	}
+	if err := rp.layout.Upsert(context.Background(), userID, stored); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	sections, data := sectionsEnvelope(t, r, userID, "?timezone=UTC")
+	assertSections(t, sections, stored)
+	assertKeysPresent(t, data, "running", "steps", "recovery")
+	assertKeysAbsent(t, data, "lifting", "nutrition")
+}
+
+// TestSummary_TileBuildsIdenticallyInAnySection is the invariant that lets the
+// builders stay section-blind: moving a tile into a later section changes the
+// response's `sections` and nothing else. If a builder ever consulted position,
+// this fails.
+func TestSummary_TileBuildsIdenticallyInAnySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedRun(t, rp, userID, testNow.Add(-24*time.Hour), 5000)
+
+	first := []Section{{ID: "a", Title: "Only", TileIDs: []TileID{TileRunning, TileStreak}}}
+	if err := rp.layout.Upsert(context.Background(), userID, first); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+	_, dataFirst := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	split := []Section{
+		{ID: "a", Title: "Streaks", TileIDs: []TileID{TileStreak}},
+		{ID: "b", Title: "Running", TileIDs: []TileID{TileRunning}},
+	}
+	if err := rp.layout.Upsert(context.Background(), userID, split); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+	_, dataSplit := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	for _, key := range []string{"running", "streak"} {
+		if !bytes.Equal(dataFirst[key], dataSplit[key]) {
+			t.Errorf("%s changed when the tile moved sections:\n one section: %s\n two:        %s",
+				key, dataFirst[key], dataSplit[key])
+		}
+	}
+}
+
+// TestSummary_DefaultLayoutIsOneUntitledSection pins the migration's promise:
+// a user who has never customized gets one untitled section, which the web
+// surface renders as a bare grid — no header, no rule, nothing new on screen.
+func TestSummary_DefaultLayoutIsOneUntitledSection(t *testing.T) {
+	r, _, userID := newTestEnv(t)
+
+	sections, _ := sectionsEnvelope(t, r, userID, "?timezone=UTC")
+
+	if len(sections) != 1 {
+		t.Fatalf("default sections = %d (%+v), want 1", len(sections), sections)
+	}
+	if sections[0].Title != "" {
+		t.Errorf("default section title = %q, want empty (untitled renders bare)", sections[0].Title)
+	}
+	if sections[0].Collapsed {
+		t.Error("default section must not be collapsed")
+	}
 }

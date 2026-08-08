@@ -61,7 +61,7 @@ func mustCreateUser(t *testing.T, rp *repos, email string) string {
 // layout deliberately omits it (the tile is opt-in from the add-tile tray).
 func enableQuoteTile(t *testing.T, rp *repos, userID string) {
 	t.Helper()
-	if err := rp.layout.Upsert(context.Background(), userID, []TileID{TileQuote}); err != nil {
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileQuote})); err != nil {
 		t.Fatalf("upsert layout: %v", err)
 	}
 }

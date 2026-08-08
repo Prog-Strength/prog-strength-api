@@ -14,10 +14,10 @@ import (
 // stored. A layout-read failure (other than not-found) is logged and degrades
 // to the default rather than failing the request — one flaky table can never
 // blank the dashboard, the same principle as the per-section defer1 reads.
-func (h *Handler) resolveLayout(ctx context.Context, r *http.Request, userID string) []TileID {
+func (h *Handler) resolveLayout(ctx context.Context, r *http.Request, userID string) []Section {
 	l, err := h.layoutRepo.Get(ctx, userID)
 	if err == nil {
-		return l.TileIDs
+		return l.Sections
 	}
 	if !errors.Is(err, ErrLayoutNotFound) {
 		log.Printf("dashboard: layout for %s: %v", requestid.FromContext(r.Context()), err)
@@ -29,12 +29,16 @@ func (h *Handler) resolveLayout(ctx context.Context, r *http.Request, userID str
 // nutrition, bodyweight, [recovery,] streak. Recovery is included only when the
 // user has a connected Whoop connection — a non-Whoop user should not land on an
 // empty Recovery card they never asked for.
-func (h *Handler) defaultLayout(ctx context.Context, r *http.Request, userID string) []TileID {
+//
+// It comes back as ONE UNTITLED section, matching what migration 055 wrapped
+// every already-customized layout into: an untitled section renders as a bare
+// grid, so a user who has never made a section sees no sign of the feature.
+func (h *Handler) defaultLayout(ctx context.Context, r *http.Request, userID string) []Section {
 	ids := []TileID{TileRunning, TileLifting, TileSteps, TileNutrition, TileBodyweight}
 	if h.hasConnectedWhoop(ctx, r, userID) {
 		ids = append(ids, TileRecovery)
 	}
-	return append(ids, TileStreak)
+	return SingleSection(append(ids, TileStreak))
 }
 
 // hasConnectedWhoop reports whether the user has a CONNECTED Whoop connection.

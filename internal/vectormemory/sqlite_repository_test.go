@@ -375,3 +375,77 @@ func TestNearestDistance(t *testing.T) {
 		t.Fatal("expected ok=false for user with no memories")
 	}
 }
+
+// TestSearchCarriesProvenance covers the admin probe's reason for existing:
+// a hit must name what it was distilled from and the id to trace it back by.
+// Before this, Search selected only source_session_id, so every note-sourced
+// hit came back with an empty session and no way to tell which activity —
+// or even which KIND of source — produced it.
+func TestSearchCarriesProvenance(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.New(t)
+	repo := NewSQLiteRepository(db)
+	seedSession(t, db, "sess-1", "u1")
+	seedWorkout(t, db, "w1", "u1")
+
+	sess := "sess-1"
+	if _, err := repo.Insert(ctx, NewMemory{
+		UserID: "u1", DistilledText: "prefers mornings", SourceType: "chat_session",
+		SourceSessionID: &sess, EmbeddingModel: activeModel,
+		EmbeddingDim: embedDim, Embedding: oneHot(0), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert chat memory: %v", err)
+	}
+
+	wid := "w1"
+	if _, err := repo.Insert(ctx, NewMemory{
+		UserID: "u1", DistilledText: "left shoulder cranky", SourceType: "workout_note",
+		SourceWorkoutID: &wid, EmbeddingModel: activeModel,
+		EmbeddingDim: embedDim, Embedding: oneHot(1), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("insert workout memory: %v", err)
+	}
+
+	matches, err := repo.Search(ctx, "u1", activeModel, oneHot(0), 5, 0)
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches, got %d", len(matches))
+	}
+
+	byText := make(map[string]Match, len(matches))
+	for _, m := range matches {
+		byText[m.Text] = m
+	}
+
+	chat, ok := byText["prefers mornings"]
+	if !ok {
+		t.Fatal("chat memory missing from matches")
+	}
+	if chat.SourceType != "chat_session" {
+		t.Errorf("chat source type = %q, want chat_session", chat.SourceType)
+	}
+	if chat.SourceSessionID != "sess-1" {
+		t.Errorf("chat session id = %q, want sess-1", chat.SourceSessionID)
+	}
+	// The unused FK stays empty rather than echoing the other one — an
+	// operator reading source_workout_id must not be handed a session id.
+	if chat.SourceWorkoutID != "" {
+		t.Errorf("chat workout id = %q, want empty", chat.SourceWorkoutID)
+	}
+
+	note, ok := byText["left shoulder cranky"]
+	if !ok {
+		t.Fatal("workout memory missing from matches")
+	}
+	if note.SourceType != "workout_note" {
+		t.Errorf("note source type = %q, want workout_note", note.SourceType)
+	}
+	if note.SourceWorkoutID != "w1" {
+		t.Errorf("note workout id = %q, want w1", note.SourceWorkoutID)
+	}
+	if note.SourceSessionID != "" {
+		t.Errorf("note session id = %q, want empty", note.SourceSessionID)
+	}
+}

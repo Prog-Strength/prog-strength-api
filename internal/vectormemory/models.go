@@ -24,12 +24,20 @@ type Memory struct {
 }
 
 // Match is one retrieval hit: the stored text plus the cosine distance to
-// the query and the provenance the probe surfaces. The agent ignores
-// Distance; the admin search path returns it.
+// the query and the provenance the probe surfaces. The agent reads only Text
+// (see the agent's api_client.retrieve_memories, which projects it out); the
+// admin search path returns the rest.
+//
+// SourceType and the two FKs mirror Memory's, so a probe hit can be traced
+// back to what produced it exactly as a dump row can. Exactly one FK is
+// populated per hit — the schema CHECK ties which one to SourceType — and the
+// unused one is the empty string, never the other's value.
 type Match struct {
 	Text            string    `json:"text"`
 	Distance        float64   `json:"distance"`
+	SourceType      string    `json:"source_type"`
 	SourceSessionID string    `json:"source_session_id"`
+	SourceWorkoutID string    `json:"source_workout_id"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 

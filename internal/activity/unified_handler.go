@@ -371,6 +371,13 @@ func (h *Handler) createUnified(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Best-effort calendar mirror, OUTSIDE the else: unlike the feed publish
+	// above, this must also fire for strength, whose descriptor Create path
+	// runs through the workout repository and skips that branch entirely. A
+	// lift that never reached the calendar would be the single most obvious
+	// gap in the feature.
+	h.syncCalendar(r.Context(), userID, activityID)
+
 	dto, ok := h.unifiedReadDTO(w, r, userID, activityID)
 	if !ok {
 		return
@@ -444,6 +451,12 @@ func (h *Handler) updateUnified(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Best-effort: an edit changes what the event body says (renamed session,
+	// corrected distance, added exercises), so re-render and patch it. The
+	// sync is idempotent, so this patches the existing event rather than
+	// creating a second one.
+	h.syncCalendar(r.Context(), userID, activityID)
 
 	dto, ok := h.unifiedReadDTO(w, r, userID, activityID)
 	if !ok {

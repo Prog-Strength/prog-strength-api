@@ -51,10 +51,14 @@ func (f *fakeScheduler) Delete(ctx context.Context, userID, planID string) error
 	return nil
 }
 
-func (f *fakeScheduler) RewriteCompleted(ctx context.Context, userID, planID, actualText string) error {
+// SyncCompletedActivity replaced RewriteCompleted: completion now hands the
+// plan's event to the logged activity, which re-renders it through its own
+// type's calendar renderer. The fake records the activity id rather than a
+// text blob, because there is no longer a caller-supplied body.
+func (f *fakeScheduler) SyncCompletedActivity(ctx context.Context, userID, planID, activityID string) error {
 	f.rewriteCall++
 	f.lastRewritePlanID = planID
-	f.lastRewriteActual = actualText
+	f.lastRewriteActual = activityID
 	return f.rewriteErr
 }
 

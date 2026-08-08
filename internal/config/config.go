@@ -204,6 +204,10 @@ type Config struct {
 	// See RecoveryConfig.
 	Recovery RecoveryConfig
 
+	// CalendarSync configures Google Calendar activity sync (the kill
+	// switch, the reconciler's per-boot write cap, and the retry cap).
+	// See CalendarSyncConfig.
+	CalendarSync CalendarSyncConfig
 	// Photos configures the Activity Photos feature: per-activity caps, the
 	// upload-size ceiling, the derivative image dimensions/quality, the
 	// presign window, and the caption length limit. See PhotosConfig.
@@ -285,6 +289,23 @@ type PhotosConfig struct {
 	ThumbJPEGQuality    int
 	PresignWindowHours  int
 	CaptionMaxChars     int
+}
+
+// CalendarSyncConfig groups the Google Calendar activity-sync tunables. All
+// are non-secret public literals (no ${VAR} interpolation, no env override) —
+// the only genuine secret in this feature is CALENDAR_TOKEN_ENC_KEY, which
+// stays an env var under [auth].
+//
+// Enabled is the feature kill switch: when false the sync services are still
+// constructed but no hooks fire, so the integration can be turned off without
+// a redeploy of anything else. ReconcileMaxPerBoot bounds how many repair
+// writes one boot may issue — the reconciler makes real Google API calls, so
+// an unbounded pass after an outage could blow through rate limits.
+// MaxAttempts is when to stop retrying a permanently-failing activity.
+type CalendarSyncConfig struct {
+	Enabled             bool
+	ReconcileMaxPerBoot int
+	MaxAttempts         int
 }
 
 // VideosConfig groups the Activity Videos tunables. All are non-secret public
@@ -419,6 +440,11 @@ type fileConfig struct {
 		TrendZ             float64 `toml:"trend_z"`
 		MinStdDevMs        float64 `toml:"min_std_dev_ms"`
 	} `toml:"recovery"`
+	CalendarSync struct {
+		Enabled             bool `toml:"enabled"`
+		ReconcileMaxPerBoot int  `toml:"reconcile_max_per_boot"`
+		MaxAttempts         int  `toml:"max_attempts"`
+	} `toml:"calendar_sync"`
 	Photos struct {
 		MaxPerActivity      int   `toml:"max_per_activity"`
 		MaxUploadBytes      int64 `toml:"max_upload_bytes"`
@@ -599,6 +625,11 @@ func Load(defaultTOML []byte) (Config, error) {
 			BalancedZ:          fc.Recovery.BalancedZ,
 			TrendZ:             fc.Recovery.TrendZ,
 			MinStdDevMs:        fc.Recovery.MinStdDevMs,
+		},
+		CalendarSync: CalendarSyncConfig{
+			Enabled:             fc.CalendarSync.Enabled,
+			ReconcileMaxPerBoot: fc.CalendarSync.ReconcileMaxPerBoot,
+			MaxAttempts:         fc.CalendarSync.MaxAttempts,
 		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      fc.Photos.MaxPerActivity,

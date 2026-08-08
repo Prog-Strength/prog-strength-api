@@ -37,17 +37,23 @@ func (s *Service) SetCalendar(c CalendarScheduler) { s.calendar = c }
 func (s *Service) SetKindResolver(r ActivityKindResolver) { s.kinds = r }
 
 func (s *Service) LinkCompletion(ctx context.Context, userID, planID, sessionID string) (*PlannedWorkout, error) {
-	plan, err := s.repo.Get(ctx, userID, planID)
-	if err != nil {
+	// Existence/ownership check before the write, so a bad plan id surfaces
+	// as this repository's not-found rather than as a silent no-op update.
+	// The plan body itself is no longer needed here: the completed event is
+	// rendered from the ACTIVITY now, not from the plan's stored agenda.
+	if _, err := s.repo.Get(ctx, userID, planID); err != nil {
 		return nil, err
 	}
 	if err := s.repo.SetCompletion(ctx, userID, planID, sessionID); err != nil {
 		return nil, err
 	}
-	if plan.GoogleEventID != nil && *plan.GoogleEventID != "" && s.calendar != nil {
-		actualText := "Completed — logged session " + sessionID
-		if err := s.calendar.RewriteCompleted(ctx, userID, planID, actualText); err != nil {
-			log.Printf("planned-workout link completion: rewrite google event (plan %s): %v", planID, err)
+	// Hand the event to the session that completed it. Note this no longer
+	// requires the plan to ALREADY have a Google event: an activity that
+	// completes an unsynced plan still syncs on its own merits, and letting
+	// the takeover run unconditionally keeps one code path instead of two.
+	if s.calendar != nil {
+		if err := s.calendar.SyncCompletedActivity(ctx, userID, planID, sessionID); err != nil {
+			log.Printf("planned-workout link completion: sync completed activity (plan %s): %v", planID, err)
 		}
 	}
 	return s.repo.Get(ctx, userID, planID)

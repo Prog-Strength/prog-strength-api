@@ -151,6 +151,11 @@ type Repository interface {
 	// date's claim, mirroring the lift-PR tie semantics).
 	GetUserRunningBestEfforts(ctx context.Context, userID string) ([]RunningBestEffort, error)
 
+	// BestEffortsForActivity returns one owned activity's stored best
+	// efforts. Get does not populate Activity.BestEfforts (see the method
+	// comment), so consumers that need them ask here.
+	BestEffortsForActivity(ctx context.Context, userID, activityID string) ([]ActivityBestEffort, error)
+
 	// GetRunningBestEffortHistory returns every best-effort row at the given
 	// distance_key across the user's live running activities, ordered by
 	// activity start_time ascending. The full series (not just record

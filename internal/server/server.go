@@ -430,6 +430,15 @@ func New(cfg config.Config) (*Server, error) {
 	// configured; otherwise the handler nil-guards its /schedule + /resync
 	// routes to a 503 (mirrors the avatar-store-nil pattern).
 	var calendarScheduler *calendarsync.Service
+	// calendarActivitySvc mirrors LOGGED activities onto the user's calendar.
+	// Non-nil only when calendar sync is configured AND [calendar_sync]
+	// enabled is true; every consumer nil-guards, so the feature simply does
+	// not fire when it is absent.
+	var calendarActivitySvc *calendarsync.ActivityService
+	var calendarSyncState calendarsync.ActivitySyncRepository
+	// calendarDeps carries the Google-side collaborators from the OAuth block
+	// to the activity-registry block, where the service is actually built.
+	var calendarDeps *calendarsync.ActivityServiceDeps
 	if cfg.CalendarTokenEncKey != "" && cfg.GoogleCalendarRedirectURL != "" && cfg.GoogleClientID != "" && cfg.GoogleClientSecret != "" {
 		key, keyErr := tokencrypt.KeyFromEnv(cfg.CalendarTokenEncKey)
 		if keyErr != nil {
@@ -468,6 +477,21 @@ func New(cfg config.Config) (*Server, error) {
 				appLinkBase,
 				nil,
 			)
+			// The logged-activity sync service needs the activity registry,
+			// which is not built until the activity handler is wired further
+			// down. Stash its Google-side ingredients here and construct it
+			// there, rather than hoisting the registry up into the OAuth
+			// block where it has no business being.
+			calendarDeps = &calendarsync.ActivityServiceDeps{
+				Conns:       calendarConnRepo,
+				Cipher:      cipher,
+				Tokens:      tokenSource,
+				Client:      calendarEventClient,
+				Plans:       plannedWorkoutRepo,
+				Users:       userRepo,
+				AppLinkBase: appLinkBase,
+				Observer:    calendarsync.MetricsObserver{},
+			}
 			log.Println("calendar-sync: enabled (google calendar oauth + connection + event writing)")
 		}
 	} else {
@@ -577,7 +601,13 @@ func New(cfg config.Config) (*Server, error) {
 		// configured, in which case those routes return 503.
 		plannedWorkoutHandler := plannedworkout.NewHandler(plannedWorkoutRepo, userRepo)
 		if calendarScheduler != nil {
-			plannedWorkoutHandler.SetCalendarSync(calendarScheduler)
+			// The composite: the plan service owns a plan's event while it is
+			// still planned; the activity service takes it over on completion.
+			// See calendar_scheduler.go.
+			plannedWorkoutHandler.SetCalendarSync(planCalendarScheduler{
+				plans:      calendarScheduler,
+				activities: calendarActivitySvc,
+			})
 		}
 		// Request-id-stamping JSON logger gated at LOG_LEVEL — info for the
 		// list summary, debug for the per-plan detail that diagnoses a
@@ -620,6 +650,38 @@ func New(cfg config.Config) (*Server, error) {
 			strengthDesc,
 		)
 		activityHandler.SetRegistry(activityRegistry)
+		// Google Calendar mirroring of logged activities. Requires both a
+		// configured Google grant (calendarDeps non-nil) and the
+		// [calendar_sync] kill switch. Every consumer nil-guards, so an
+		// unconfigured or disabled install simply never syncs.
+		if calendarDeps != nil && cfg.CalendarSync.Enabled {
+			calendarSyncState = calendarsync.NewSQLiteActivitySyncRepository(database)
+			calendarDeps.Activities = activityRepo
+			calendarDeps.Registry = activityRegistry
+			calendarDeps.State = calendarSyncState
+			calendarActivitySvc = calendarsync.NewActivityService(*calendarDeps)
+			activityHandler.SetCalendarSyncer(calendarActivitySvc)
+			// Publish the connection-health and last-successful-sync gauges
+			// every 5 minutes. The freshness gauge is what the dead-sync alert
+			// evaluates; the connection counts gate it so an install nobody
+			// has connected never pages.
+			go calendarsync.NewConnectionsExporter(calendarConnRepo).Run(bgCtx)
+			// Repair whatever the inline hooks owed but never wrote. Runs in
+			// the BACKGROUND, unlike reconcileTimeline's blocking boot pass:
+			// these are network calls to Google, and a slow third party must
+			// never delay this API becoming healthy. See
+			// activity_calendar_reconcile.go.
+			go reconcileActivityCalendar(
+				bgCtx,
+				calendarActivitySvc,
+				calendarSyncState,
+				cfg.CalendarSync.MaxAttempts,
+				cfg.CalendarSync.ReconcileMaxPerBoot,
+			)
+			log.Println("calendar-sync: activity sync enabled")
+		} else if calendarDeps != nil {
+			log.Println("calendar-sync: activity sync disabled ([calendar_sync] enabled = false)")
+		}
 		// Wire the photo store, repository, and tunables in. photoStore may be
 		// nil (bucket unconfigured); the handler's photoStorageReady() guard
 		// then returns 503 for writes and omits photos on reads. The config →

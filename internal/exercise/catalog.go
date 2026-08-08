@@ -294,4 +294,11 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleBack, MuscleHamstrings, MuscleGlutes, MuscleQuads, MuscleCore},
 		Equipment:    []Equipment{EquipmentBarbell},
 	},
+	{
+		ID:           "machine-lat-pulldown",
+		Name:         "Machine Lat Pulldown",
+		Description:  "Seated at a pulldown station with the thighs locked under the pads, pull the bar down to the upper chest by driving the elbows down and back to target the lats. The braced seated position pins the torso so the back does the work instead of the lifter leaning away from the weight.",
+		MuscleGroups: []MuscleGroup{MuscleBack},
+		Equipment:    []Equipment{EquipmentMachine},
+	},
 }

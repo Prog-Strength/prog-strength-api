@@ -1,3 +1,10 @@
+# [0.106.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.105.0...v0.106.0) (2026-08-08)
+
+
+### Features
+
+* **dashboard:** wikipedia links on the daily quote, and a reroll that survives a reload ([#121](https://github.com/Prog-Strength/prog-strength-api/issues/121)) ([d967a80](https://github.com/Prog-Strength/prog-strength-api/commit/d967a80ae62ff8766f0d41d2b1956585436fef98))
+
 # [0.105.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.104.0...v0.105.0) (2026-08-08)
 
 

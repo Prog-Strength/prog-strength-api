@@ -96,7 +96,8 @@ func (r *SQLiteRepository) Search(ctx context.Context, userID, model string, que
 	// future model migration leaves a mixed index thin on recall, over-fetch
 	// with an internal k multiplier here.
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT am.distilled_text, v.distance, am.source_session_id, am.created_at
+		SELECT am.distilled_text, v.distance, am.source_type,
+		       am.source_session_id, am.source_workout_id, am.created_at
 		FROM vec_agent_memories v
 		JOIN agent_memories am ON am.id = v.memory_id
 		WHERE v.user_id = ?
@@ -117,13 +118,20 @@ func (r *SQLiteRepository) Search(ctx context.Context, userID, model string, que
 		var (
 			m          Match
 			sourceSess sql.NullString
+			sourceWork sql.NullString
 		)
-		// source_session_id is nullable now (a workout-note memory has NULL),
-		// so scan through a NullString; a NULL maps to "" — unused by the agent.
-		if err := rows.Scan(&m.Text, &m.Distance, &sourceSess, &m.CreatedAt); err != nil {
+		// Both provenance FKs are nullable and exactly one is set per row (a
+		// chat memory has NULL source_workout_id, a note memory NULL
+		// source_session_id), so scan each through a NullString; a NULL maps
+		// to "" rather than leaking the other FK's value.
+		if err := rows.Scan(
+			&m.Text, &m.Distance, &m.SourceType,
+			&sourceSess, &sourceWork, &m.CreatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("vectormemory: scan match: %w", err)
 		}
 		m.SourceSessionID = sourceSess.String
+		m.SourceWorkoutID = sourceWork.String
 		matches = append(matches, m)
 	}
 	if err := rows.Err(); err != nil {

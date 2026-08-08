@@ -454,6 +454,40 @@ func (r *SQLiteRepository) GetRunningBestEffortHistory(ctx context.Context, user
 	return out, rows.Err()
 }
 
+// BestEffortsForActivity returns the stored best-effort rows for one owned,
+// live activity.
+//
+// Repository.Get deliberately does NOT load these — the detail read is
+// already fetching a trackpoint stream, and most callers never look at best
+// efforts. Consumers that do want them (the calendar event body) ask for them
+// explicitly rather than making every activity read pay for a join.
+//
+// Ownership is enforced through the activities join, so a wrong userID or a
+// soft-deleted activity returns no rows rather than another user's efforts.
+func (r *SQLiteRepository) BestEffortsForActivity(ctx context.Context, userID, activityID string) ([]ActivityBestEffort, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT e.distance_key, e.duration_seconds, e.window_start_elapsed_seconds, e.window_end_elapsed_seconds
+		FROM activity_best_efforts e
+		JOIN activities a ON a.id = e.activity_id
+		WHERE e.activity_id = ? AND a.user_id = ? AND a.deleted_at IS NULL
+	`, activityID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ActivityBestEffort
+	for rows.Next() {
+		var be ActivityBestEffort
+		if err := rows.Scan(&be.DistanceKey, &be.DurationSeconds,
+			&be.WindowStartElapsedSeconds, &be.WindowEndElapsedSeconds); err != nil {
+			return nil, err
+		}
+		out = append(out, be)
+	}
+	return out, rows.Err()
+}
+
 func (r *SQLiteRepository) GetBySourceActivityID(ctx context.Context, userID string, source IngestSource, sourceActivityID string) (*Activity, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT `+activityColumns+activityJoins+`

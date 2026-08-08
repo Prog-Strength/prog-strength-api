@@ -32,4 +32,16 @@ type Repository interface {
 
 	// Exists reports whether a connection row exists for the user.
 	Exists(ctx context.Context, userID string) (bool, error)
+
+	// MarkSynced records that a Google write succeeded for this user,
+	// advancing last_successful_sync_at. Best-effort by contract: callers
+	// ignore its error, because failing a user's request over a metrics
+	// stamp would be worse than a stale gauge. ErrNotFound when absent.
+	MarkSynced(ctx context.Context, userID string, now time.Time) error
+
+	// List returns every connection (no token material), for the metrics
+	// exporter. Unfiltered and unpaginated, matching whoopconn.List: the
+	// row count is bounded by opted-in users, and the exporter needs the
+	// full set to publish per-status counts.
+	List(ctx context.Context) ([]Connection, error)
 }

@@ -26,6 +26,7 @@ func NewDescriptor(repo Repository) *activity.Descriptor {
 		ValidateCreate: validateCreate,
 		Details:        &detailStore{repo: repo},
 		Summarize:      summarize,
+		CalendarEvent:  calendarEvent,
 		DecodeDetails:  decodeDetails,
 	}
 }

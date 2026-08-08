@@ -38,6 +38,19 @@ type Descriptor struct {
 	// summary instead of invoking it (see RenderSummary).
 	Summarize func(a Activity, details any) Summary
 
+	// CalendarEvent renders this type's Google Calendar manifestation —
+	// the event title, headline, and body sections a synced activity
+	// shows on the user's calendar. details is the type's loaded detail
+	// value, with the same nil-tolerance contract as Summarize.
+	//
+	// Optional, and usually left nil: RenderManifest falls back to
+	// synthesizing a manifest from Summarize, so every registered type
+	// syncs to the calendar whether or not anyone wrote a renderer for
+	// it. Implement this only when the type has something a card's three
+	// chips cannot carry — a lift's exercise agenda, a run's best
+	// efforts. See calendar.go.
+	CalendarEvent func(a Activity, details any) CalendarManifest
+
 	// DecodeDetails parses a (ValidateCreate-approved) Details blob into the
 	// typed value DetailStore.Save accepts and Summarize renders. Returns
 	// nil, nil for an absent/JSON-null blob. Nil for base-only types. Only

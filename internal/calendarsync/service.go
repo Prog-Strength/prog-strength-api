@@ -40,8 +40,7 @@ type tokenMinter interface {
 // the plan rather than losing it or 500ing the API call.
 type Service struct {
 	conns       calendarconn.Repository
-	cipher      *tokencrypt.Cipher
-	tokens      tokenMinter
+	conn        *connector
 	client      CalendarClient
 	plans       plannedworkout.Repository
 	users       user.Repository
@@ -66,8 +65,7 @@ func NewService(
 	}
 	return &Service{
 		conns:       conns,
-		cipher:      cipher,
-		tokens:      tokens,
+		conn:        &connector{conns: conns, cipher: cipher, tokens: tokens, now: now},
 		client:      client,
 		plans:       plans,
 		users:       users,
@@ -83,6 +81,14 @@ func (s *Service) Schedule(ctx context.Context, userID, planID, detailOverride s
 	plan, err := s.plans.Get(ctx, userID, planID)
 	if err != nil {
 		return err
+	}
+	// A completed plan has handed its event to the activity that fulfilled
+	// it (see ActivityService.SyncCompletedActivity). Re-rendering the plan
+	// over that event would replace "what I actually did" with "what I
+	// intended to do" — a strict loss of information, and confusing on a
+	// calendar entry the user already saw turn green.
+	if handedOver(plan) {
+		return nil
 	}
 
 	calendarID, accessToken, err := s.connect(ctx, userID)
@@ -102,24 +108,17 @@ func (s *Service) Resync(ctx context.Context, userID, planID string) error {
 	return s.Schedule(ctx, userID, planID, "")
 }
 
-// RewriteCompleted patches the event to show actuals. Called from the Phase 4
-// completion flow with the rendered actual-session text. It is best-effort with
-// the same failure handling as Schedule; if the plan was never synced (no event
-// id) it inserts a fresh completed event.
-func (s *Service) RewriteCompleted(ctx context.Context, userID, planID, actualText string) error {
-	plan, err := s.plans.Get(ctx, userID, planID)
-	if err != nil {
-		return err
-	}
-
-	calendarID, accessToken, err := s.connect(ctx, userID)
-	if err != nil {
-		return err
-	}
-
-	detail := EffectiveDetail(plan, "", s.userDefaultDetail(ctx, userID))
-	ev := RenderCompletedEvent(plan, actualText, detail, s.appLinkBase)
-	return s.write(ctx, userID, plan, calendarID, accessToken, ev)
+// handedOver reports whether a plan has transferred its Google event to the
+// logged activity that completed it. Such a plan is no longer the author of
+// what that event says.
+//
+// Completion is the trigger for the handover, so a completed plan with a
+// linked session is handed over by definition — including the case where the
+// takeover's SetGoogleSync already cleared the id.
+func handedOver(plan *plannedworkout.PlannedWorkout) bool {
+	return plan != nil &&
+		plan.Status == plannedworkout.StatusCompleted &&
+		plan.CompletedSessionID != nil && *plan.CompletedSessionID != ""
 }
 
 // Delete removes the Google event for a plan, if one was written, then clears
@@ -132,6 +131,12 @@ func (s *Service) Delete(ctx context.Context, userID, planID string) error {
 	}
 	if plan.GoogleEventID == nil || *plan.GoogleEventID == "" {
 		return nil
+	}
+	// If the plan handed its event to a completed activity, that activity now
+	// owns it. Deleting the plan must not delete the session's event out from
+	// under it — clear our pointer and leave Google alone.
+	if handedOver(plan) {
+		return s.plans.SetGoogleSync(ctx, userID, planID, nil, plannedworkout.SyncPending, nil)
 	}
 
 	calendarID, accessToken, err := s.connect(ctx, userID)
@@ -201,47 +206,14 @@ func (s *Service) recordFailure(ctx context.Context, userID string, plan *planne
 	return fmt.Errorf("calendarsync: write google event: %w", cause)
 }
 
-// connect loads the connection, validates its status, decrypts the refresh
-// token, and mints an access token. It returns the user's calendar id and a
-// bearer access token. ErrNotConnected when no row; ErrReconnectNeeded when
-// revoked or the refresh fails.
+// connect resolves the user's calendar id and an access token. The work lives
+// in the shared connector, which the activity sync path uses identically.
 func (s *Service) connect(ctx context.Context, userID string) (calendarID, accessToken string, err error) {
-	conn, err := s.conns.Get(ctx, userID)
-	if errors.Is(err, calendarconn.ErrNotFound) {
-		return "", "", ErrNotConnected
-	}
+	g, err := s.conn.resolve(ctx, userID)
 	if err != nil {
-		return "", "", fmt.Errorf("calendarsync: get connection: %w", err)
+		return "", "", err
 	}
-	if conn.Status == calendarconn.StatusRevoked {
-		return "", "", ErrReconnectNeeded
-	}
-
-	enc, nonce, err := s.conns.GetRefreshToken(ctx, userID)
-	if errors.Is(err, calendarconn.ErrNotFound) {
-		return "", "", ErrNotConnected
-	}
-	if err != nil {
-		return "", "", fmt.Errorf("calendarsync: get refresh token: %w", err)
-	}
-	refresh, err := s.cipher.Decrypt(enc, nonce)
-	if err != nil {
-		return "", "", fmt.Errorf("calendarsync: decrypt refresh token: %w", err)
-	}
-
-	token, err := s.tokens.Token(ctx, userID, string(refresh))
-	if err != nil {
-		// A refresh that Google rejects (revoked/expired grant) reads as
-		// reconnect-needed; flip the connection so the UI prompts re-consent.
-		_ = s.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
-		return "", "", fmt.Errorf("%w: %w", ErrReconnectNeeded, err)
-	}
-
-	calendarID = conn.GoogleCalendarID
-	if calendarID == "" {
-		calendarID = defaultCalendarID
-	}
-	return calendarID, token, nil
+	return g.CalendarID, g.AccessToken, nil
 }
 
 // userDefaultDetail reads the user's CalendarDefaultDetail, returning "" on any

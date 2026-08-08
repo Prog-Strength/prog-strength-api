@@ -102,15 +102,26 @@ func TestComplete_SyncedRewritesGoogleEvent(t *testing.T) {
 	}
 }
 
-func TestComplete_NotSyncedSkipsRewrite(t *testing.T) {
+// Completion notifies the calendar even when the PLAN was never synced.
+//
+// This inverts the old RewriteCompleted behavior, deliberately. Back then the
+// only thing completion could do was patch an event the plan already owned,
+// so with no event there was nothing to say. Now the logged ACTIVITY is what
+// syncs, and it qualifies on its own merits — a session logged after the user
+// connected belongs on the calendar whether or not anyone planned it. The
+// activity service applies its own cutoff and skips cleanly if it does not.
+func TestComplete_UnsyncedPlanStillNotifiesTheCalendar(t *testing.T) {
 	repo := NewSQLiteRepository(dbtest.New(t))
 	id := seedPlan(t, repo, "u1")
 	sched := &fakeScheduler{}
 
 	w := doCal(t, repo, nil, sched, "u1", "POST", "/planned-workouts/"+id+"/complete", `{"session_id":"sess-1","session_kind":"workout"}`)
 	decodePlan(t, w, http.StatusOK)
-	if sched.rewriteCall != 0 {
-		t.Errorf("RewriteCompleted called %d times want 0 (plan not synced)", sched.rewriteCall)
+	if sched.rewriteCall != 1 {
+		t.Errorf("SyncCompletedActivity called %d times want 1", sched.rewriteCall)
+	}
+	if sched.lastRewriteActual != "sess-1" {
+		t.Errorf("synced activity id = %q want the completing session sess-1", sched.lastRewriteActual)
 	}
 }
 

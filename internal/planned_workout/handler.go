@@ -56,11 +56,22 @@ type CalendarScheduler interface {
 	Schedule(ctx context.Context, userID, planID, detailOverride string) error
 	Resync(ctx context.Context, userID, planID string) error
 	Delete(ctx context.Context, userID, planID string) error
-	// RewriteCompleted patches the plan's Google event to show actual logged
-	// details plus a "completed" marker. Called from the /complete flow; the
-	// calendarsync.Service already implements it. Best-effort at the call site:
-	// the handler logs a failure but does not fail the request.
-	RewriteCompleted(ctx context.Context, userID, planID, actualText string) error
+	// SyncCompletedActivity hands the plan's Google event over to the logged
+	// activity that completed it: the activity re-renders the event through
+	// its own per-type calendar renderer and takes ownership of the id, so
+	// the calendar shows ONE entry moving from planned to done rather than a
+	// planned block sitting beside a duplicate completed event.
+	//
+	// It replaces the former RewriteCompleted, which patched the event from a
+	// caller-supplied text blob. That was a second, parallel way to render a
+	// completed session, and it had already drifted from the card/list
+	// vocabulary every other surface uses. Routing completion through the
+	// activity renderer means a planned-then-completed lift and a spontaneous
+	// one look identical, because they are produced by the same code.
+	//
+	// Best-effort at the call site: the handler logs a failure but does not
+	// fail the request.
+	SyncCompletedActivity(ctx context.Context, userID, planID, activityID string) error
 }
 
 func NewHandler(repo Repository, userRepo user.Repository) *Handler {

@@ -621,6 +621,11 @@ func TestGoldenManifest(t *testing.T) {
 			TrendZ:             0.5,
 			MinStdDevMs:        1.0,
 		},
+		CalendarSync: CalendarSyncConfig{
+			Enabled:             true,
+			ReconcileMaxPerBoot: 200,
+			MaxAttempts:         5,
+		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      10,
 			MaxUploadBytes:      33554432,

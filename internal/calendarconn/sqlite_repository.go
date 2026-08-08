@@ -47,10 +47,10 @@ func (r *SQLiteRepository) Get(ctx context.Context, userID string) (*Connection,
 		statusStr string
 	)
 	err := r.db.QueryRowContext(ctx, `
-		SELECT user_id, google_calendar_id, scopes, status, connected_at, updated_at
+		SELECT user_id, google_calendar_id, scopes, status, connected_at, updated_at, last_successful_sync_at
 		FROM user_calendar_connection
 		WHERE user_id = ?
-	`, userID).Scan(&c.UserID, &c.GoogleCalendarID, &c.Scopes, &statusStr, &c.ConnectedAt, &c.UpdatedAt)
+	`, userID).Scan(&c.UserID, &c.GoogleCalendarID, &c.Scopes, &statusStr, &c.ConnectedAt, &c.UpdatedAt, &c.LastSuccessfulSyncAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -110,6 +110,48 @@ func (r *SQLiteRepository) Exists(ctx context.Context, userID string) (bool, err
 		return false, err
 	}
 	return true, nil
+}
+
+// MarkSynced advances last_successful_sync_at. updated_at is deliberately NOT
+// touched: that column tracks changes to the CONNECTION (token refresh, status
+// flip), and letting a routine sync bump it would destroy its usefulness for
+// answering "when did this grant last change".
+func (r *SQLiteRepository) MarkSynced(ctx context.Context, userID string, now time.Time) error {
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE user_calendar_connection
+		SET last_successful_sync_at = ?
+		WHERE user_id = ?
+	`, now.UTC(), userID)
+	if err != nil {
+		return err
+	}
+	return errIfNoRows(res)
+}
+
+func (r *SQLiteRepository) List(ctx context.Context) ([]Connection, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT user_id, google_calendar_id, scopes, status, connected_at, updated_at, last_successful_sync_at
+		FROM user_calendar_connection
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Connection
+	for rows.Next() {
+		var (
+			c         Connection
+			statusStr string
+		)
+		if err := rows.Scan(&c.UserID, &c.GoogleCalendarID, &c.Scopes, &statusStr,
+			&c.ConnectedAt, &c.UpdatedAt, &c.LastSuccessfulSyncAt); err != nil {
+			return nil, err
+		}
+		c.Status = Status(statusStr)
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // errIfNoRows maps a zero-rows-affected result to ErrNotFound, so callers get

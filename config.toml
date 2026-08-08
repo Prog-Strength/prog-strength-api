@@ -63,6 +63,28 @@ redirect_url = "https://api.progstrength.fitness/auth/whoop/callback"
 # Empty disables the Whoop integration.
 token_enc_key = "${WHOOP_TOKEN_ENC_KEY}"
 
+[calendar_sync]
+# Google Calendar sync of LOGGED activities (internal/calendarsync). Public
+# literals — not secrets, not env-overridden. The one real secret in this
+# feature is calendar_token_enc_key under [auth].
+#
+# enabled is the kill switch. Turning it off stops every sync hook and the
+# boot reconciler without touching OAuth: users stay connected, planned-workout
+# scheduling keeps working, and flipping it back resumes where things left off
+# (the reconciler picks up everything logged in the meantime).
+enabled = true
+# Cap on repair writes issued by one boot's reconciler pass. Unlike the
+# timeline reconciler — which only writes to our own SQLite — this one makes
+# real Google Calendar API calls, so an unbounded pass after a long outage
+# could hit rate limits and get the whole integration throttled. The pass
+# drains oldest-first and logs the remainder, so a backlog larger than this
+# clears over successive boots instead of being silently dropped.
+reconcile_max_per_boot = 200
+# Consecutive failures after which an activity stops being retried. Protects
+# against an activity Google will never accept (a malformed render, say)
+# burning a write on every boot forever. A successful sync resets the count.
+max_attempts = 5
+
 [cors]
 # Browser origins permitted credentialed access. Public domains — NOT
 # secrets. Each entry may contain a SINGLE "*" wildcard (Vercel previews).

@@ -67,6 +67,12 @@ type Handler struct {
 	// implementation lives in server wiring so this package never imports
 	// planned_workout. Injected post-construction via SetPlanMatcher.
 	planMatcher PlanMatcher
+	// calendarSyncer mirrors a logged activity onto the user's Google
+	// Calendar, when they have connected one. Optional and nil-safe like
+	// publisher/planMatcher; the implementation lives in calendarsync and is
+	// injected from server wiring, so this package never imports it (which
+	// would be a cycle — calendarsync reads the activity registry).
+	calendarSyncer CalendarSyncer
 	// hrEngine computes the percent-of-max-HR zone breakdown attached to a
 	// running activity's detail response. Optional and nil-safe, mirroring
 	// publisher/planMatcher: when nil the get handler skips the zones block
@@ -238,6 +244,49 @@ func (h *Handler) publish(ctx context.Context, ref timeline.PostRef) {
 		return
 	}
 	_ = h.publisher.EnsurePost(ctx, ref)
+}
+
+// CalendarSyncer mirrors logged activities onto a user's Google Calendar.
+//
+// It is declared here, in the activity package, rather than imported from
+// calendarsync — the dependency has to point this way because calendarsync
+// reads the activity registry to render each type's event, and importing back
+// would be a cycle. Same shape as timeline.Publisher, for the same reason.
+type CalendarSyncer interface {
+	// SyncActivity writes or rewrites the activity's calendar event. It is
+	// idempotent, so every hook can call it without coordinating.
+	SyncActivity(ctx context.Context, userID, activityID string) error
+	// DeleteActivityEvent removes the event, if one was written.
+	DeleteActivityEvent(ctx context.Context, userID, activityID string) error
+}
+
+// SetCalendarSyncer wires calendar sync in. Injected post-construction so
+// NewHandler's signature — and every test that calls it — stays untouched.
+func (h *Handler) SetCalendarSyncer(s CalendarSyncer) { h.calendarSyncer = s }
+
+// syncCalendar best-effort-mirrors an activity to Google Calendar. It NEVER
+// affects the HTTP response: a nil syncer is a no-op, an unconnected user is
+// a documented skip, and a Google failure is recorded as resyncable state
+// that the boot reconciler repairs.
+//
+// Swallowing the error here is only safe BECAUSE that reconciler exists. The
+// timeline publisher learned this the hard way: best-effort publishing with
+// no repair pass meant a dropped write stayed dropped until a bug report
+// surfaced it (see server/timeline_reconcile.go).
+func (h *Handler) syncCalendar(ctx context.Context, userID, activityID string) {
+	if h.calendarSyncer == nil {
+		return
+	}
+	_ = h.calendarSyncer.SyncActivity(ctx, userID, activityID)
+}
+
+// deleteCalendarEvent best-effort-removes an activity's calendar event, with
+// the same never-fail-the-request contract as syncCalendar.
+func (h *Handler) deleteCalendarEvent(ctx context.Context, userID, activityID string) {
+	if h.calendarSyncer == nil {
+		return
+	}
+	_ = h.calendarSyncer.DeleteActivityEvent(ctx, userID, activityID)
 }
 
 // Mount registers routes under /activities. Callers are expected to
@@ -664,6 +713,11 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 			SourceID:   a.ID,
 			OccurredAt: a.StartTime,
 		})
+		// Best-effort: mirror the imported session onto the user's Google
+		// Calendar. Type-agnostic for the same reason the publish above is —
+		// every registered type renders an event, so a new type needs no
+		// change here.
+		h.syncCalendar(r.Context(), a.UserID, a.ID)
 		// Best-effort milestone posts and planned-workout matching remain
 		// running-only: best efforts are only computed for runs, and the
 		// planner's endurance side models runs.
@@ -939,6 +993,9 @@ func (h *Handler) patch(w http.ResponseWriter, r *http.Request) {
 		}
 		updated = a
 	}
+	// Best-effort: a rename changes the event title and an environment flip
+	// discards best efforts, so the synced body is stale either way.
+	h.syncCalendar(r.Context(), userID, activityID)
 	httpresp.OK(w, "updated activity", toActivityDTO(*updated, false))
 }
 
@@ -1006,6 +1063,8 @@ func (h *Handler) calibrate(w http.ResponseWriter, r *http.Request) {
 		httpresp.ServerError(w, r.Context(), "calibrate activity", err)
 		return
 	}
+	// Best-effort: calibration moves the distance the event headline reports.
+	h.syncCalendar(r.Context(), userID, activityID)
 	dto, err := h.buildDetailDTO(r.Context(), userID, *updated, unit)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "build activity detail", err)
@@ -1044,6 +1103,10 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	// Best-effort: revert any plan link for the deleted activity. Never
 	// affects this response.
 	h.unmatchSession(r.Context(), userID, activityID)
+	// Best-effort: remove the Google Calendar event. A soft-deleted activity
+	// is hidden from every read, so leaving its event behind would strand an
+	// entry the user can no longer open from Prog Strength.
+	h.deleteCalendarEvent(r.Context(), userID, activityID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

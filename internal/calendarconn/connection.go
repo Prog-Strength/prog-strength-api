@@ -29,4 +29,16 @@ type Connection struct {
 	Status           Status
 	ConnectedAt      time.Time
 	UpdatedAt        time.Time
+	// LastSuccessfulSyncAt is when a Google write last succeeded for this
+	// user. nil means never.
+	//
+	// It exists to be exported as a Prometheus gauge and alerted on as
+	// `time() - <stamp> > threshold`. That indirection is deliberate: the
+	// obvious alternative — increase() over a sync counter — cannot answer
+	// "when did this last succeed", because the counter lives in process
+	// memory and resets on every deploy. The WHOOP integration shipped that
+	// exact mistake and its dead-ingestion alert fired continuously over
+	// healthy traffic until migration 052 replaced it with a durable stamp.
+	// This is that lesson applied up front rather than after an outage.
+	LastSuccessfulSyncAt *time.Time
 }

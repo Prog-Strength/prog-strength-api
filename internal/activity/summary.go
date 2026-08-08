@@ -121,6 +121,13 @@ func FormatDuration(seconds float64) string {
 	return fmt.Sprintf("%d:%02d", m, s)
 }
 
+// FormatPacePerMile renders a seconds-per-kilometer pace as minutes per
+// mile, e.g. 295.4 → "7:55/mi". Display-only, like the helpers around it —
+// the API's stored pace stays metric.
+func FormatPacePerMile(secPerKm float64) string {
+	return FormatDuration(secPerKm*metersPerMile/1000) + "/mi"
+}
+
 // FormatThousands renders a whole-number volume with thousands separators,
 // e.g. 8400 → "8,400".
 func FormatThousands(v float64) string {

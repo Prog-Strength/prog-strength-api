@@ -56,6 +56,7 @@ func NewEnduranceDescriptor(t ActivityType, store DetailStore) *Descriptor {
 		ValidateCreate: enduranceValidateCreate(t),
 		Details:        store,
 		Summarize:      enduranceSummarize(t),
+		CalendarEvent:  enduranceCalendarEvent(t),
 		DecodeDetails:  decodeEnduranceDetails,
 	}
 }

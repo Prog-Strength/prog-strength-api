@@ -104,7 +104,7 @@ func newTestService(t *testing.T, client CalendarClient, tokens tokenMinter) (*S
 	}
 
 	svc := NewService(conns, cipher, nil, client, plans, users, "https://app.example.com", func() time.Time { return time.Unix(2000, 0) })
-	svc.tokens = tokens // inject fake token minter directly
+	svc.conn.tokens = tokens // inject fake token minter directly
 	return svc, plan.ID, conns, plans
 }
 
@@ -306,38 +306,54 @@ func TestDelete_EventGoneIsIgnored(t *testing.T) {
 	}
 }
 
-func TestRewriteCompleted_PatchesWithMarker(t *testing.T) {
+// Once a plan is completed and linked, the ACTIVITY owns its Google event —
+// see ActivityService.SyncCompletedActivity. Re-scheduling the plan over that
+// event would replace "what I actually did" with "what I intended to do",
+// which is a strict loss of information on an entry the user already watched
+// turn green. (This replaces TestRewriteCompleted_PatchesWithMarker: the
+// plan service no longer renders completed sessions at all.)
+func TestSchedule_NoOpsForAPlanHandedOverToItsActivity(t *testing.T) {
 	fc := &fakeClient{insertID: "evt-1"}
-	svc, planID, _, _ := newTestService(t, fc, fakeTokens{})
-	if err := svc.Schedule(context.Background(), testUserID, planID, ""); err != nil {
+	svc, planID, _, plans := newTestService(t, fc, fakeTokens{})
+	ctx := context.Background()
+	if err := svc.Schedule(ctx, testUserID, planID, ""); err != nil {
 		t.Fatalf("Schedule: %v", err)
 	}
-	if err := svc.RewriteCompleted(context.Background(), testUserID, planID, "Bench 3x5 @ 140 lb"); err != nil {
-		t.Fatalf("RewriteCompleted: %v", err)
+	if err := plans.SetCompletion(ctx, testUserID, planID, "act_1"); err != nil {
+		t.Fatalf("SetCompletion: %v", err)
 	}
-	if fc.patches != 1 {
-		t.Errorf("patches = %d want 1", fc.patches)
+	before := fc.patches
+
+	if err := svc.Schedule(ctx, testUserID, planID, ""); err != nil {
+		t.Fatalf("Schedule after completion: %v", err)
 	}
-	if fc.lastEv.Summary == "" || fc.lastEv.Description == "" {
-		t.Errorf("completed event empty: %+v", fc.lastEv)
-	}
-	if !contains(fc.lastEv.Summary, "Completed") {
-		t.Errorf("summary not marked completed: %q", fc.lastEv.Summary)
-	}
-	if !contains(fc.lastEv.Description, "140 lb") {
-		t.Errorf("actual text missing: %q", fc.lastEv.Description)
+	if fc.patches != before {
+		t.Errorf("patches = %d want %d — a handed-over event must not be rewritten", fc.patches, before)
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || (len(sub) > 0 && indexOf(s, sub) >= 0))
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
+// Deleting a completed, linked plan must NOT delete the session's event: the
+// activity still exists and still owns that entry. Our pointer is cleared;
+// Google is left alone.
+func TestDelete_HandedOverPlanClearsThePointerWithoutDeletingAtGoogle(t *testing.T) {
+	fc := &fakeClient{insertID: "evt-1"}
+	svc, planID, _, plans := newTestService(t, fc, fakeTokens{})
+	ctx := context.Background()
+	if err := svc.Schedule(ctx, testUserID, planID, ""); err != nil {
+		t.Fatalf("Schedule: %v", err)
 	}
-	return -1
+	if err := plans.SetCompletion(ctx, testUserID, planID, "act_1"); err != nil {
+		t.Fatalf("SetCompletion: %v", err)
+	}
+
+	if err := svc.Delete(ctx, testUserID, planID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if fc.deletes != 0 {
+		t.Errorf("deletes = %d want 0 — the activity still owns that event", fc.deletes)
+	}
+	got, _ := plans.Get(ctx, testUserID, planID)
+	if got.GoogleEventID != nil {
+		t.Errorf("plan event id = %v want cleared", *got.GoogleEventID)
+	}
 }

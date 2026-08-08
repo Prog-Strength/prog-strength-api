@@ -769,7 +769,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboardHandler := dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database), recoveryEngine)
+		dashboardHandler := dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database), dashboard.NewSQLiteQuoteRerollRepository(database), recoveryEngine)
 		// Same engine and window as the activity handler: the Run Effort tile
 		// classifies week runs against the same max-HR reference the run
 		// detail page uses, so the two surfaces can never disagree.

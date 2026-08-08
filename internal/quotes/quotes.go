@@ -19,11 +19,20 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io/fs"
+	"regexp"
 	"sort"
 )
 
 //go:embed data/*.json
 var dataFS embed.FS
+
+// wikipediaArticle matches an English Wikipedia article URL and nothing else.
+// The corpus is hand-edited, and the near misses are the ones worth catching:
+// a copied `en.m.` mobile URL, a stale `http://`, or a bare `/wiki/` with the
+// title lost. Anything off en.wikipedia.org is rejected outright rather than
+// waved through, because the client styles these links on the assumption that
+// every one of them goes to the same place.
+var wikipediaArticle = regexp.MustCompile(`^https://en\.wikipedia\.org/wiki/[^\s]+$`)
 
 // Quote is one entry in the corpus.
 //
@@ -32,12 +41,25 @@ var dataFS embed.FS
 // quotes. Tags is unused by today's selection; it exists so that picking from a
 // themed pool later (a back-off line during a deload week, say) is a change to
 // Pick rather than a reshaping of every data file.
+//
+// AuthorURL and SourceURL are the "learn more" links the tile hangs off the
+// attribution. Both are optional and both are English Wikipedia article URLs —
+// standardizing on one encyclopedia is what lets the client style every link
+// identically instead of branching on the destination.
+//
+// AuthorURL points at the person, not at a claim that the person said this
+// line: several attributions in the corpus are the popular one rather than a
+// checked one (see data/README.md), and those quotes still link the human
+// being. SourceURL is different — it can only appear alongside a Source, which
+// is already a verified-only field.
 type Quote struct {
-	ID     string   `json:"id"`
-	Text   string   `json:"text"`
-	Author string   `json:"author"`
-	Source string   `json:"source,omitempty"`
-	Tags   []string `json:"tags,omitempty"`
+	ID        string   `json:"id"`
+	Text      string   `json:"text"`
+	Author    string   `json:"author"`
+	AuthorURL string   `json:"author_url,omitempty"`
+	Source    string   `json:"source,omitempty"`
+	SourceURL string   `json:"source_url,omitempty"`
+	Tags      []string `json:"tags,omitempty"`
 }
 
 // corpus is the loaded, id-sorted set of every embedded quote.
@@ -66,10 +88,14 @@ func Pick(userID, localDate string) Quote {
 }
 
 // PickAt returns the quote offset places past the day's quote, wrapping around
-// the corpus. It backs the tile's reroll button: the client holds an offset and
-// increments it, so successive taps walk distinct quotes and only repeat after
-// the whole corpus has been seen. Rerolling by re-randomizing instead would let
-// the same quote come up twice in a row, which reads as a broken button.
+// the corpus. It backs the tile's reroll button: the caller advances a stored
+// offset, so successive taps walk distinct quotes and only repeat after the
+// whole corpus has been seen. Rerolling by re-randomizing instead would let the
+// same quote come up twice in a row, which reads as a broken button.
+//
+// Which offset a user is on is persisted per local day by the dashboard (see
+// migration 054), so a reroll survives a page load. This package stays unaware
+// of that: it is handed an offset and returns a quote.
 //
 // offset may be negative or arbitrarily large; it is normalized into range.
 func PickAt(userID, localDate string, offset int) Quote {
@@ -111,8 +137,9 @@ func load(fsys fs.FS) ([]Quote, error) {
 	sort.Strings(files)
 
 	var all []Quote
-	ids := map[string]string{}   // id -> file that first claimed it
-	texts := map[string]string{} // text -> id that first used it
+	ids := map[string]string{}     // id -> file that first claimed it
+	texts := map[string]string{}   // text -> id that first used it
+	authors := map[string]string{} // author -> the url the first linked quote gave them
 
 	for _, name := range files {
 		b, err := fs.ReadFile(fsys, name)
@@ -143,6 +170,27 @@ func load(fsys fs.FS) ([]Quote, error) {
 			}
 			if prev, dup := texts[q.Text]; dup {
 				return nil, fmt.Errorf("%s: quote %q repeats the text of %q", name, q.ID, prev)
+			}
+			if q.AuthorURL != "" && !wikipediaArticle.MatchString(q.AuthorURL) {
+				return nil, fmt.Errorf("%s: quote %q has author_url %q, want an https://en.wikipedia.org/wiki/ article", name, q.ID, q.AuthorURL)
+			}
+			// A source link with nothing to hang it on: the tile renders the
+			// link *on* the source text, so this would be invisible.
+			if q.SourceURL != "" && q.Source == "" {
+				return nil, fmt.Errorf("%s: quote %q has a source_url without a source", name, q.ID)
+			}
+			if q.SourceURL != "" && !wikipediaArticle.MatchString(q.SourceURL) {
+				return nil, fmt.Errorf("%s: quote %q has source_url %q, want an https://en.wikipedia.org/wiki/ article", name, q.ID, q.SourceURL)
+			}
+			// Storing the link per quote means one author's link is written out
+			// once per quote they have. This is what keeps those copies honest:
+			// the corpus may not claim two different people behind one name.
+			// Quotes that omit the link are skipped — author_url is optional.
+			if q.AuthorURL != "" {
+				if prev, seen := authors[q.Author]; seen && prev != q.AuthorURL {
+					return nil, fmt.Errorf("%s: quote %q links author %q to %q, but another quote already links to %q", name, q.ID, q.Author, q.AuthorURL, prev)
+				}
+				authors[q.Author] = q.AuthorURL
 			}
 			ids[q.ID] = name
 			texts[q.Text] = q.ID

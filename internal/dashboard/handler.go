@@ -50,6 +50,7 @@ type Handler struct {
 	whoopConns        whoopconn.Repository
 	whoopRecovery     whooprecovery.Repository
 	layoutRepo        Repository
+	quoteRerollRepo   QuoteRerollRepository
 
 	// recovery derives the baseline/HRV blocks of the recovery tile from the
 	// fetched window. Mandatory: a handler without it would serve a half-built
@@ -84,6 +85,7 @@ func NewHandler(
 	whoopConns whoopconn.Repository,
 	whoopRecovery whooprecovery.Repository,
 	layoutRepo Repository,
+	quoteRerollRepo QuoteRerollRepository,
 	recoveryEngine *recoverytrend.Engine,
 ) *Handler {
 	return &Handler{
@@ -98,6 +100,7 @@ func NewHandler(
 		whoopConns:        whoopConns,
 		whoopRecovery:     whoopRecovery,
 		layoutRepo:        layoutRepo,
+		quoteRerollRepo:   quoteRerollRepo,
 		recovery:          recoveryEngine,
 		now:               time.Now,
 	}
@@ -119,7 +122,7 @@ func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 // context and assumes it's present.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/dashboard/summary", h.summary)
-	r.Get("/dashboard/quote", h.quote)
+	r.Post("/dashboard/quote/reroll", h.rerollQuote)
 	r.Put("/dashboard/layout", h.putLayout)
 }
 
@@ -279,11 +282,13 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	if enabled[TileStreak] {
 		out[string(TileStreak)] = buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc)
 	}
-	// The quote needs no repo read, so it is built inline rather than through
-	// defer1 — there is nothing to degrade. Offset 0 is the day's quote; the
-	// reroll button advances from here via GET /dashboard/quote.
+	// The quote itself needs no repo read — the corpus is embedded — but the
+	// user's reroll position does, so the tile can come back to the quote they
+	// last advanced to instead of snapping to the day's. resolveQuoteOffset
+	// absorbs a failed read as offset 0, so this stays a section that cannot
+	// fail the request.
 	if enabled[TileQuote] {
-		out[string(TileQuote)] = buildQuote(userID, todayStr, 0)
+		out[string(TileQuote)] = buildQuote(userID, todayStr, h.resolveQuoteOffset(ctx, r, userID, todayStr))
 	}
 
 	httpresp.OK(w, "dashboard summary", out)

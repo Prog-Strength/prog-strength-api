@@ -157,6 +157,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 		rp.nutrition, rp.bodyweight, bloodpressure.NewSQLiteRepository(db), rp.user,
 		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db),
 		dashboard.NewSQLiteLayoutRepository(db),
+		dashboard.NewSQLiteQuoteRerollRepository(db),
 		recoverytrend.New(recoverytrend.Config{
 			BaselineWindowDays: 30, MinBaselineDays: 14, TrendWindowDays: 7,
 			MinTrendDays: 4, BalancedZ: 1.0, TrendZ: 0.5, MinStdDevMs: 1.0,

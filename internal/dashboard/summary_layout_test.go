@@ -204,7 +204,7 @@ func TestSummary_LayoutReadFailure_FallsBackToDefault(t *testing.T) {
 	_, rp, userID := newTestEnv(t)
 
 	// Rebuild the handler with a failing layout repo, reusing the real repos.
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{}, testRecoveryEngine())
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{}, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	r2 := chi.NewRouter()
 	h.Mount(r2)

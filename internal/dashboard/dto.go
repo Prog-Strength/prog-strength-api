@@ -40,9 +40,17 @@ type QuoteSection struct {
 	ID     string `json:"id"`
 	Text   string `json:"text"`
 	Author string `json:"author"`
+	// AuthorURL is the Wikipedia article for the author, omitted when there
+	// is none to point at. The client renders the attribution as a link when
+	// this is present and as plain text when it is not, so both states are
+	// normal — this is not a field a client may assume.
+	AuthorURL string `json:"author_url,omitempty"`
 	// Source is the work the quote comes from, omitted when the attribution
 	// has not been verified. See internal/quotes/data/README.md.
 	Source string `json:"source,omitempty"`
+	// SourceURL is the Wikipedia article for the work. Never present without
+	// Source; the corpus loader rejects that combination.
+	SourceURL string `json:"source_url,omitempty"`
 	// Offset is the reroll position this quote was served at: 0 is the day's
 	// quote, and the client sends back offset+1 to advance. Echoing it keeps
 	// the client from having to track the count it asked for against the one

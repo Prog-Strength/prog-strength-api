@@ -161,6 +161,44 @@ func TestLoad_RejectsBadCorpora(t *testing.T) {
 			},
 			want: "repeats the text",
 		},
+		{
+			name:  "author_url off wikipedia",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","author_url":"https://example.com/X"}]`},
+			want:  "author_url",
+		},
+		{
+			name:  "author_url on the mobile host",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","author_url":"https://en.m.wikipedia.org/wiki/X"}]`},
+			want:  "author_url",
+		},
+		{
+			name:  "author_url over plain http",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","author_url":"http://en.wikipedia.org/wiki/X"}]`},
+			want:  "author_url",
+		},
+		{
+			name:  "author_url with no article path",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","author_url":"https://en.wikipedia.org/wiki/"}]`},
+			want:  "author_url",
+		},
+		{
+			name:  "source_url without a source",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","source_url":"https://en.wikipedia.org/wiki/W"}]`},
+			want:  "source_url without a source",
+		},
+		{
+			name:  "source_url off wikipedia",
+			files: map[string]string{"data/x.json": `[{"id":"a","text":"A","author":"X","source":"W","source_url":"https://example.com/W"}]`},
+			want:  "source_url",
+		},
+		{
+			name: "one author with conflicting urls",
+			files: map[string]string{
+				"data/one.json": `[{"id":"a","text":"A","author":"X","author_url":"https://en.wikipedia.org/wiki/X"}]`,
+				"data/two.json": `[{"id":"b","text":"B","author":"X","author_url":"https://en.wikipedia.org/wiki/Someone_Else"}]`,
+			},
+			want: "already links to",
+		},
 	}
 
 	for _, tc := range cases {
@@ -177,6 +215,24 @@ func TestLoad_RejectsBadCorpora(t *testing.T) {
 				t.Errorf("load error = %q, want it to contain %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoad_AcceptsOneAuthorLinkedConsistently(t *testing.T) {
+	// The flip side of the conflicting-url check: the same author across many
+	// quotes is the normal case, and repeating the identical link is how the
+	// per-quote shape is meant to be used. Only a *disagreement* is an error.
+	// A quote that omits the link entirely is fine too — author_url is optional,
+	// because not every author has an article.
+	fsys := fstest.MapFS{
+		"data/one.json": &fstest.MapFile{Data: []byte(
+			`[{"id":"a","text":"A","author":"X","author_url":"https://en.wikipedia.org/wiki/X"}]`)},
+		"data/two.json": &fstest.MapFile{Data: []byte(
+			`[{"id":"b","text":"B","author":"X","author_url":"https://en.wikipedia.org/wiki/X"},` +
+				`{"id":"c","text":"C","author":"X"}]`)},
+	}
+	if _, err := load(fsys); err != nil {
+		t.Errorf("load: %v", err)
 	}
 }
 

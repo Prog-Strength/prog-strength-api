@@ -2,11 +2,13 @@ package weather
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -118,6 +120,97 @@ const owDailyJSON = `{
 		"pop": 0.07,
 		"uvi": 0
 	}]
+}`
+
+// ---------------------------------------------------------------------------
+// HISTORICAL ("timemachine") FIXTURES — NOT LIVE CAPTURES.
+//
+// Unlike every fixture above, the owHistorical* bodies below are HAND-AUTHORED
+// to the DOCUMENTED One Call timemachine envelope. No OpenWeather key was
+// available to the change that added them, so nothing here has been observed
+// coming out of the live API. They therefore prove only that the parser agrees
+// with the documentation — exactly the weaker guarantee the header above warns
+// about.
+//
+// RE-CAPTURE BEFORE ROLLOUT: probe /data/4.0/onecall/timemachine once with the
+// production key and replace these bodies with the real response, together
+// with the path constant in openweather.go if it turns out to differ.
+//
+// They still earn their place: the shape they pin is the one the provider must
+// fail loudly on when wrong, and the empty-array and root-shape guards below
+// are independent of whether this exact envelope is correct.
+
+const owHistoricalJSON = `{
+	"lat": 39.74,
+	"lon": -104.98,
+	"timezone": "America/Denver",
+	"timezone_offset": -21600,
+	"data": [
+		{
+			"dt": 1786291200,
+			"sunrise": 1786277186,
+			"sunset": 1786327469,
+			"temp": 18.24,
+			"feels_like": 17.61,
+			"pressure": 1011,
+			"humidity": 44,
+			"dew_point": 6.12,
+			"uvi": 3.82,
+			"clouds": 35,
+			"visibility": 10000,
+			"wind_speed": 3.5,
+			"wind_deg": 210,
+			"wind_gust": 6.2,
+			"weather": [{"id": 800, "main": "Clear", "description": "clear sky", "icon": "01d"}]
+		}
+	]
+}`
+
+// Rain and snow in the same hour: the model carries one precipitation total,
+// so both sub-objects have to be read and summed rather than either winning.
+const owHistoricalPrecipJSON = `{
+	"lat": 39.74, "lon": -104.98,
+	"data": [{
+		"dt": 1786291200,
+		"temp": 0.5,
+		"feels_like": -3.2,
+		"dew_point": -0.4,
+		"humidity": 92,
+		"wind_speed": 3.5,
+		"wind_deg": 210,
+		"rain": {"1h": 0.42},
+		"snow": {"1h": 0.13},
+		"weather": [{"id": 616, "main": "Snow", "description": "rain and snow", "icon": "13d"}]
+	}]
+}`
+
+const owHistoricalNoWeatherJSON = `{
+	"lat": 39.74, "lon": -104.98,
+	"data": [{
+		"dt": 1786291200,
+		"temp": 18.24,
+		"feels_like": 17.61,
+		"dew_point": 6.12,
+		"humidity": 44,
+		"wind_speed": 3.5,
+		"wind_deg": 210,
+		"weather": []
+	}]
+}`
+
+// The PR #124 regression shape: readings at the ROOT with no `data` wrapper.
+// encoding/json ignores absent fields, so this decodes into a zero-value
+// struct WITHOUT error and would store a plausible 0 °C reading as a fact.
+const owHistoricalRootShapeJSON = `{
+	"lat": 39.74, "lon": -104.98,
+	"dt": 1786291200,
+	"temp": 18.24,
+	"feels_like": 17.61,
+	"dew_point": 6.12,
+	"humidity": 44,
+	"wind_speed": 3.5,
+	"wind_deg": 210,
+	"weather": [{"id": 800, "main": "Clear", "description": "clear sky", "icon": "01d"}]
 }`
 
 const owGeoDirectJSON = `[
@@ -362,6 +455,176 @@ func TestOpenWeatherDailyEmptyTimelineErrors(t *testing.T) {
 	}
 }
 
+// historicalAt is the timestamp every Historical test asks for. It is
+// deliberately NOT on an hour boundary: rounding belongs to the capturer, and
+// asking for 14:40 pins that the provider forwards the caller's instant
+// verbatim rather than quietly rounding it a second time.
+var historicalAt = time.Date(2026, 8, 9, 14, 40, 0, 0, time.UTC)
+
+func TestOpenWeatherHistorical(t *testing.T) {
+	srv, query, path := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
+	if err != nil {
+		t.Fatalf("Historical: %v", err)
+	}
+
+	if *path != "/data/4.0/onecall/timemachine" {
+		t.Errorf("path = %q, want /data/4.0/onecall/timemachine", *path)
+	}
+	assertCommonParams(t, *query, "39.7392", "-104.9847")
+	// dt is the whole reason this endpoint is not just another timeline read:
+	// unix seconds, UTC, and the provider must not be asked for "now".
+	if want := strconv.FormatInt(historicalAt.Unix(), 10); query.Get("dt") != want {
+		t.Errorf("dt param = %q, want %q", query.Get("dt"), want)
+	}
+
+	// Every expectation is a value from data[0]. A parser reading the ROOT
+	// decodes into a zero-value struct WITHOUT error, so asserting non-zero
+	// values is the point — err == nil alone proves nothing here.
+	if want := time.Unix(1786291200, 0).UTC(); !got.ObservedAt.Equal(want) {
+		t.Errorf("ObservedAt = %v, want %v (the provider's hour, not the request's)", got.ObservedAt, want)
+	}
+	if got.TempC != 18.24 {
+		t.Errorf("TempC = %v, want 18.24", got.TempC)
+	}
+	if got.FeelsLikeC != 17.61 {
+		t.Errorf("FeelsLikeC = %v, want 17.61", got.FeelsLikeC)
+	}
+	if got.DewPointC != 6.12 {
+		t.Errorf("DewPointC = %v, want 6.12", got.DewPointC)
+	}
+	if got.Humidity != 44 {
+		t.Errorf("Humidity = %v, want 44", got.Humidity)
+	}
+	// OpenWeather metric wind is m/s; the canonical model is km/h (3.5 * 3.6).
+	if !almostEqual(got.WindKMH, 12.6) {
+		t.Errorf("WindKMH = %v, want 12.6 (m/s converted)", got.WindKMH)
+	}
+	if got.WindDeg != 210 {
+		t.Errorf("WindDeg = %v, want 210", got.WindDeg)
+	}
+	// No rain or snow block at all is a dry hour, not a missing measurement.
+	if got.PrecipMM != 0 {
+		t.Errorf("PrecipMM = %v, want 0 when rain and snow are both absent", got.PrecipMM)
+	}
+	if got.Condition != "Clear" {
+		t.Errorf("Condition = %q, want Clear", got.Condition)
+	}
+	if got.Icon != "01d" {
+		t.Errorf("Icon = %q, want 01d", got.Icon)
+	}
+}
+
+func TestOpenWeatherHistoricalSumsRainAndSnow(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalPrecipJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
+	if err != nil {
+		t.Fatalf("Historical: %v", err)
+	}
+	if !almostEqual(got.PrecipMM, 0.55) {
+		t.Errorf("PrecipMM = %v, want 0.55 (rain.1h + snow.1h)", got.PrecipMM)
+	}
+}
+
+func TestOpenWeatherHistoricalEmptyDataArrayErrors(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", `{"lat": 39.74, "lon": -104.98, "data": []}`)
+	p := newTestProvider(srv)
+
+	if _, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt); err == nil {
+		t.Fatal("Historical with empty data array: want error, got nil")
+	}
+}
+
+// The PR #124 shape: a body carrying the readings at the root rather than
+// under `data`. It exits through the same empty-data guard as the test above
+// — the fixture is here because it documents the shape that actually shipped,
+// and because "errors" is only half the contract. The other half is that
+// nothing plausible leaks out alongside the error, since the alternative is
+// storing 0 °C forever as an immutable historical fact.
+func TestOpenWeatherHistoricalRootShapeErrors(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalRootShapeJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
+	if err == nil {
+		t.Fatalf("Historical with root-shaped body: want error, got %+v", got)
+	}
+	if got != (Observation{}) {
+		t.Errorf("Historical returned %+v alongside its error, want the zero Observation", got)
+	}
+}
+
+func TestOpenWeatherHistoricalEmptyWeatherArrayDegrades(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalNoWeatherJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
+	if err != nil {
+		t.Fatalf("Historical with empty weather array: %v", err)
+	}
+	if got.TempC != 18.24 {
+		t.Errorf("TempC = %v, want 18.24 (temperatures must survive)", got.TempC)
+	}
+	if got.Condition != "" || got.Icon != "" {
+		t.Errorf("Condition/Icon = %q/%q, want empty when weather array is empty", got.Condition, got.Icon)
+	}
+}
+
+// 400 is the one definitive negative: the timestamp is outside the provider's
+// history window and no retry will ever change that. Everything else stays
+// transient, so the backfill retries it instead of recording a terminal row.
+func TestOpenWeatherHistoricalBadRequestIsNoHistoricalData(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{"bad_request", http.StatusBadRequest, true},
+		{"server_error", http.StatusInternalServerError, false},
+		{"too_many_requests", http.StatusTooManyRequests, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"cod":"400","message":"requested time is out of allowed range"}`, tc.status)
+			}))
+			t.Cleanup(srv.Close)
+			p := newTestProvider(srv)
+
+			_, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
+			if err == nil {
+				t.Fatalf("Historical on %d: want error, got nil", tc.status)
+			}
+			if got := errors.Is(err, ErrNoHistoricalData); got != tc.want {
+				t.Errorf("errors.Is(err, ErrNoHistoricalData) = %v, want %v (err = %v)", got, tc.want, err)
+			}
+		})
+	}
+}
+
+// The definitive negative is a property of the historical surface, not of the
+// status code. A 400 anywhere else means we sent a malformed request, and
+// reading that as "no data will ever exist" would let the backfill write
+// permanent `unavailable` rows to record a bug of our own.
+func TestOpenWeatherBadRequestIsTerminalOnlyForHistorical(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"cod":"400","message":"bad request"}`, http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+	p := newTestProvider(srv)
+
+	_, err := p.Current(context.Background(), 39.7392, -104.9847)
+	if err == nil {
+		t.Fatal("Current on 400: want error, got nil")
+	}
+	if errors.Is(err, ErrNoHistoricalData) {
+		t.Errorf("Current 400 must not be ErrNoHistoricalData, got %v", err)
+	}
+}
+
 func TestOpenWeatherGeocodeDirect(t *testing.T) {
 	srv, query, path := owServer(t, "/geo/1.0/direct", owGeoDirectJSON)
 	p := newTestProvider(srv)
@@ -455,6 +718,7 @@ func TestOpenWeatherNon200IsError(t *testing.T) {
 		{"current", func() error { _, err := p.Current(ctx, 1, 2); return err }},
 		{"hourly", func() error { _, err := p.Hourly(ctx, 1, 2); return err }},
 		{"daily", func() error { _, err := p.Daily(ctx, 1, 2); return err }},
+		{"historical", func() error { _, err := p.Historical(ctx, 1, 2, historicalAt); return err }},
 		{"geocode_direct", func() error { _, err := p.GeocodeDirect(ctx, "x", 5); return err }},
 		{"geocode_reverse", func() error { _, err := p.GeocodeReverse(ctx, 1, 2); return err }},
 	}

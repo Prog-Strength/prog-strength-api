@@ -53,6 +53,7 @@ type fakeProvider struct {
 	daily      Daily
 	direct     []GeoResult
 	reverse    []GeoResult
+	historical Observation
 	errs       map[Endpoint]error
 	calls      map[Endpoint]int
 }
@@ -66,8 +67,13 @@ func newFakeProvider() *fakeProvider {
 		daily:      Daily{HighC: 28.5, LowC: 14.0, Sunrise: sunrise, Sunset: sunrise.Add(14 * time.Hour)},
 		direct:     []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
 		reverse:    []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
-		errs:       map[Endpoint]error{},
-		calls:      map[Endpoint]int{},
+		historical: Observation{
+			ObservedAt: time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC),
+			TempC:      18.2, FeelsLikeC: 17.4, DewPointC: 6.1, Humidity: 44,
+			WindKMH: 12.6, WindDeg: 210, PrecipMM: 0, Condition: "Clear", Icon: "01d",
+		},
+		errs:  map[Endpoint]error{},
+		calls: map[Endpoint]int{},
 	}
 }
 
@@ -111,6 +117,14 @@ func (f *fakeProvider) GeocodeReverse(ctx context.Context, lat, lon float64) ([]
 		return nil, err
 	}
 	return f.reverse, nil
+}
+
+func (f *fakeProvider) Historical(ctx context.Context, lat, lon float64, at time.Time) (Observation, error) {
+	f.calls[EndpointHistorical]++
+	if err := f.errs[EndpointHistorical]; err != nil {
+		return Observation{}, err
+	}
+	return f.historical, nil
 }
 
 func (f *fakeProvider) total() int {

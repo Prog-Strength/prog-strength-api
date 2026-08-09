@@ -12,6 +12,7 @@ const (
 	EndpointDaily          Endpoint = "daily"
 	EndpointGeocodeDirect  Endpoint = "geocode_direct"
 	EndpointGeocodeReverse Endpoint = "geocode_reverse"
+	EndpointHistorical     Endpoint = "historical"
 )
 
 // Current is the normalized current-conditions reading, metric units.
@@ -24,6 +25,23 @@ type Current struct {
 	WindKMH    float64 `json:"wind_kmh"`
 	Condition  string  `json:"condition"`
 	Icon       string  `json:"icon"`
+}
+
+// Observation is one historical reading at a specific hour, metric units.
+// Deliberately NOT Current: Current is the tile's shape and carries no dew
+// point, wind direction, or precipitation, and no observation timestamp —
+// for a forecast "now" is implicit, for a stored reading it is the point.
+type Observation struct {
+	ObservedAt time.Time `json:"observed_at"`
+	TempC      float64   `json:"temp_c"`
+	FeelsLikeC float64   `json:"feels_like_c"`
+	DewPointC  float64   `json:"dew_point_c"`
+	Humidity   int       `json:"humidity"`
+	WindKMH    float64   `json:"wind_kmh"`
+	WindDeg    int       `json:"wind_deg"`
+	PrecipMM   float64   `json:"precip_mm"`
+	Condition  string    `json:"condition"`
+	Icon       string    `json:"icon"`
 }
 
 // HourlyBucket is one hour of the forecast strip.

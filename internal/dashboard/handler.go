@@ -294,6 +294,10 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	if enabled[TileQuote] {
 		out[string(TileQuote)] = buildQuote(userID, todayStr, h.resolveQuoteOffset(ctx, r, userID, todayStr))
 	}
+	// TileWeather deliberately has no builder and no section key here: the tile
+	// self-fetches from GET /weather, so a slow OpenWeather day can never slow
+	// the dashboard (SOW: "Why weather is not a summary section"). A layout
+	// containing it validates and renders; the summary just never mentions it.
 
 	httpresp.OK(w, "dashboard summary", out)
 }

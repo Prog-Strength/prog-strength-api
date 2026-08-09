@@ -8,7 +8,7 @@ func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
-		TileStreak, TileQuote,
+		TileStreak, TileQuote, TileWeather,
 	}
 	if len(Catalog) != len(all) {
 		t.Fatalf("Catalog has %d entries, expected %d", len(Catalog), len(all))
@@ -30,7 +30,7 @@ func TestCatalog_Order(t *testing.T) {
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
-		TileStreak, TileQuote,
+		TileStreak, TileQuote, TileWeather,
 	}
 	for i := range want {
 		if Catalog[i] != want[i] {
@@ -66,5 +66,8 @@ func TestValidTileID(t *testing.T) {
 	}
 	if !ValidTileID("quote") {
 		t.Error("quote should be valid")
+	}
+	if !ValidTileID("weather") {
+		t.Error("weather should be valid")
 	}
 }

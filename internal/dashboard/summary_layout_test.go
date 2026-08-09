@@ -415,6 +415,28 @@ func TestSummary_NoRunningFamilyTile_NoRunningSection(t *testing.T) {
 	assertKeysAbsent(t, data, "running", "running_log", "running_effort", "running_vertical")
 }
 
+// TestSummary_WeatherTile_NoSectionKey pins the SOW's "Why weather is not a
+// summary section": the weather tile self-fetches from GET /weather, so a
+// stored layout containing it must round-trip through the summary untouched —
+// a 200 with the tile still in `sections` and NO "weather" data key, never an
+// error. If a future refactor turns the per-tile gating into an exhaustive
+// switch, this test is what forces the explicit no-op case.
+func TestSummary_WeatherTile_NoSectionKey(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRunning, TileWeather, TileStreak})); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"running", "weather", "streak"}) {
+		t.Errorf("layout = %v, want [running weather streak]", layout)
+	}
+	assertKeysPresent(t, data, "running", "streak")
+	assertKeysAbsent(t, data, "weather")
+}
+
 // TestSummary_SectionsRoundTripToResponse pins the structure itself: the stored
 // sections come back on the wire with their ids, titles, collapsed flags, and
 // per-section tile order intact. The gating tests above all flatten, so this is

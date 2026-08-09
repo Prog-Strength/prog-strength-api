@@ -42,6 +42,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/usage"
 	"github.com/Prog-Strength/prog-strength-api/internal/user"
 	"github.com/Prog-Strength/prog-strength-api/internal/vectormemory"
+	"github.com/Prog-Strength/prog-strength-api/internal/weather"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopadmin"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
@@ -402,6 +403,37 @@ func New(cfg config.Config) (*Server, error) {
 		nutritionlookup.NewUSDAProvider(lookupClient, cfg.USDAFDCAPIKey, lookupLogger),
 	)
 
+	// Weather: the OpenWeather-backed dashboard tile — cache-first reads
+	// behind the durable daily call budget (sows/weather-dashboard-tile).
+	// Constructed unconditionally, like nutritionlookup: the repos are plain
+	// SQLite wrappers over the required database, and the [weather] `enabled`
+	// kill switch changes payloads (status "disabled"), never the wiring, so
+	// a disabled feature stays distinguishable from a bad deploy. Dedicated
+	// client with a timeout so a slow OpenWeather call can't stall a request
+	// indefinitely (mirrors lookupClient — the provider sets no timeout of
+	// its own). Handler mount lives in the JWT-gated group below; the gauge
+	// exporter starts alongside the WHOOP one once bgCtx exists.
+	weatherClient := &http.Client{Timeout: 8 * time.Second}
+	weatherLogger := logging.NewLogger(os.Stdout, cfg.LogLevel)
+	weatherCacheRepo := weather.NewSQLiteCacheRepository(database)
+	weatherLocationsRepo := weather.NewSQLiteLocationsRepository(database)
+	weatherLedger := weather.NewBudgetLedger(database)
+	weatherSvc := weather.NewService(
+		cfg.Weather,
+		weatherCacheRepo,
+		weatherLedger,
+		weather.NewOpenWeatherProvider(weatherClient, cfg.Weather.APIKey),
+		weatherLogger,
+	)
+	// userRepo satisfies the handler's narrow userReader seam — it only reads
+	// the distance-unit preference (°F/mph vs °C/km/h).
+	weatherHandler := weather.NewHandler(weatherSvc, weatherLocationsRepo, cfg.Weather, userRepo, weatherLogger)
+	// Boot-time signal (mirrors the auth line below): enabled=true with
+	// provider_configured=false means every /weather route will serve status
+	// "disabled" while api_weather_enabled reports 1 — an operator should see
+	// the missing OPENWEATHER_API_KEY here, not discover it from a blank tile.
+	log.Printf("weather: enabled=%v provider_configured=%v", cfg.Weather.Enabled, cfg.Weather.APIKey != "")
+
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
 	// /auth/dev/token when DEV_AUTH=true. Always mounted so that login
 	// failures surface as 404 (route absent) rather than mysterious 500s.
@@ -508,10 +540,11 @@ func New(cfg config.Config) (*Server, error) {
 	// repos (whoopConnRepo, whoopRecoveryRepo) were constructed above for the
 	// dashboard; they are REUSED here, not re-declared.
 	//
-	// Cancelable context for server-owned background goroutines (e.g. the WHOOP
-	// connection-gauge exporter). Run cancels it on shutdown. Created after the
-	// startup error-return paths above so it can't leak on a boot failure; the
-	// only consumer is the exporter goroutine started inside the whoop block.
+	// Cancelable context for server-owned background goroutines. Run cancels it
+	// on shutdown. Created after the startup error-return paths above so it
+	// can't leak on a boot failure; its consumers are the background exporters
+	// and workers started below — the WHOOP and weather gauge exporters, the
+	// calendar-sync connections exporter, and the activity photo worker.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
 	var whoopHandler *whoopsync.Handler
@@ -546,6 +579,14 @@ func New(cfg config.Config) (*Server, error) {
 	} else {
 		log.Println("whoop: disabled (WHOOP_CLIENT_ID / WHOOP_CLIENT_SECRET / WHOOP_REDIRECT_URL / WHOOP_TOKEN_ENC_KEY not configured)")
 	}
+
+	// Weather budget/cache gauges: a read-only SQLite exporter, same shape and
+	// lifecycle as the WHOOP connections exporter above (refresh now, then every
+	// 5 minutes, until bgCtx cancels on shutdown). Started unconditionally —
+	// it never calls OpenWeather so it cannot spend budget, and it publishes
+	// the enabled/disabled gauge itself, so a disabled deploy still reports
+	// its (zero) spend to the budget alerts.
+	go weather.NewExporter(cfg.Weather, weatherLedger, weatherCacheRepo, weatherLocationsRepo).Run(bgCtx)
 
 	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)
@@ -583,6 +624,10 @@ func New(cfg config.Config) (*Server, error) {
 		// durable cache. Auth-gated alongside nutrition: public food
 		// data, but the endpoint spends shared provider quota.
 		nutritionlookup.NewHandler(nutritionLookupSvc, lookupLogger).Mount(r)
+		// Weather — the five /weather routes for the dashboard tile.
+		// Auth-gated alongside nutrition lookup for the same reason: public
+		// data, but every request spends against a shared provider budget.
+		weatherHandler.Mount(r)
 		// Bodyweight lives in its own package — independent concept,
 		// independent read paths — and shares the same JWT-gated
 		// router group. Needs the user repository to default unit

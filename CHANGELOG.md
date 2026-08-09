@@ -1,3 +1,10 @@
+# [0.109.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.108.1...v0.109.0) (2026-08-09)
+
+
+### Features
+
+* **weather:** capture activity conditions at import, with a paced backfill ([#125](https://github.com/Prog-Strength/prog-strength-api/issues/125)) ([188eea8](https://github.com/Prog-Strength/prog-strength-api/commit/188eea8eb8dceda370e4c1fa25755f487313a04c))
+
 ## [0.108.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.108.0...v0.108.1) (2026-08-09)
 
 

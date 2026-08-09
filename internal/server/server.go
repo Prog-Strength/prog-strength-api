@@ -428,6 +428,11 @@ func New(cfg config.Config) (*Server, error) {
 	// userRepo satisfies the handler's narrow userReader seam — it only reads
 	// the distance-unit preference (°F/mph vs °C/km/h).
 	weatherHandler := weather.NewHandler(weatherSvc, weatherLocationsRepo, cfg.Weather, userRepo, weatherLogger)
+	// Boot-time signal (mirrors the auth line below): enabled=true with
+	// provider_configured=false means every /weather route will serve status
+	// "disabled" while api_weather_enabled reports 1 — an operator should see
+	// the missing OPENWEATHER_API_KEY here, not discover it from a blank tile.
+	log.Printf("weather: enabled=%v provider_configured=%v", cfg.Weather.Enabled, cfg.Weather.APIKey != "")
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
 	// /auth/dev/token when DEV_AUTH=true. Always mounted so that login
@@ -535,10 +540,11 @@ func New(cfg config.Config) (*Server, error) {
 	// repos (whoopConnRepo, whoopRecoveryRepo) were constructed above for the
 	// dashboard; they are REUSED here, not re-declared.
 	//
-	// Cancelable context for server-owned background goroutines (e.g. the WHOOP
-	// connection-gauge exporter). Run cancels it on shutdown. Created after the
-	// startup error-return paths above so it can't leak on a boot failure; the
-	// only consumer is the exporter goroutine started inside the whoop block.
+	// Cancelable context for server-owned background goroutines. Run cancels it
+	// on shutdown. Created after the startup error-return paths above so it
+	// can't leak on a boot failure; its consumers are the background exporters
+	// and workers started below — the WHOOP and weather gauge exporters, the
+	// calendar-sync connections exporter, and the activity photo worker.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
 	var whoopHandler *whoopsync.Handler

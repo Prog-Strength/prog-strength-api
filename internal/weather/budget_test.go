@@ -66,6 +66,30 @@ func TestBudgetLedgerReserveBoundary(t *testing.T) {
 	}
 }
 
+// TestBudgetLedgerReserveRejectsNonPositiveN pins the guard: a zero or
+// negative n errors out without touching the ledger, so a buggy caller can
+// never silently refund spent budget.
+func TestBudgetLedgerReserveRejectsNonPositiveN(t *testing.T) {
+	const ceiling = 5
+	ledger := NewBudgetLedger(dbtest.New(t))
+	fixLedgerClock(ledger, time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC))
+	ctx := context.Background()
+	seedUsed(t, ledger, 3)
+
+	for _, n := range []int{0, -1, -3} {
+		if err := ledger.Reserve(ctx, n, ceiling); err == nil {
+			t.Errorf("Reserve(%d, %d) = nil, want error", n, ceiling)
+		}
+	}
+	got, err := ledger.UsedToday(ctx)
+	if err != nil {
+		t.Fatalf("UsedToday: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("UsedToday after rejected reserves = %d, want 3 (untouched)", got)
+	}
+}
+
 // TestBudgetLedgerCeilingIsPerCall proves the ceiling is the caller's
 // parameter, not ledger state: the same day's row is judged against whatever
 // ceiling each Reserve passes.

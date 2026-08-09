@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -28,7 +29,15 @@ func NewBudgetLedger(db *sql.DB) *BudgetLedger {
 // three calls and reserving them atomically avoids a half-refreshed location
 // that consumed budget for a card it cannot draw.
 func (l *BudgetLedger) Reserve(ctx context.Context, n, ceiling int) error {
-	day := l.now().UTC().Format("2006-01-02")
+	// A reservation never releases budget: n <= 0 would silently refund
+	// spend (or no-op) and undermine the cap, so it is a caller bug.
+	if n <= 0 {
+		return fmt.Errorf("weather: Reserve n must be positive, got %d", n)
+	}
+	// One clock read for the day and both updated_at stamps: separate reads
+	// straddling UTC midnight could stamp updated_at a day after usage_date.
+	now := l.now().UTC()
+	day := now.Format("2006-01-02")
 	tx, err := l.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -39,14 +48,14 @@ func (l *BudgetLedger) Reserve(ctx context.Context, n, ceiling int) error {
 		INSERT INTO weather_call_budget (usage_date, calls_used, updated_at)
 		VALUES (?, 0, ?)
 		ON CONFLICT(usage_date) DO NOTHING
-	`, day, l.now().UTC()); err != nil {
+	`, day, now); err != nil {
 		return err
 	}
 	res, err := tx.ExecContext(ctx, `
 		UPDATE weather_call_budget
 		SET calls_used = calls_used + ?, updated_at = ?
 		WHERE usage_date = ? AND calls_used + ? <= ?
-	`, n, l.now().UTC(), day, n, ceiling)
+	`, n, now, day, n, ceiling)
 	if err != nil {
 		return err
 	}

@@ -3,20 +3,26 @@ package weather
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/Prog-Strength/prog-strength-api/internal/db/dbtest"
 )
 
+// defaultActivityStart is the start_time mustInsertActivity uses when a test
+// does not care about ordering.
+var defaultActivityStart = time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
+
 // mustInsertActivity inserts a live activity so activity_weather rows have a
 // parent to reference. Mirrors the seed shape used by the other packages'
-// activity tests.
-func mustInsertActivity(t *testing.T, db *sql.DB, activityID, userID string) {
+// activity tests. start_time is bound as a time.Time exactly as the activity
+// repository binds it, so ordering tests sort the same text production stores.
+func mustInsertActivity(t *testing.T, db *sql.DB, activityID, userID string, startTime time.Time) {
 	t.Helper()
 	_, err := db.Exec(`
 		INSERT INTO activities (id, user_id, activity_type, ingest_source, source_activity_id,
 			start_time, duration_seconds, tcx_s3_key, created_at, updated_at)
-		VALUES (?, ?, 'running', 'manual_tcx', ?, '2026-08-09T14:00:00Z', 1800, '', '2026-08-09T15:00:00Z', '2026-08-09T15:00:00Z')
-	`, activityID, userID, activityID)
+		VALUES (?, ?, 'running', 'manual_tcx', ?, ?, 1800, '', '2026-08-09T15:00:00Z', '2026-08-09T15:00:00Z')
+	`, activityID, userID, activityID, startTime.UTC())
 	if err != nil {
 		t.Fatalf("insert activity %q: %v", activityID, err)
 	}
@@ -40,7 +46,7 @@ func TestMigration057ActivityWeatherTableExists(t *testing.T) {
 func TestMigration057ActivityWeatherStatusCheckRejectsUnknown(t *testing.T) {
 	database := dbtest.New(t)
 	mustInsertUser(t, database, "u1")
-	mustInsertActivity(t, database, "a1", "u1")
+	mustInsertActivity(t, database, "a1", "u1", defaultActivityStart)
 
 	_, err := database.Exec(`
 		INSERT INTO activity_weather (activity_id, status, fetched_at)
@@ -51,7 +57,7 @@ func TestMigration057ActivityWeatherStatusCheckRejectsUnknown(t *testing.T) {
 	}
 
 	for _, status := range []string{"ok", "no_coordinates", "unavailable"} {
-		mustInsertActivity(t, database, "a-"+status, "u1")
+		mustInsertActivity(t, database, "a-"+status, "u1", defaultActivityStart)
 		if _, err := database.Exec(`
 			INSERT INTO activity_weather (activity_id, status, fetched_at)
 			VALUES (?, ?, '2026-08-09T15:00:00Z')
@@ -66,7 +72,7 @@ func TestMigration057ActivityWeatherStatusCheckRejectsUnknown(t *testing.T) {
 func TestMigration057ActivityWeatherCascadesFromActivity(t *testing.T) {
 	database := dbtest.New(t)
 	mustInsertUser(t, database, "u1")
-	mustInsertActivity(t, database, "a1", "u1")
+	mustInsertActivity(t, database, "a1", "u1", defaultActivityStart)
 
 	if _, err := database.Exec(`
 		INSERT INTO activity_weather (activity_id, status, lat, lon, observed_at, temp_c, fetched_at)

@@ -317,19 +317,26 @@ type CalendarSyncConfig struct {
 // WeatherConfig groups the OpenWeather dashboard-tile integration knobs.
 // APIKey is the one secret (env-interpolated); everything else is a public
 // literal in config.toml. See sows/weather-dashboard-tile.md.
+//
+// CaptureActivityWeather is gated by Enabled: the master switch off means no
+// capture regardless of this value. Like every other knob here it takes its
+// shipped value from config.toml and is false when the key is absent, which
+// is the safe direction for anything that spends provider budget.
+// See sows/activity-weather-conditions.md.
 type WeatherConfig struct {
-	Enabled               bool
-	APIKey                string
-	DailyCallBudget       int
-	AllowPaidOverage      bool
-	DailyCallHardCeiling  int
-	CountGeocodingCalls   bool
-	CurrentTTLMinutes     int
-	HourlyTTLMinutes      int
-	DailyTTLMinutes       int
-	GeocodingTTLDays      int
-	MaxLocations          int
-	EagerLoadAllLocations bool
+	Enabled                bool
+	APIKey                 string
+	DailyCallBudget        int
+	AllowPaidOverage       bool
+	DailyCallHardCeiling   int
+	CountGeocodingCalls    bool
+	CurrentTTLMinutes      int
+	HourlyTTLMinutes       int
+	DailyTTLMinutes        int
+	GeocodingTTLDays       int
+	MaxLocations           int
+	EagerLoadAllLocations  bool
+	CaptureActivityWeather bool
 }
 
 // VideosConfig groups the Activity Videos tunables. All are non-secret public
@@ -470,18 +477,19 @@ type fileConfig struct {
 		MaxAttempts         int  `toml:"max_attempts"`
 	} `toml:"calendar_sync"`
 	Weather struct {
-		Enabled               bool   `toml:"enabled"`
-		APIKey                string `toml:"api_key"`
-		DailyCallBudget       int    `toml:"daily_call_budget"`
-		AllowPaidOverage      bool   `toml:"allow_paid_overage"`
-		DailyCallHardCeiling  int    `toml:"daily_call_hard_ceiling"`
-		CountGeocodingCalls   bool   `toml:"count_geocoding_calls"`
-		CurrentTTLMinutes     int    `toml:"current_ttl_minutes"`
-		HourlyTTLMinutes      int    `toml:"hourly_ttl_minutes"`
-		DailyTTLMinutes       int    `toml:"daily_ttl_minutes"`
-		GeocodingTTLDays      int    `toml:"geocoding_ttl_days"`
-		MaxLocations          int    `toml:"max_locations"`
-		EagerLoadAllLocations bool   `toml:"eager_load_all_locations"`
+		Enabled                bool   `toml:"enabled"`
+		APIKey                 string `toml:"api_key"`
+		DailyCallBudget        int    `toml:"daily_call_budget"`
+		AllowPaidOverage       bool   `toml:"allow_paid_overage"`
+		DailyCallHardCeiling   int    `toml:"daily_call_hard_ceiling"`
+		CountGeocodingCalls    bool   `toml:"count_geocoding_calls"`
+		CurrentTTLMinutes      int    `toml:"current_ttl_minutes"`
+		HourlyTTLMinutes       int    `toml:"hourly_ttl_minutes"`
+		DailyTTLMinutes        int    `toml:"daily_ttl_minutes"`
+		GeocodingTTLDays       int    `toml:"geocoding_ttl_days"`
+		MaxLocations           int    `toml:"max_locations"`
+		EagerLoadAllLocations  bool   `toml:"eager_load_all_locations"`
+		CaptureActivityWeather bool   `toml:"capture_activity_weather"`
 	} `toml:"weather"`
 	Photos struct {
 		MaxPerActivity      int   `toml:"max_per_activity"`
@@ -670,18 +678,19 @@ func Load(defaultTOML []byte) (Config, error) {
 			MaxAttempts:         fc.CalendarSync.MaxAttempts,
 		},
 		Weather: WeatherConfig{
-			Enabled:               fc.Weather.Enabled,
-			APIKey:                fc.Weather.APIKey,
-			DailyCallBudget:       fc.Weather.DailyCallBudget,
-			AllowPaidOverage:      fc.Weather.AllowPaidOverage,
-			DailyCallHardCeiling:  fc.Weather.DailyCallHardCeiling,
-			CountGeocodingCalls:   fc.Weather.CountGeocodingCalls,
-			CurrentTTLMinutes:     fc.Weather.CurrentTTLMinutes,
-			HourlyTTLMinutes:      fc.Weather.HourlyTTLMinutes,
-			DailyTTLMinutes:       fc.Weather.DailyTTLMinutes,
-			GeocodingTTLDays:      fc.Weather.GeocodingTTLDays,
-			MaxLocations:          fc.Weather.MaxLocations,
-			EagerLoadAllLocations: fc.Weather.EagerLoadAllLocations,
+			Enabled:                fc.Weather.Enabled,
+			APIKey:                 fc.Weather.APIKey,
+			DailyCallBudget:        fc.Weather.DailyCallBudget,
+			AllowPaidOverage:       fc.Weather.AllowPaidOverage,
+			DailyCallHardCeiling:   fc.Weather.DailyCallHardCeiling,
+			CountGeocodingCalls:    fc.Weather.CountGeocodingCalls,
+			CurrentTTLMinutes:      fc.Weather.CurrentTTLMinutes,
+			HourlyTTLMinutes:       fc.Weather.HourlyTTLMinutes,
+			DailyTTLMinutes:        fc.Weather.DailyTTLMinutes,
+			GeocodingTTLDays:       fc.Weather.GeocodingTTLDays,
+			MaxLocations:           fc.Weather.MaxLocations,
+			EagerLoadAllLocations:  fc.Weather.EagerLoadAllLocations,
+			CaptureActivityWeather: fc.Weather.CaptureActivityWeather,
 		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      fc.Photos.MaxPerActivity,

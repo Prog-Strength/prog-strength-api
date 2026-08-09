@@ -317,6 +317,15 @@ max_locations = 5
 # either way.
 eager_load_all_locations = false
 
+# Capture historical conditions on activity import. false ⇒ no import-time
+# provider calls and no new activity_weather rows; existing rows still render.
+# The master `enabled` switch above gates this too — false there disables
+# capture regardless of this value. Separate from `enabled` because the failure
+# modes differ: `enabled = false` is "the vendor integration is off", this is
+# "stop capturing but keep the tile working" — what an operator wants during a
+# backfill that needs the whole day's budget.
+capture_activity_weather = true
+
 [vectormemory]
 # Seeds the Agent Vector Memory feature (sows/agent-vector-memory.md).
 # Master kill-switch: false ⇒ no distillation, no retrieval, no behavior change.

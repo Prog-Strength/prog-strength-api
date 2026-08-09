@@ -409,17 +409,30 @@ func (s *Service) classify(ctx context.Context, key string, ttl time.Duration, d
 	return cacheStale, row.FetchedAt
 }
 
-// timedFetch wraps one provider call with the latency histogram and the
-// per-endpoint ok/error counter.
+// observeCall records one provider call on the latency histogram and the
+// per-endpoint ok/error counter. Package-level rather than a Service method
+// because the activity capturer makes provider calls the Service never sees:
+// EndpointHistorical has to land in the very series the shipped dashboard
+// already draws, and a second copy of these two lines is how that quietly
+// stops being true.
+func observeCall(endpoint Endpoint, started time.Time, err error, now func() time.Time) {
+	providerLatency.WithLabelValues(string(endpoint)).Observe(now().Sub(started).Seconds())
+	if err != nil {
+		providerCallsTotal.WithLabelValues(string(endpoint), "error").Inc()
+		return
+	}
+	providerCallsTotal.WithLabelValues(string(endpoint), "ok").Inc()
+}
+
+// timedFetch wraps one cache-backed provider call with the shared
+// instrumentation.
 func (s *Service) timedFetch(ctx context.Context, endpoint Endpoint, fetch func(ctx context.Context) (string, error)) (string, error) {
 	started := s.now()
 	payload, err := fetch(ctx)
-	providerLatency.WithLabelValues(string(endpoint)).Observe(s.now().Sub(started).Seconds())
+	observeCall(endpoint, started, err, s.now)
 	if err != nil {
-		providerCallsTotal.WithLabelValues(string(endpoint), "error").Inc()
 		return "", err
 	}
-	providerCallsTotal.WithLabelValues(string(endpoint), "ok").Inc()
 	return payload, nil
 }
 

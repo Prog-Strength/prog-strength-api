@@ -418,6 +418,7 @@ func New(cfg config.Config) (*Server, error) {
 	weatherCacheRepo := weather.NewSQLiteCacheRepository(database)
 	weatherLocationsRepo := weather.NewSQLiteLocationsRepository(database)
 	weatherLedger := weather.NewBudgetLedger(database)
+	weatherActivityRepo := weather.NewSQLiteActivityWeatherRepository(database)
 	weatherSvc := weather.NewService(
 		cfg.Weather,
 		weatherCacheRepo,
@@ -586,7 +587,7 @@ func New(cfg config.Config) (*Server, error) {
 	// it never calls OpenWeather so it cannot spend budget, and it publishes
 	// the enabled/disabled gauge itself, so a disabled deploy still reports
 	// its (zero) spend to the budget alerts.
-	go weather.NewExporter(cfg.Weather, weatherLedger, weatherCacheRepo, weatherLocationsRepo).Run(bgCtx)
+	go weather.NewExporter(cfg.Weather, weatherLedger, weatherCacheRepo, weatherLocationsRepo, weatherActivityRepo).Run(bgCtx)
 
 	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)

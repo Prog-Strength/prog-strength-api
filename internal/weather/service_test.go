@@ -54,8 +54,11 @@ type fakeProvider struct {
 	direct     []GeoResult
 	reverse    []GeoResult
 	historical Observation
-	errs       map[Endpoint]error
-	calls      map[Endpoint]int
+	// historicalAt records the timestamp Historical was last asked for — the
+	// only way to assert the start-time rounding from outside.
+	historicalAt time.Time
+	errs         map[Endpoint]error
+	calls        map[Endpoint]int
 }
 
 func newFakeProvider() *fakeProvider {
@@ -121,6 +124,7 @@ func (f *fakeProvider) GeocodeReverse(ctx context.Context, lat, lon float64) ([]
 
 func (f *fakeProvider) Historical(ctx context.Context, lat, lon float64, at time.Time) (Observation, error) {
 	f.calls[EndpointHistorical]++
+	f.historicalAt = at
 	if err := f.errs[EndpointHistorical]; err != nil {
 		return Observation{}, err
 	}

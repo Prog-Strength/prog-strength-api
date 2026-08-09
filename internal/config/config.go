@@ -213,6 +213,7 @@ type Config struct {
 	// kill switch, the daily provider-call budget, the cache TTLs, and the
 	// product knobs). See WeatherConfig.
 	Weather WeatherConfig
+
 	// Photos configures the Activity Photos feature: per-activity caps, the
 	// upload-size ceiling, the derivative image dimensions/quality, the
 	// presign window, and the caption length limit. See PhotosConfig.

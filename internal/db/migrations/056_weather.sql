@@ -8,6 +8,9 @@
 -- constraint would fight the intermediate states. The 5-location cap is
 -- enforced in Go (migration 049's precedent: the Go layer is the source of
 -- truth, SQL carries no CHECK).
+-- Date types deliberately mirror their precedents: TIMESTAMP columns follow
+-- migration 049's tables; weather_cache's DATETIME columns follow 018's
+-- nutrition_lookup_cache.
 CREATE TABLE user_weather_locations (
     id         TEXT PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -213,13 +213,7 @@ func metricParams(lat, lon float64) url.Values {
 func normalizeGeo(entries []owGeoEntry) []GeoResult {
 	out := make([]GeoResult, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, GeoResult{
-			Name:    e.Name,
-			State:   e.State,
-			Country: e.Country,
-			Lat:     e.Lat,
-			Lon:     e.Lon,
-		})
+		out = append(out, GeoResult(e))
 	}
 	return out
 }

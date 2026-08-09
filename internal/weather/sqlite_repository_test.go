@@ -155,10 +155,10 @@ func TestCacheLastSuccess(t *testing.T) {
 
 	older := CacheRow{CacheKey: "a", PayloadJSON: `{}`, FetchedAt: t0.Add(-2 * time.Hour), LastUsedAt: t0}
 	newer := CacheRow{CacheKey: "b", PayloadJSON: `{}`, FetchedAt: t0, LastUsedAt: t0}
-	if err := repo.Put(ctx, older); err != nil {
+	if err = repo.Put(ctx, older); err != nil {
 		t.Fatalf("Put older: %v", err)
 	}
-	if err := repo.Put(ctx, newer); err != nil {
+	if err = repo.Put(ctx, newer); err != nil {
 		t.Fatalf("Put newer: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestLocationsReplaceAllReorderPreservesIDs(t *testing.T) {
 	// Reorder: Boulder first. IDs and coordinates must come through intact,
 	// only positions change.
 	reordered := []Location{before[1], before[0]}
-	if err := repo.ReplaceAll(ctx, "user-a", reordered); err != nil {
+	if err = repo.ReplaceAll(ctx, "user-a", reordered); err != nil {
 		t.Fatalf("ReplaceAll reordered: %v", err)
 	}
 	after, err := repo.List(ctx, "user-a")

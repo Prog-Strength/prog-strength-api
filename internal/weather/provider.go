@@ -2,7 +2,7 @@ package weather
 
 import "context"
 
-// Provider is the vendor-swap seam, modelled on nutritionlookup.Provider.
+// Provider is the vendor-swap seam, modeled on nutritionlookup.Provider.
 // Implementations must be safe for concurrent use, always return METRIC
 // values, and surface HTTP failures as errors — the Service decides how to
 // degrade. One method per metered endpoint so the budget ledger can reserve

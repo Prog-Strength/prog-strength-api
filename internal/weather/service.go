@@ -42,7 +42,7 @@ type Reading struct {
 	Daily     *Daily
 }
 
-// Service orchestrates the cache-first flow modelled on nutritionlookup:
+// Service orchestrates the cache-first flow modeled on nutritionlookup:
 // fresh cache answers directly; anything non-fresh reserves budget BEFORE
 // calling the provider; provider or budget failures degrade to stale cache
 // where it exists rather than erroring. The Service works on coordinates —

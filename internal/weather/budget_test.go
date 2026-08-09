@@ -138,7 +138,7 @@ func TestBudgetLedgerUTCDateRollover(t *testing.T) {
 		t.Fatalf("UsedToday after rollover = %d, want 0 (fresh day)", got)
 	}
 
-	if err := ledger.Reserve(ctx, 1, 10); err != nil {
+	if err = ledger.Reserve(ctx, 1, 10); err != nil {
 		t.Fatalf("Reserve after rollover: %v", err)
 	}
 	got, err = ledger.UsedToday(ctx)

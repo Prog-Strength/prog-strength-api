@@ -57,7 +57,7 @@ func (l *BudgetLedger) Reserve(ctx context.Context, n, ceiling int) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO weather_call_budget (usage_date, calls_used, updated_at)
 		VALUES (?, 0, ?)
 		ON CONFLICT(usage_date) DO NOTHING

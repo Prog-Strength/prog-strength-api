@@ -1,3 +1,10 @@
+# [0.108.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.107.0...v0.108.0) (2026-08-09)
+
+
+### Features
+
+* **weather:** cache-first weather service with a durable daily call budget ([#123](https://github.com/Prog-Strength/prog-strength-api/issues/123)) ([241c988](https://github.com/Prog-Strength/prog-strength-api/commit/241c988205ab8a138f3cf7b6f88faf724e33571d))
+
 # [0.107.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.106.0...v0.107.0) (2026-08-08)
 
 

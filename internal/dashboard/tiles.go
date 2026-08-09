@@ -30,6 +30,11 @@ const (
 	// static corpus compiled into the binary (internal/quotes), so it has no
 	// repository, no window, and no empty state.
 	TileQuote TileID = "quote"
+	// TileWeather has NO summary section: the tile self-fetches from
+	// GET /weather so a slow OpenWeather day can never slow the dashboard
+	// (see the SOW's "Why weather is not a summary section"). The catalog
+	// entry exists only so layouts can place and validate the tile.
+	TileWeather TileID = "weather"
 )
 
 // Catalog is the ordered set of every tile. Order fixes how tiles appear in the
@@ -40,7 +45,7 @@ var Catalog = []TileID{
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
-	TileStreak, TileQuote,
+	TileStreak, TileQuote, TileWeather,
 }
 
 var catalogSet = func() map[TileID]bool {

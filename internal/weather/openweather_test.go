@@ -133,6 +133,61 @@ func TestOpenWeatherCurrent(t *testing.T) {
 	}
 }
 
+// The empty-weather-array fixtures pin the documented degradation in
+// openweather.go: a reading with no weather tag must keep its temperatures
+// and degrade Condition/Icon to empty rather than failing the whole call.
+const owCurrentNoWeatherJSON = `{
+	"lat": 39.74, "lon": -104.99, "timezone": "America/Denver",
+	"dt": 1754740800,
+	"temp": 21.4,
+	"feels_like": 20.1,
+	"humidity": 45,
+	"wind_speed": 2.5,
+	"weather": []
+}`
+
+func TestOpenWeatherCurrentEmptyWeatherArrayDegrades(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/current", owCurrentNoWeatherJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Current(context.Background(), 39.7392, -104.9847)
+	if err != nil {
+		t.Fatalf("Current with empty weather array: %v", err)
+	}
+	if got.TempC != 21.4 {
+		t.Errorf("TempC = %v, want 21.4 (temperatures must survive)", got.TempC)
+	}
+	if !almostEqual(got.WindKMH, 9.0) {
+		t.Errorf("WindKMH = %v, want 9.0", got.WindKMH)
+	}
+	if got.Condition != "" {
+		t.Errorf("Condition = %q, want empty when weather array is empty", got.Condition)
+	}
+	if got.Icon != "" {
+		t.Errorf("Icon = %q, want empty when weather array is empty", got.Icon)
+	}
+}
+
+func TestOpenWeatherHourlyEmptyWeatherArrayDegrades(t *testing.T) {
+	body := `{"data": [{"dt": 1754740800, "temp": 20.5, "weather": []}]}`
+	srv, _, _ := owServer(t, "/data/4.0/timeline/1h", body)
+	p := newTestProvider(srv)
+
+	got, err := p.Hourly(context.Background(), 39.7392, -104.9847)
+	if err != nil {
+		t.Fatalf("Hourly with empty weather array: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(buckets) = %d, want 1", len(got))
+	}
+	if got[0].TempC != 20.5 {
+		t.Errorf("TempC = %v, want 20.5 (temperatures must survive)", got[0].TempC)
+	}
+	if got[0].Icon != "" {
+		t.Errorf("Icon = %q, want empty when weather array is empty", got[0].Icon)
+	}
+}
+
 func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
 	srv, query, path := owServer(t, "/data/4.0/timeline/1h", owHourlyJSON())
 	p := newTestProvider(srv)

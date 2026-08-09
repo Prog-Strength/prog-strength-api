@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"io"
 	"log"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +107,11 @@ type env struct {
 	ledger   *weather.BudgetLedger
 	provider *fakeProvider
 	pacer    *fakePacer
-	deps     deps
+	cfg      config.WeatherConfig
+	// logs captures the run's operator-facing output, which is the only
+	// externally visible product of a --dry-run.
+	logs *bytes.Buffer
+	deps deps
 }
 
 func newEnv(t *testing.T, budget int) *env {
@@ -128,20 +134,38 @@ func newEnv(t *testing.T, budget int) *env {
 		CaptureActivityWeather: true,
 	}
 
-	return &env{
+	logs := &bytes.Buffer{}
+	e := &env{
 		t:        t,
 		db:       database,
 		repo:     repo,
 		ledger:   ledger,
 		provider: provider,
 		pacer:    pacer,
+		cfg:      cfg,
+		logs:     logs,
 		deps: deps{
-			repo:     repo,
-			capturer: weather.NewActivityCapturer(cfg, repo, ledger, provider, slog.New(slog.NewTextHandler(io.Discard, nil))),
-			pacer:    pacer,
-			logger:   log.New(io.Discard, "", 0),
+			repo:   repo,
+			pacer:  pacer,
+			logger: log.New(logs, "", 0),
 		},
 	}
+	e.deps.capturer = e.newCapturer(cfg)
+	return e
+}
+
+func (e *env) newCapturer(cfg config.WeatherConfig) *weather.ActivityCapturer {
+	return weather.NewActivityCapturer(cfg, e.repo, e.ledger, e.provider, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// disableCapture rebuilds the capturer with the capture knob off — the posture
+// of a deploy where the operator has counted the history but not yet flipped
+// the switch.
+func (e *env) disableCapture() {
+	e.t.Helper()
+	cfg := e.cfg
+	cfg.CaptureActivityWeather = false
+	e.deps.capturer = e.newCapturer(cfg)
 }
 
 func (e *env) run(opts options) {
@@ -229,6 +253,13 @@ func (e *env) requireCalls(want int) {
 	e.t.Helper()
 	if e.provider.calls != want {
 		e.t.Errorf("provider calls = %d, want %d", e.provider.calls, want)
+	}
+}
+
+func (e *env) requireLogged(want string) {
+	e.t.Helper()
+	if got := e.logs.String(); !strings.Contains(got, want) {
+		e.t.Errorf("run printed %q, want it to contain %q", got, want)
 	}
 }
 
@@ -371,6 +402,71 @@ func TestRetryUnavailableClearsOnlyUnavailable(t *testing.T) {
 	// no_coordinates survives: a position that was never recorded cannot be
 	// re-derived, so retrying it would spend a call to learn nothing.
 	e.requireStatus("nogps", weather.ActivityStatusNoCoordinates)
+}
+
+// --dry-run --retry-unavailable is the one combination where a preview could
+// destroy data: --retry-unavailable's clear is the most destructive thing this
+// command does, and the flag beside it promises that nothing was written. The
+// preview counts the rows instead.
+func TestDryRunWithRetryUnavailableClearsNothing(t *testing.T) {
+	e := newEnv(t, 100)
+	e.seedOutdoor("gone", 0, 10.2)
+	// Seeded directly rather than via a failed run, so "no budget was spent"
+	// is measured from zero.
+	lat, lon := 10.2, -104.9847
+	if err := e.repo.Put(context.Background(), weather.ActivityWeather{
+		ActivityID: "gone",
+		Status:     weather.ActivityStatusUnavailable,
+		Lat:        &lat,
+		Lon:        &lon,
+		FetchedAt:  baseStart,
+	}); err != nil {
+		t.Fatalf("seed unavailable row: %v", err)
+	}
+
+	e.run(options{dryRun: true, retryUnavailable: true, rate: 1})
+
+	// The row survives. Deleting it would have thrown away the record of a
+	// call already paid for, and left the activity eligible for a second one.
+	e.requireStatus("gone", weather.ActivityStatusUnavailable)
+	e.requireCalls(0)
+	if used := e.usedBudget(); used != 0 {
+		t.Errorf("budget used = %d, want 0 (a dry run must reserve nothing)", used)
+	}
+	// The preview still has to report the retry it declined to perform.
+	e.requireLogged("would clear 1 unavailable rows")
+}
+
+// The Enabled() precondition is checked once, before the loop: with capture
+// off every activity would fail identically, and a run that logged that a few
+// thousand times would still look like it tried.
+func TestCaptureDisabledFailsTheRunButNotTheDryRun(t *testing.T) {
+	e := newEnv(t, 100)
+	e.seedOutdoor("a1", 0, 10.1)
+	e.disableCapture()
+
+	err := backfill(context.Background(), e.deps, options{rate: 1})
+	if err == nil {
+		t.Fatal("backfill with capture disabled = nil error, want the precondition failure")
+	}
+	// The message is the only thing the operator gets, so it has to name every
+	// switch that could be the one that is off.
+	for _, knob := range []string{"enabled = true", "capture_activity_weather = true", "OPENWEATHER_API_KEY"} {
+		if !strings.Contains(err.Error(), knob) {
+			t.Errorf("error %q does not name %q", err, knob)
+		}
+	}
+	e.requireCalls(0)
+	e.requireNoRow("a1")
+
+	// --dry-run still works with capture off, deliberately: counting the
+	// history is exactly what an operator does BEFORE flipping the knob, which
+	// is why the precondition is checked after the dry-run return and not
+	// before it.
+	e.run(options{dryRun: true, rate: 1})
+	e.requireCalls(0)
+	e.requireNoRow("a1")
+	e.requireLogged("1 activities eligible")
 }
 
 func TestIndoorActivityIsSkippedUntilRetagged(t *testing.T) {

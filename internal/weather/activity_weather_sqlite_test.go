@@ -333,8 +333,15 @@ func TestListPendingReportsCoordinatesOfFirstPositionedTrackpoint(t *testing.T) 
 	// Sequence 1 has no fix yet — the start coordinate is the first point
 	// that actually carries one, not the first row.
 	mustInsertTrackpoint(t, database, "a1", 1, nil, nil)
-	mustInsertTrackpoint(t, database, "a1", 2, 39.7392, -104.9847)
-	mustInsertTrackpoint(t, database, "a1", 3, 40.0, -105.0)
+	// Sequences 2 and 3 are half-positioned, and they are what makes this a
+	// test of ONE trackpoint rather than of two independent minima: lat and lon
+	// are separate correlated subqueries, so dropping either one's check on the
+	// other column pairs a latitude from one point with a longitude from
+	// another and reports a coordinate no trackpoint ever recorded.
+	mustInsertTrackpoint(t, database, "a1", 2, 1.0, nil)
+	mustInsertTrackpoint(t, database, "a1", 3, nil, 2.0)
+	mustInsertTrackpoint(t, database, "a1", 4, 39.7392, -104.9847)
+	mustInsertTrackpoint(t, database, "a1", 5, 40.0, -105.0)
 
 	pending, err := repo.ListPending(context.Background(), 0)
 	if err != nil {
@@ -344,7 +351,7 @@ func TestListPendingReportsCoordinatesOfFirstPositionedTrackpoint(t *testing.T) 
 		t.Fatalf("ListPending = %+v, want one activity", pending)
 	}
 	if pending[0].Lat == nil || pending[0].Lon == nil {
-		t.Fatalf("coordinates = %v/%v, want the sequence-2 fix", pending[0].Lat, pending[0].Lon)
+		t.Fatalf("coordinates = %v/%v, want the sequence-4 fix", pending[0].Lat, pending[0].Lon)
 	}
 	if *pending[0].Lat != 39.7392 || *pending[0].Lon != -104.9847 {
 		t.Errorf("coordinates = %v/%v, want 39.7392/-104.9847", *pending[0].Lat, *pending[0].Lon)
@@ -437,6 +444,63 @@ func TestClearUnavailableLeavesTerminalNoCoordinatesAndOKAlone(t *testing.T) {
 	}
 	if len(pending) != 2 {
 		t.Fatalf("ListPending after clear = %+v, want the two cleared activities", pending)
+	}
+}
+
+// CountUnavailable is what --dry-run prints instead of clearing, so it has to
+// describe exactly the set ClearUnavailable would delete — same statuses, same
+// soft-delete scope — and it has to leave every row in place.
+func TestCountUnavailableMatchesWhatClearWouldDelete(t *testing.T) {
+	repo, database := newActivityWeatherRepo(t)
+	ctx := context.Background()
+	for _, a := range []struct {
+		id      string
+		status  ActivityStatus
+		deleted bool
+	}{
+		{id: "gone-1", status: ActivityStatusUnavailable},
+		{id: "gone-2", status: ActivityStatusUnavailable},
+		{id: "dead", status: ActivityStatusUnavailable, deleted: true},
+		{id: "kept-nocoords", status: ActivityStatusNoCoordinates},
+		{id: "kept-ok", status: ActivityStatusOK},
+	} {
+		seedOutdoorRun(t, database, a.id, defaultActivityStart)
+		mustInsertTrackpoint(t, database, a.id, 1, 39.7392, -104.9847)
+		row := ActivityWeather{ActivityID: a.id, Status: a.status, FetchedAt: defaultActivityStart}
+		if a.status == ActivityStatusOK {
+			row = okRow(a.id)
+		}
+		if err := repo.Put(ctx, row); err != nil {
+			t.Fatalf("Put %s: %v", a.id, err)
+		}
+		if a.deleted {
+			mustSoftDelete(t, database, a.id)
+		}
+	}
+
+	count, err := repo.CountUnavailable(ctx)
+	if err != nil {
+		t.Fatalf("CountUnavailable: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("CountUnavailable = %d, want 2 (the soft-deleted row can never become eligible again)", count)
+	}
+
+	// Counting is a read: every row, including the ones it counted, survives.
+	var rows int
+	if scanErr := database.QueryRow(`SELECT COUNT(*) FROM activity_weather`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count rows: %v", scanErr)
+	}
+	if rows != 5 {
+		t.Fatalf("activity_weather has %d rows after CountUnavailable, want all 5", rows)
+	}
+
+	cleared, err := repo.ClearUnavailable(ctx)
+	if err != nil {
+		t.Fatalf("ClearUnavailable: %v", err)
+	}
+	if cleared != count {
+		t.Errorf("ClearUnavailable deleted %d rows, want the %d CountUnavailable promised", cleared, count)
 	}
 }
 

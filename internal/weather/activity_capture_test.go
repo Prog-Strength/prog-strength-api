@@ -227,6 +227,22 @@ func TestCaptureTransientErrorWritesNoRow(t *testing.T) {
 	}
 }
 
+// captureLabels is every band of activity_captures_total, so a test can assert
+// that an outcome moved NONE of them rather than only the one it thought of.
+var captureLabels = []string{
+	"ok", "failed",
+	string(ActivityStatusNoCoordinates), string(ActivityStatusUnavailable),
+}
+
+func readCaptureCounters(t *testing.T) map[string]float64 {
+	t.Helper()
+	out := make(map[string]float64, len(captureLabels))
+	for _, label := range captureLabels {
+		out[label] = testutil.ToFloat64(activityCapturesTotal.WithLabelValues(label))
+	}
+	return out
+}
+
 // TestCaptureNoHistoricalDataWritesNoRow: the definitive negative is returned
 // unwritten. Only the backfill turns it into a terminal 'unavailable' row, so
 // an import-time miss stays retryable.
@@ -236,10 +252,22 @@ func TestCaptureNoHistoricalDataWritesNoRow(t *testing.T) {
 	c, repo, _, database := newTestCapturer(t, captureCfg(), p)
 	seedOutdoorRun(t, database, "a1", defaultActivityStart)
 
+	before := readCaptureCounters(t)
 	if err := c.Capture(context.Background(), "a1", testLat, testLon, defaultActivityStart); !errors.Is(err, ErrNoHistoricalData) {
 		t.Fatalf("Capture = %v, want ErrNoHistoricalData", err)
 	}
 	requireNoRow(t, repo, "a1")
+
+	// No band moves, `unavailable` least of all: this capturer wrote no row,
+	// and the row the backfill may later write is what earns that count. The
+	// spend is already visible in provider_calls_total{historical,error}, so a
+	// `failed` increment here would double-count it into the band the
+	// dashboard reads as "stop and look".
+	for label, want := range before {
+		if got := testutil.ToFloat64(activityCapturesTotal.WithLabelValues(label)); got != want {
+			t.Errorf("activity_captures_total{%s} moved by %v, want 0", label, got-want)
+		}
+	}
 }
 
 // TestCaptureFeedsSharedProviderMetrics pins the observeCall refactor:

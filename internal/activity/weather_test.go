@@ -39,15 +39,16 @@ type weatherCall struct {
 	hasDeadline bool
 }
 
-// fakeWeatherCapturer records Capture calls and serves a canned row from Get.
+// fakeWeatherCapturer records Capture calls. It answers Get with "no row" and
+// nothing else: the detail-DTO tests read through the real repository instead
+// (see storedWeather), because a Get that ignores its activity id cannot fail
+// when the handler looks up the wrong one.
 type fakeWeatherCapturer struct {
 	mu    sync.Mutex
 	calls []weatherCall
 
-	// err is returned by every Capture; row/getErr answer every Get.
-	err    error
-	row    *weather.ActivityWeather
-	getErr error
+	// err is returned by every Capture.
+	err error
 
 	// release, when non-nil, holds Capture until the test closes it. It is
 	// what lets the detached test sample ctx.Err() strictly AFTER the request
@@ -83,7 +84,7 @@ func (f *fakeWeatherCapturer) Capture(ctx context.Context, activityID string, la
 }
 
 func (f *fakeWeatherCapturer) Get(context.Context, string) (*weather.ActivityWeather, error) {
-	return f.row, f.getErr
+	return nil, nil
 }
 
 // awaitCall blocks until one capture lands, or fails the test.
@@ -122,6 +123,46 @@ func newWeatherHandler(t *testing.T) (*Handler, *SQLiteRepository, *fakeWeatherC
 	fake := newFakeWeatherCapturer()
 	h.SetWeatherCapturer(fake)
 	return h, repo, fake
+}
+
+// storedWeather backs the seam's read with the REAL
+// weather.SQLiteActivityWeatherRepository, over the same database the handler
+// already reads from. The detail-DTO tests use it so "the DTO carries this
+// row" is a statement about a row on disk keyed by activity id, rather than
+// about a fake that answers every id with the same struct.
+//
+// Capture only ever runs as the detached spawn from importing a fixture, and
+// failing is the right answer there: the import path swallows it and writes no
+// row, so the DTO under test still describes exactly what the test stored.
+type storedWeather struct {
+	repo *weather.SQLiteActivityWeatherRepository
+}
+
+func (s storedWeather) Capture(context.Context, string, float64, float64, time.Time) error {
+	return errors.New("the detail-DTO tests capture nothing")
+}
+
+func (s storedWeather) Get(ctx context.Context, activityID string) (*weather.ActivityWeather, error) {
+	return s.repo.Get(ctx, activityID)
+}
+
+// newStoredWeatherHandler is newWeatherHandler with durable rows instead of a
+// canned one.
+func newStoredWeatherHandler(t *testing.T) (*Handler, *SQLiteRepository, *weather.SQLiteActivityWeatherRepository) {
+	t.Helper()
+	h, _, repo := newTestHandler(t)
+	h.SetRegistry(newTestRegistry(t, repo))
+	weatherRepo := weather.NewSQLiteActivityWeatherRepository(repo.db)
+	h.SetWeatherCapturer(storedWeather{repo: weatherRepo})
+	return h, repo, weatherRepo
+}
+
+// putWeather stores one row through the real repository.
+func putWeather(t *testing.T, repo *weather.SQLiteActivityWeatherRepository, row *weather.ActivityWeather) {
+	t.Helper()
+	if err := repo.Put(context.Background(), *row); err != nil {
+		t.Fatalf("store activity_weather row for %q: %v", row.ActivityID, err)
+	}
 }
 
 // countActivityWeather is the "no row was written" assertion the SOW's
@@ -271,6 +312,30 @@ func TestCaptureWeather_NoPositionSpawnsNothing(t *testing.T) {
 	fake.expectNoCall(t, "an outdoor activity with no position")
 }
 
+// TestCaptureWeather_IndoorWithPositionSpawnsNothing is what actually pins the
+// environment guard. The treadmill FIXTURE carries no positions at all, so
+// TestUploadTCX_IndoorSpawnsNoCapture would still pass with the environment
+// check deleted — firstPosition short-circuits first. An indoor activity WITH a
+// GPS track is a real shape (a watch that kept its fix indoors, or an outdoor
+// activity retagged indoor and re-imported), and only the environment check
+// stops it spending a call.
+func TestCaptureWeather_IndoorWithPositionSpawnsNothing(t *testing.T) {
+	h, _, fake := newWeatherHandler(t)
+	lat, lon := 40.0, -105.0
+
+	h.captureWeather(Activity{
+		ID:          "a1",
+		Environment: EnvironmentIndoor,
+		StartTime:   time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC),
+		Trackpoints: []Trackpoint{{Sequence: 0, Latitude: &lat, Longitude: &lon}},
+	})
+
+	fake.expectNoCall(t, "an indoor activity with a positioned track")
+	if n := fake.callCount(); n != 0 {
+		t.Errorf("capture calls = %d, want 0", n)
+	}
+}
+
 // A handler with no capturer wired (every existing test, and any deployment
 // with weather off) must behave exactly as before.
 func TestUploadTCX_NilWeatherCapturerIsANoOp(t *testing.T) {
@@ -370,7 +435,7 @@ func okWeatherRow(activityID string) *weather.ActivityWeather {
 
 func TestDetail_WeatherKeyAbsentWithNoRow(t *testing.T) {
 	t.Run("capturer wired, no row", func(t *testing.T) {
-		h, _, _ := newWeatherHandler(t)
+		h, _, _ := newStoredWeatherHandler(t)
 		id := importedID(t, h, "typical_5k.tcx")
 
 		if _, present := weatherKey(t, doGet(t, h, id, "")); present {
@@ -389,9 +454,15 @@ func TestDetail_WeatherKeyAbsentWithNoRow(t *testing.T) {
 }
 
 func TestDetail_OKRowSerializesEveryField(t *testing.T) {
-	h, _, fake := newWeatherHandler(t)
+	h, _, weatherRepo := newStoredWeatherHandler(t)
 	id := importedID(t, h, "typical_5k.tcx")
-	fake.row = okWeatherRow(id)
+	putWeather(t, weatherRepo, okWeatherRow(id))
+	// A second activity carrying a DIFFERENT row, so "the response borrowed
+	// someone else's reading" fails on the temperature rather than passing
+	// because every fixture happens to be identical.
+	decoy := okWeatherRow(importedID(t, h, "treadmill_5k.tcx"))
+	decoy.Observation.TempC = -40
+	putWeather(t, weatherRepo, decoy)
 
 	got, present := weatherKey(t, doGet(t, h, id, ""))
 	if !present {
@@ -426,13 +497,13 @@ func TestDetail_OKRowSerializesEveryField(t *testing.T) {
 }
 
 func TestDetail_NonOKRowDropsReadingFields(t *testing.T) {
-	h, _, fake := newWeatherHandler(t)
+	h, _, weatherRepo := newStoredWeatherHandler(t)
 	id := importedID(t, h, "typical_5k.tcx")
-	fake.row = &weather.ActivityWeather{
+	putWeather(t, weatherRepo, &weather.ActivityWeather{
 		ActivityID: id,
 		Status:     weather.ActivityStatusNoCoordinates,
 		FetchedAt:  time.Date(2026, 1, 2, 9, 0, 0, 0, time.UTC),
-	}
+	})
 
 	got, present := weatherKey(t, doGet(t, h, id, ""))
 	if !present {
@@ -447,12 +518,19 @@ func TestDetail_NonOKRowDropsReadingFields(t *testing.T) {
 // widget is the client's job; dropping the row here would turn a reversible UI
 // toggle into a budget-spending operation.
 func TestDetail_WeatherSurvivesAnIndoorRetag(t *testing.T) {
-	h, _, fake := newWeatherHandler(t)
+	h, repo, weatherRepo := newStoredWeatherHandler(t)
 	id := importedID(t, h, "typical_5k.tcx")
-	fake.row = okWeatherRow(id)
+	putWeather(t, weatherRepo, okWeatherRow(id))
 
 	if w := doPatch(t, h, id, `{"environment":"indoor"}`); w.Code != http.StatusOK {
 		t.Fatalf("retag status = %d; body=%s", w.Code, w.Body.String())
+	}
+
+	// The row is still on disk. The retag rebuilds best efforts and trackpoints
+	// for the activity, so "survives" has to mean the storage survived, not
+	// just that a read path was willing to serve something.
+	if n := countActivityWeather(t, repo); n != 1 {
+		t.Fatalf("activity_weather has %d rows after an outdoor -> indoor retag, want 1", n)
 	}
 
 	got, present := weatherKey(t, doGet(t, h, id, ""))

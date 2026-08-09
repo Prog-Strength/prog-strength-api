@@ -8,6 +8,10 @@
 //	weather-backfill --rate 2             # calls per second, default 1
 //	weather-backfill --retry-unavailable  # clear terminal 'unavailable' rows and retry
 //
+// --dry-run composes with all of them and stays a pure read: combined with
+// --retry-unavailable it COUNTS the rows the retry would clear rather than
+// clearing them.
+//
 // why a command and not a worker: an automatic paced background drain was
 // considered and rejected. This is the one operation in this project that
 // spends money in bulk, against a metered vendor, over a history whose size is
@@ -83,7 +87,7 @@ func main() {
 	flag.BoolVar(&opts.dryRun, "dry-run", false, "print the eligible/no-GPS/already-captured split and stop; zero provider calls, zero writes")
 	flag.IntVar(&opts.limit, "limit", 0, "cap this run's provider calls (0 = unlimited); activities with no GPS are free and do not count")
 	flag.Float64Var(&opts.rate, "rate", 1, "provider calls per second")
-	flag.BoolVar(&opts.retryUnavailable, "retry-unavailable", false, "clear terminal 'unavailable' rows first so they are retried")
+	flag.BoolVar(&opts.retryUnavailable, "retry-unavailable", false, "clear terminal 'unavailable' rows first so they are retried; counted rather than cleared under --dry-run")
 	flag.Parse()
 
 	if err := run(ctx, opts); err != nil {
@@ -190,14 +194,27 @@ type deps struct {
 // backfill is the testable orchestration: clear retries, count, print, and
 // then resolve each pending activity in turn.
 func backfill(ctx context.Context, d deps, opts options) error {
-	if opts.retryUnavailable {
+	// no_coordinates rows are deliberately left alone on both paths: a position
+	// that was never recorded cannot be re-derived, so retrying one would spend
+	// a call to learn nothing.
+	switch {
+	case opts.retryUnavailable && opts.dryRun:
+		// Counted, never cleared. --dry-run's contract is zero writes, and a
+		// preview that deleted the rows it only promised to describe would be
+		// the most destructive thing this command can do.
+		n, err := d.repo.CountUnavailable(ctx)
+		if err != nil {
+			return err
+		}
+		// Reported separately from the eligible line below, which cannot see
+		// these activities: they still have a row, so the anti-join excludes
+		// them until the real run clears them.
+		d.logger.Printf("would clear %d unavailable rows (%d more provider calls on the real run)", n, n)
+	case opts.retryUnavailable:
 		cleared, err := d.repo.ClearUnavailable(ctx)
 		if err != nil {
 			return err
 		}
-		// no_coordinates rows are deliberately left alone: a position that was
-		// never recorded cannot be re-derived, so retrying one would spend a
-		// call to learn nothing.
 		d.logger.Printf("cleared %d unavailable rows for retry", cleared)
 	}
 

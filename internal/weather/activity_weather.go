@@ -76,4 +76,8 @@ type ActivityWeatherRepository interface {
 	// ClearUnavailable drops terminal 'unavailable' rows so they become
 	// eligible again. no_coordinates rows are deliberately NOT cleared.
 	ClearUnavailable(ctx context.Context) (int, error)
+	// CountUnavailable is what ClearUnavailable would delete, without
+	// deleting it: --dry-run has to describe the retry it is not performing,
+	// and a preview that emptied the table would be a destructive dry run.
+	CountUnavailable(ctx context.Context) (int, error)
 }

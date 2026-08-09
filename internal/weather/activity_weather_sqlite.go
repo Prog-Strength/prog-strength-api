@@ -216,19 +216,28 @@ func (r *SQLiteActivityWeatherRepository) ListPending(ctx context.Context, limit
 	return out, rows.Err()
 }
 
-// ClearUnavailable is scoped to live activities so the count it returns is
-// exactly what the next run will retry — a soft-deleted activity's row can
-// never become eligible again, so clearing it would inflate the number the
-// operator reads.
+// retryableUnavailable is the set --retry-unavailable acts on. It is one const
+// so the DELETE and the --dry-run COUNT can never drift: the number the
+// operator approves has to be exactly the set the real run clears. Scoped to
+// live activities because a soft-deleted activity's row can never become
+// eligible again, so clearing it would inflate that number.
+const retryableUnavailable = `
+	FROM activity_weather
+	WHERE status = 'unavailable'
+	  AND activity_id IN (SELECT id FROM activities WHERE deleted_at IS NULL)
+`
+
 func (r *SQLiteActivityWeatherRepository) ClearUnavailable(ctx context.Context) (int, error) {
-	res, err := r.db.ExecContext(ctx, `
-		DELETE FROM activity_weather
-		WHERE status = 'unavailable'
-		  AND activity_id IN (SELECT id FROM activities WHERE deleted_at IS NULL)
-	`)
+	res, err := r.db.ExecContext(ctx, `DELETE `+retryableUnavailable)
 	if err != nil {
 		return 0, err
 	}
 	n, err := res.RowsAffected()
 	return int(n), err
+}
+
+func (r *SQLiteActivityWeatherRepository) CountUnavailable(ctx context.Context) (int, error) {
+	var n int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) `+retryableUnavailable).Scan(&n)
+	return n, err
 }

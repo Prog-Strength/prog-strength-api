@@ -12,36 +12,111 @@ import (
 	"time"
 )
 
-// These canned bodies ARE the One Call 4.0 parse contract: the provider is
-// pinned against them, not against live OpenWeather responses.
+// These canned bodies are CAPTURED FROM LIVE OpenWeather One Call 4.0
+// responses (Denver, units=metric, 2026-08-09), trimmed only to scrub the
+// appid the API echoes back inside its next/prev pagination URLs.
+//
+// They are captures, not constructions, and that distinction is the whole
+// reason this file was rewritten. The previous fixtures were authored to
+// match what the provider code assumed — flat fields at the root, and paths
+// without the /onecall segment — so the suite asserted the implementation
+// against itself and passed while production 404'd on every reading. A
+// fixture invented from documentation proves only that the parser agrees
+// with its author. Re-capture from the live API when updating these.
 
 const owCurrentJSON = `{
-	"lat": 39.74, "lon": -104.99, "timezone": "America/Denver",
-	"dt": 1754740800,
-	"temp": 21.4,
-	"feels_like": 20.1,
-	"humidity": 45,
-	"wind_speed": 2.5,
-	"weather": [{"id": 800, "main": "Clear", "description": "clear sky", "icon": "01d"}]
+	"lat": 39.74,
+	"lon": -104.98,
+	"timezone": "America/Denver",
+	"timezone_offset": -21600,
+	"data": [
+		{
+			"dt": 1786292561,
+			"sunrise": 1786277186,
+			"sunset": 1786327469,
+			"temp": 31.8,
+			"feels_like": 29.85,
+			"pressure": 1011,
+			"humidity": 21,
+			"dew_point": 6.8,
+			"uvi": 3.82,
+			"clouds": 35,
+			"visibility": 10000,
+			"wind_speed": 0.45,
+			"wind_deg": 84,
+			"wind_gust": 1.79,
+			"weather": [{"id": 802, "main": "Clouds", "description": "scattered clouds", "icon": "03d"}],
+			"alerts": ["urn:oid:2.49.0.1.840.0.SCRUBBED.001.1:SCRUBBED"]
+		}
+	]
 }`
 
+// owHourlyEntry is one bucket in the shape the live /timeline/1h returns —
+// every field the real response carries, including the pop and alerts the
+// provider deliberately ignores. Parameterized over dt/temp/icon so
+// owHourlyJSON can emit 14 buckets and make the 12-bucket truncation
+// observable; the live response pages at 20.
+func owHourlyEntry(dt int64, temp float64, icon string) string {
+	return fmt.Sprintf(`{
+		"dt": %d,
+		"temp": %g,
+		"feels_like": 30.01,
+		"pressure": 1011,
+		"humidity": 20,
+		"dew_point": 6.28,
+		"uvi": 3.82,
+		"clouds": 35,
+		"visibility": 10000,
+		"wind_speed": 1.15,
+		"wind_deg": 196,
+		"wind_gust": 1.11,
+		"weather": [{"id": 802, "main": "Clouds", "description": "scattered clouds", "icon": %q}],
+		"pop": 0,
+		"alerts": ["urn:oid:2.49.0.1.840.0.SCRUBBED.001.1:SCRUBBED"]
+	}`, dt, temp, icon)
+}
+
 // owHourlyJSON carries 14 buckets so the 12-bucket truncation is observable.
+// next/prev are present because the live response always carries them — the
+// provider must keep ignoring them, since following a page is a billed call.
 func owHourlyJSON() string {
 	var entries []string
 	for i := 0; i < 14; i++ {
-		entries = append(entries, fmt.Sprintf(
-			`{"dt": %d, "temp": %g, "weather": [{"main": "Clouds", "icon": "0%dd"}]}`,
-			1754740800+int64(i)*3600, 20.5+float64(i), (i%9)+1))
+		entries = append(entries, owHourlyEntry(
+			1754740800+int64(i)*3600, 20.5+float64(i), fmt.Sprintf("0%dd", (i%9)+1)))
 	}
-	return `{"data": [` + strings.Join(entries, ",") + `]}`
+	return `{
+		"lat": 39.74, "lon": -104.98,
+		"timezone": "America/Denver", "timezone_offset": -21600,
+		"next": "http://api.openweathermap.org/data/4.0/onecall/timeline/1h?cnt=20&start=1786363200&appid=SCRUBBED",
+		"prev": "http://api.openweathermap.org/data/4.0/onecall/timeline/1h?cnt=20&start=1786219200&appid=SCRUBBED",
+		"data": [` + strings.Join(entries, ",") + `]}`
 }
 
+// owDailyJSON is the live /timeline/1day shape: temp as an object of
+// day/min/max/night/eve/morn, alongside sunrise/sunset and the lunar block.
 const owDailyJSON = `{
+	"lat": 39.74, "lon": -104.98,
+	"timezone": "America/Denver", "timezone_offset": -21600,
+	"next": "http://api.openweathermap.org/data/4.0/onecall/timeline/1day?cnt=10&start=1787097600&appid=SCRUBBED",
+	"prev": "http://api.openweathermap.org/data/4.0/onecall/timeline/1day?cnt=10&start=1785369600&appid=SCRUBBED",
 	"data": [{
-		"dt": 1754740800,
-		"sunrise": 1754727120, "sunset": 1754777580,
-		"temp": {"max": 31.2, "min": 16.8, "day": 28.0},
-		"weather": [{"main": "Clear", "icon": "01d"}]
+		"dt": 1786233600,
+		"sunrise": 1786277186,
+		"sunset": 1786327469,
+		"moonrise": 1786172520,
+		"moonset": 1786230660,
+		"moon_phase": 0.85,
+		"temp": {"day": 35.45, "min": 24.74, "max": 37.1, "night": 28.54, "eve": 32.14, "morn": 24.74},
+		"feels_like": {"day": 35.45, "night": 28.54, "eve": 32.14, "morn": 24.74},
+		"pressure": 1008.47,
+		"humidity": 7,
+		"wind_speed": 8.34,
+		"wind_deg": 330,
+		"weather": [{"id": 803, "main": "Clouds", "description": "broken clouds", "icon": "04d"}],
+		"clouds": 56,
+		"pop": 0.07,
+		"uvi": 0
 	}]
 }`
 
@@ -99,7 +174,7 @@ func assertCommonParams(t *testing.T, q url.Values, wantLat, wantLon string) {
 }
 
 func TestOpenWeatherCurrent(t *testing.T) {
-	srv, query, path := owServer(t, "/data/4.0/current", owCurrentJSON)
+	srv, query, path := owServer(t, "/data/4.0/onecall/current", owCurrentJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Current(context.Background(), 39.7392, -104.9847)
@@ -107,29 +182,48 @@ func TestOpenWeatherCurrent(t *testing.T) {
 		t.Fatalf("Current: %v", err)
 	}
 
-	if *path != "/data/4.0/current" {
-		t.Errorf("path = %q, want /data/4.0/current", *path)
+	if *path != "/data/4.0/onecall/current" {
+		t.Errorf("path = %q, want /data/4.0/onecall/current", *path)
 	}
 	assertCommonParams(t, *query, "39.7392", "-104.9847")
 
-	if got.TempC != 21.4 {
-		t.Errorf("TempC = %v, want 21.4", got.TempC)
+	// Every expectation below is a value from data[0] of the captured
+	// response. A parser reading the ROOT — as this one did — decodes into
+	// a zero-value struct WITHOUT error, because encoding/json ignores
+	// absent fields. That is the failure this test exists to catch: it is
+	// asserting non-zero values, not merely asserting err == nil.
+	if got.TempC != 31.8 {
+		t.Errorf("TempC = %v, want 31.8 (from data[0], not the root)", got.TempC)
 	}
-	if got.FeelsLikeC != 20.1 {
-		t.Errorf("FeelsLikeC = %v, want 20.1", got.FeelsLikeC)
+	if got.FeelsLikeC != 29.85 {
+		t.Errorf("FeelsLikeC = %v, want 29.85", got.FeelsLikeC)
 	}
-	if got.Humidity != 45 {
-		t.Errorf("Humidity = %v, want 45", got.Humidity)
+	if got.Humidity != 21 {
+		t.Errorf("Humidity = %v, want 21", got.Humidity)
 	}
-	// OpenWeather metric wind is m/s; normalized model is km/h (2.5 * 3.6).
-	if !almostEqual(got.WindKMH, 9.0) {
-		t.Errorf("WindKMH = %v, want 9.0", got.WindKMH)
+	// OpenWeather metric wind is m/s; normalized model is km/h (0.45 * 3.6).
+	if !almostEqual(got.WindKMH, 1.62) {
+		t.Errorf("WindKMH = %v, want 1.62", got.WindKMH)
 	}
-	if got.Condition != "Clear" {
-		t.Errorf("Condition = %q, want Clear", got.Condition)
+	if got.Condition != "Clouds" {
+		t.Errorf("Condition = %q, want Clouds", got.Condition)
 	}
-	if got.Icon != "01d" {
-		t.Errorf("Icon = %q, want 01d", got.Icon)
+	if got.Icon != "03d" {
+		t.Errorf("Icon = %q, want 03d", got.Icon)
+	}
+}
+
+// A response whose data array is empty must be an error, not a zero-value
+// reading. Without this guard the service would cache 0°C/blank-condition
+// as a legitimate answer and the tile would render it as fact — the same
+// silent-zero failure mode that reading the root produced, arriving by a
+// different route. Mirrors the existing empty-timeline guard in Daily.
+func TestOpenWeatherCurrentEmptyDataArrayErrors(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/current", `{"lat": 39.74, "lon": -104.98, "data": []}`)
+	p := newTestProvider(srv)
+
+	if _, err := p.Current(context.Background(), 39.7392, -104.9847); err == nil {
+		t.Fatal("Current with empty data array: want error, got nil")
 	}
 }
 
@@ -137,28 +231,30 @@ func TestOpenWeatherCurrent(t *testing.T) {
 // openweather.go: a reading with no weather tag must keep its temperatures
 // and degrade Condition/Icon to empty rather than failing the whole call.
 const owCurrentNoWeatherJSON = `{
-	"lat": 39.74, "lon": -104.99, "timezone": "America/Denver",
-	"dt": 1754740800,
-	"temp": 21.4,
-	"feels_like": 20.1,
-	"humidity": 45,
-	"wind_speed": 2.5,
-	"weather": []
+	"lat": 39.74, "lon": -104.98, "timezone": "America/Denver",
+	"data": [{
+		"dt": 1786292561,
+		"temp": 31.8,
+		"feels_like": 29.85,
+		"humidity": 21,
+		"wind_speed": 0.45,
+		"weather": []
+	}]
 }`
 
 func TestOpenWeatherCurrentEmptyWeatherArrayDegrades(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/current", owCurrentNoWeatherJSON)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/current", owCurrentNoWeatherJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Current(context.Background(), 39.7392, -104.9847)
 	if err != nil {
 		t.Fatalf("Current with empty weather array: %v", err)
 	}
-	if got.TempC != 21.4 {
-		t.Errorf("TempC = %v, want 21.4 (temperatures must survive)", got.TempC)
+	if got.TempC != 31.8 {
+		t.Errorf("TempC = %v, want 31.8 (temperatures must survive)", got.TempC)
 	}
-	if !almostEqual(got.WindKMH, 9.0) {
-		t.Errorf("WindKMH = %v, want 9.0", got.WindKMH)
+	if !almostEqual(got.WindKMH, 1.62) {
+		t.Errorf("WindKMH = %v, want 1.62", got.WindKMH)
 	}
 	if got.Condition != "" {
 		t.Errorf("Condition = %q, want empty when weather array is empty", got.Condition)
@@ -170,7 +266,7 @@ func TestOpenWeatherCurrentEmptyWeatherArrayDegrades(t *testing.T) {
 
 func TestOpenWeatherHourlyEmptyWeatherArrayDegrades(t *testing.T) {
 	body := `{"data": [{"dt": 1754740800, "temp": 20.5, "weather": []}]}`
-	srv, _, _ := owServer(t, "/data/4.0/timeline/1h", body)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1h", body)
 	p := newTestProvider(srv)
 
 	got, err := p.Hourly(context.Background(), 39.7392, -104.9847)
@@ -189,7 +285,7 @@ func TestOpenWeatherHourlyEmptyWeatherArrayDegrades(t *testing.T) {
 }
 
 func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
-	srv, query, path := owServer(t, "/data/4.0/timeline/1h", owHourlyJSON())
+	srv, query, path := owServer(t, "/data/4.0/onecall/timeline/1h", owHourlyJSON())
 	p := newTestProvider(srv)
 
 	got, err := p.Hourly(context.Background(), 39.7392, -104.9847)
@@ -197,8 +293,8 @@ func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
 		t.Fatalf("Hourly: %v", err)
 	}
 
-	if *path != "/data/4.0/timeline/1h" {
-		t.Errorf("path = %q, want /data/4.0/timeline/1h", *path)
+	if *path != "/data/4.0/onecall/timeline/1h" {
+		t.Errorf("path = %q, want /data/4.0/onecall/timeline/1h", *path)
 	}
 	assertCommonParams(t, *query, "39.7392", "-104.9847")
 
@@ -225,7 +321,7 @@ func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
 }
 
 func TestOpenWeatherDaily(t *testing.T) {
-	srv, query, path := owServer(t, "/data/4.0/timeline/1day", owDailyJSON)
+	srv, query, path := owServer(t, "/data/4.0/onecall/timeline/1day", owDailyJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Daily(context.Background(), 39.7392, -104.9847)
@@ -233,27 +329,32 @@ func TestOpenWeatherDaily(t *testing.T) {
 		t.Fatalf("Daily: %v", err)
 	}
 
-	if *path != "/data/4.0/timeline/1day" {
-		t.Errorf("path = %q, want /data/4.0/timeline/1day", *path)
+	if *path != "/data/4.0/onecall/timeline/1day" {
+		t.Errorf("path = %q, want /data/4.0/onecall/timeline/1day", *path)
 	}
 	assertCommonParams(t, *query, "39.7392", "-104.9847")
 
-	if got.HighC != 31.2 {
-		t.Errorf("HighC = %v, want 31.2", got.HighC)
+	// max/min off the temp OBJECT — the daily timeline reports temp as
+	// {day,min,max,night,eve,morn}, not a scalar.
+	if got.HighC != 37.1 {
+		t.Errorf("HighC = %v, want 37.1", got.HighC)
 	}
-	if got.LowC != 16.8 {
-		t.Errorf("LowC = %v, want 16.8", got.LowC)
+	if got.LowC != 24.74 {
+		t.Errorf("LowC = %v, want 24.74", got.LowC)
 	}
-	if want := time.Unix(1754727120, 0).UTC(); !got.Sunrise.Equal(want) {
+	// 12:06:26Z and 02:04:29Z are 06:06 and 20:04 in Denver (UTC-6) — real
+	// August sunrise/sunset there, which is what makes data[0] verifiably
+	// TODAY rather than an adjacent day's bucket.
+	if want := time.Unix(1786277186, 0).UTC(); !got.Sunrise.Equal(want) {
 		t.Errorf("Sunrise = %v, want %v", got.Sunrise, want)
 	}
-	if want := time.Unix(1754777580, 0).UTC(); !got.Sunset.Equal(want) {
+	if want := time.Unix(1786327469, 0).UTC(); !got.Sunset.Equal(want) {
 		t.Errorf("Sunset = %v, want %v", got.Sunset, want)
 	}
 }
 
 func TestOpenWeatherDailyEmptyTimelineErrors(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/timeline/1day", `{"data": []}`)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1day", `{"data": []}`)
 	p := newTestProvider(srv)
 
 	if _, err := p.Daily(context.Background(), 39.7, -104.9); err == nil {

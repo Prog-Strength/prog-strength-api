@@ -53,7 +53,7 @@ var configEnvVars = []string{
 	"WHOOP_TOKEN_ENC_KEY",
 	"AVATAR_BUCKET_NAME", "TCX_BUCKET_NAME", "PHOTO_BUCKET_NAME", "AWS_REGION",
 	"FATSECRET_CLIENT_ID", "FATSECRET_CLIENT_SECRET", "USDA_FDC_API_KEY",
-	"OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+	"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENWEATHER_API_KEY",
 }
 
 // clearConfigEnv unsets every config env var for the duration of the test so
@@ -626,6 +626,20 @@ func TestGoldenManifest(t *testing.T) {
 			ReconcileMaxPerBoot: 200,
 			MaxAttempts:         5,
 		},
+		Weather: WeatherConfig{
+			Enabled:               true,
+			APIKey:                "",
+			DailyCallBudget:       800,
+			AllowPaidOverage:      false,
+			DailyCallHardCeiling:  2000,
+			CountGeocodingCalls:   true,
+			CurrentTTLMinutes:     15,
+			HourlyTTLMinutes:      60,
+			DailyTTLMinutes:       180,
+			GeocodingTTLDays:      30,
+			MaxLocations:          5,
+			EagerLoadAllLocations: false,
+		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      10,
 			MaxUploadBytes:      33554432,
@@ -821,6 +835,63 @@ func TestAvatarSectionParses(t *testing.T) {
 	want := AvatarConfig{MaxUploadBytes: 5242880}
 	if !reflect.DeepEqual(cfg.Avatar, want) {
 		t.Errorf("Avatar = %#v, want %#v", cfg.Avatar, want)
+	}
+}
+
+// TestWeatherSectionParses pins the [weather] tunables: the committed manifest
+// decodes into the typed WeatherConfig the weather tile consumes. Everything
+// but api_key is a public literal; api_key is the one secret and interpolates
+// from ${OPENWEATHER_API_KEY} (asserted separately below).
+func TestWeatherSectionParses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "weather-secret")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := WeatherConfig{
+		Enabled:               true,
+		APIKey:                "",
+		DailyCallBudget:       800,
+		AllowPaidOverage:      false,
+		DailyCallHardCeiling:  2000,
+		CountGeocodingCalls:   true,
+		CurrentTTLMinutes:     15,
+		HourlyTTLMinutes:      60,
+		DailyTTLMinutes:       180,
+		GeocodingTTLDays:      30,
+		MaxLocations:          5,
+		EagerLoadAllLocations: false,
+	}
+	if !reflect.DeepEqual(cfg.Weather, want) {
+		t.Errorf("Weather = %#v, want %#v", cfg.Weather, want)
+	}
+}
+
+// TestWeatherAPIKeyInterpolationFromEnv pins that the committed manifest's
+// api_key = "${OPENWEATHER_API_KEY}" resolves from the environment — the same
+// secret path the FatSecret credentials use.
+func TestWeatherAPIKeyInterpolationFromEnv(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "config.toml"))
+	if err != nil {
+		t.Fatalf("read committed config.toml: %v", err)
+	}
+	clearConfigEnv(t)
+	t.Setenv("JWT_SIGNING_KEY", "weather-secret")
+	t.Setenv("OPENWEATHER_API_KEY", "ow-key-123")
+
+	cfg, err := Load(data)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Weather.APIKey != "ow-key-123" {
+		t.Errorf("Weather.APIKey = %q, want ow-key-123", cfg.Weather.APIKey)
 	}
 }
 

@@ -208,6 +208,11 @@ type Config struct {
 	// switch, the reconciler's per-boot write cap, and the retry cap).
 	// See CalendarSyncConfig.
 	CalendarSync CalendarSyncConfig
+
+	// Weather configures the OpenWeather dashboard-tile integration (the
+	// kill switch, the daily provider-call budget, the cache TTLs, and the
+	// product knobs). See WeatherConfig.
+	Weather WeatherConfig
 	// Photos configures the Activity Photos feature: per-activity caps, the
 	// upload-size ceiling, the derivative image dimensions/quality, the
 	// presign window, and the caption length limit. See PhotosConfig.
@@ -306,6 +311,24 @@ type CalendarSyncConfig struct {
 	Enabled             bool
 	ReconcileMaxPerBoot int
 	MaxAttempts         int
+}
+
+// WeatherConfig groups the OpenWeather dashboard-tile integration knobs.
+// APIKey is the one secret (env-interpolated); everything else is a public
+// literal in config.toml. See sows/weather-dashboard-tile.md.
+type WeatherConfig struct {
+	Enabled               bool
+	APIKey                string
+	DailyCallBudget       int
+	AllowPaidOverage      bool
+	DailyCallHardCeiling  int
+	CountGeocodingCalls   bool
+	CurrentTTLMinutes     int
+	HourlyTTLMinutes      int
+	DailyTTLMinutes       int
+	GeocodingTTLDays      int
+	MaxLocations          int
+	EagerLoadAllLocations bool
 }
 
 // VideosConfig groups the Activity Videos tunables. All are non-secret public
@@ -445,6 +468,20 @@ type fileConfig struct {
 		ReconcileMaxPerBoot int  `toml:"reconcile_max_per_boot"`
 		MaxAttempts         int  `toml:"max_attempts"`
 	} `toml:"calendar_sync"`
+	Weather struct {
+		Enabled               bool   `toml:"enabled"`
+		APIKey                string `toml:"api_key"`
+		DailyCallBudget       int    `toml:"daily_call_budget"`
+		AllowPaidOverage      bool   `toml:"allow_paid_overage"`
+		DailyCallHardCeiling  int    `toml:"daily_call_hard_ceiling"`
+		CountGeocodingCalls   bool   `toml:"count_geocoding_calls"`
+		CurrentTTLMinutes     int    `toml:"current_ttl_minutes"`
+		HourlyTTLMinutes      int    `toml:"hourly_ttl_minutes"`
+		DailyTTLMinutes       int    `toml:"daily_ttl_minutes"`
+		GeocodingTTLDays      int    `toml:"geocoding_ttl_days"`
+		MaxLocations          int    `toml:"max_locations"`
+		EagerLoadAllLocations bool   `toml:"eager_load_all_locations"`
+	} `toml:"weather"`
 	Photos struct {
 		MaxPerActivity      int   `toml:"max_per_activity"`
 		MaxUploadBytes      int64 `toml:"max_upload_bytes"`
@@ -631,6 +668,20 @@ func Load(defaultTOML []byte) (Config, error) {
 			ReconcileMaxPerBoot: fc.CalendarSync.ReconcileMaxPerBoot,
 			MaxAttempts:         fc.CalendarSync.MaxAttempts,
 		},
+		Weather: WeatherConfig{
+			Enabled:               fc.Weather.Enabled,
+			APIKey:                fc.Weather.APIKey,
+			DailyCallBudget:       fc.Weather.DailyCallBudget,
+			AllowPaidOverage:      fc.Weather.AllowPaidOverage,
+			DailyCallHardCeiling:  fc.Weather.DailyCallHardCeiling,
+			CountGeocodingCalls:   fc.Weather.CountGeocodingCalls,
+			CurrentTTLMinutes:     fc.Weather.CurrentTTLMinutes,
+			HourlyTTLMinutes:      fc.Weather.HourlyTTLMinutes,
+			DailyTTLMinutes:       fc.Weather.DailyTTLMinutes,
+			GeocodingTTLDays:      fc.Weather.GeocodingTTLDays,
+			MaxLocations:          fc.Weather.MaxLocations,
+			EagerLoadAllLocations: fc.Weather.EagerLoadAllLocations,
+		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      fc.Photos.MaxPerActivity,
 			MaxUploadBytes:      fc.Photos.MaxUploadBytes,
@@ -700,6 +751,7 @@ func interpolate(fc *fileConfig) {
 	fc.NutritionLookup.FatSecretClientID = interp(fc.NutritionLookup.FatSecretClientID)
 	fc.NutritionLookup.FatSecretClientSecret = interp(fc.NutritionLookup.FatSecretClientSecret)
 	fc.NutritionLookup.USDAFDCAPIKey = interp(fc.NutritionLookup.USDAFDCAPIKey)
+	fc.Weather.APIKey = interp(fc.Weather.APIKey)
 	fc.VectorMemory.OpenAIAPIKey = interp(fc.VectorMemory.OpenAIAPIKey)
 	fc.VectorMemory.AnthropicAPIKey = interp(fc.VectorMemory.AnthropicAPIKey)
 	fc.VectorMemory.DistillModel = interp(fc.VectorMemory.DistillModel)

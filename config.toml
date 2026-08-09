@@ -263,6 +263,60 @@ fatsecret_client_id = "${FATSECRET_CLIENT_ID}"
 fatsecret_client_secret = "${FATSECRET_CLIENT_SECRET}"
 usda_fdc_api_key = "${USDA_FDC_API_KEY}"
 
+[weather]
+# Master kill switch, mirroring [calendar_sync].enabled. false ⇒ no provider
+# calls, no geocoding, no budget consumption; every /weather route returns
+# status "disabled" and the tile says so plainly. Flipping it back resumes
+# immediately — nothing to reconcile, because nothing is persisted but cache.
+enabled = true
+
+# OpenWeather One Call 4.0 + Geocoding. The one real secret here → env.
+# Empty ⇒ the integration behaves exactly as if enabled = false.
+api_key = "${OPENWEATHER_API_KEY}"
+
+# --- cost control -------------------------------------------------------
+# The auto-shutoff point: reserving past this refuses the call.
+#
+# 800, not 1000. Two reasons. First, our count and OpenWeather's can drift —
+# a transport-layer retry or a call that fails after leaving this process is
+# billed by them and may not be counted by us — so the stop belongs on OUR
+# side of the paid boundary. Second, lazy loading puts realistic usage near
+# ~128 calls/day, so the remaining headroom costs nothing and buys real
+# protection against a render loop or retry storm.
+daily_call_budget = 800
+
+# false ⇒ daily_call_budget is a HARD STOP and the free tier can never be
+# exceeded. true ⇒ calls continue past it up to daily_call_hard_ceiling and
+# OpenWeather bills the difference. Overage is never unbounded: there is no
+# configuration in which this integration can spend without a ceiling.
+allow_paid_overage = false
+daily_call_hard_ceiling = 2000
+
+# Geocoding calls count against the budget. OpenWeather does not publicly
+# document the Geocoding API as exempt from the One Call quota, so the safe
+# assumption is that it is not. If confirmed exempt, flip to false and the
+# budget stretches further.
+count_geocoding_calls = true
+
+# --- cache TTLs: the real cost lever ------------------------------------
+# One Call 4.0 bills each timeline endpoint separately, so each gets the
+# longest TTL its data tolerates. current is 15 (the provider itself only
+# refreshes every ~10); an hourly strip and a daily high/low move far more
+# slowly than a thermometer does.
+current_ttl_minutes = 15
+hourly_ttl_minutes  = 60
+daily_ttl_minutes   = 180
+geocoding_ttl_days  = 30   # a city's coordinates do not move
+
+# --- product knobs ------------------------------------------------------
+max_locations = 5
+# false ⇒ the tile fetches only the location being viewed (see the SOW's
+# Algorithms section). true ⇒ it fans out one GET /weather per saved location
+# on mount, trading ~5× the provider calls for instant swipes. Client fetch
+# pattern only — the API contract and the budget accounting are identical
+# either way.
+eager_load_all_locations = false
+
 [vectormemory]
 # Seeds the Agent Vector Memory feature (sows/agent-vector-memory.md).
 # Master kill-switch: false ⇒ no distillation, no retrieval, no behavior change.

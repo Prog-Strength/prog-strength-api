@@ -16,11 +16,27 @@ import (
 // ledger can reserve per-method. Responses are normalized here — metric
 // units requested from the API, wind converted from the API's m/s to the
 // canonical km/h — so nothing OpenWeather-shaped ever reaches the cache.
-// The 4.0 timeline shapes are pinned by the canned fixtures in
-// openweather_test.go; those fixtures, not live responses, are the parse
-// contract this file implements.
+// The 4.0 shapes are pinned by fixtures in openweather_test.go that are
+// CAPTURED FROM LIVE RESPONSES; re-capture rather than hand-edit them.
+//
+// Every One Call 4.0 data endpoint hangs off oneCallBasePath, and every 4.0
+// response wraps its readings in a top-level `data` array — including
+// /current, which returns a one-element array rather than a bare object.
+// Both facts were originally missed here (paths omitted /onecall, and
+// Current parsed the root), which 404'd every reading in production.
+//
+// Responses also carry fields this provider deliberately ignores: next/prev
+// pagination URLs, alerts, pop, wind_gust, and the lunar block. Following a
+// pagination link is a separately BILLED call, so the first page is always
+// the whole answer as far as this file is concerned.
 
 const openWeatherBaseURL = "https://api.openweathermap.org"
+
+// oneCallBasePath prefixes every One Call 4.0 data endpoint. It is a single
+// constant rather than three inlined literals because three independent
+// copies of the prefix is exactly how the /onecall segment came to be
+// missing from all three paths at once.
+const oneCallBasePath = "/data/4.0/onecall"
 
 // hourlyBucketCount is how many forecast hours the provider returns. The
 // tile shows 5; returning 12 lets the service re-slice without a re-fetch
@@ -57,28 +73,42 @@ type owWeatherTag struct {
 }
 
 func (p *OpenWeatherProvider) Current(ctx context.Context, lat, lon float64) (Current, error) {
+	// data[0], not the root: /current returns the same envelope as the
+	// timelines, carrying a single-element array. Parsing the root decodes
+	// into a zero-value struct WITHOUT error — encoding/json simply ignores
+	// absent fields — so this shape is load-bearing. Getting it wrong yields
+	// a plausible-looking 0°C reading rather than a failure.
 	var payload struct {
-		Temp      float64        `json:"temp"`
-		FeelsLike float64        `json:"feels_like"`
-		Humidity  int            `json:"humidity"`
-		WindSpeed float64        `json:"wind_speed"`
-		Weather   []owWeatherTag `json:"weather"`
+		Data []struct {
+			Temp      float64        `json:"temp"`
+			FeelsLike float64        `json:"feels_like"`
+			Humidity  int            `json:"humidity"`
+			WindSpeed float64        `json:"wind_speed"`
+			Weather   []owWeatherTag `json:"weather"`
+		} `json:"data"`
 	}
-	if err := p.get(ctx, "/data/4.0/current", metricParams(lat, lon), &payload); err != nil {
+	if err := p.get(ctx, oneCallBasePath+"/current", metricParams(lat, lon), &payload); err != nil {
 		return Current{}, err
 	}
+	if len(payload.Data) == 0 {
+		// Same reasoning as Daily's empty-timeline guard: an empty array is
+		// a provider fault, and returning the zero value would cache 0°C as
+		// a real observation.
+		return Current{}, fmt.Errorf("openweather current: response carried no data entries")
+	}
+	entry := payload.Data[0]
 	out := Current{
-		TempC:      payload.Temp,
-		FeelsLikeC: payload.FeelsLike,
-		Humidity:   payload.Humidity,
+		TempC:      entry.Temp,
+		FeelsLikeC: entry.FeelsLike,
+		Humidity:   entry.Humidity,
 		// Metric-units wind is m/s; the canonical model is km/h.
-		WindKMH: payload.WindSpeed * 3.6,
+		WindKMH: entry.WindSpeed * 3.6,
 	}
 	// A missing weather tag degrades to empty condition/icon rather than
 	// failing the whole reading — the temperatures are still usable.
-	if len(payload.Weather) > 0 {
-		out.Condition = payload.Weather[0].Main
-		out.Icon = payload.Weather[0].Icon
+	if len(entry.Weather) > 0 {
+		out.Condition = entry.Weather[0].Main
+		out.Icon = entry.Weather[0].Icon
 	}
 	return out, nil
 }
@@ -91,7 +121,7 @@ func (p *OpenWeatherProvider) Hourly(ctx context.Context, lat, lon float64) ([]H
 			Weather []owWeatherTag `json:"weather"`
 		} `json:"data"`
 	}
-	if err := p.get(ctx, "/data/4.0/timeline/1h", metricParams(lat, lon), &payload); err != nil {
+	if err := p.get(ctx, oneCallBasePath+"/timeline/1h", metricParams(lat, lon), &payload); err != nil {
 		return nil, err
 	}
 	entries := payload.Data
@@ -120,7 +150,7 @@ func (p *OpenWeatherProvider) Daily(ctx context.Context, lat, lon float64) (Dail
 			} `json:"temp"`
 		} `json:"data"`
 	}
-	if err := p.get(ctx, "/data/4.0/timeline/1day", metricParams(lat, lon), &payload); err != nil {
+	if err := p.get(ctx, oneCallBasePath+"/timeline/1day", metricParams(lat, lon), &payload); err != nil {
 		return Daily{}, err
 	}
 	if len(payload.Data) == 0 {

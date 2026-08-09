@@ -1,3 +1,10 @@
+## [0.108.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.108.0...v0.108.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **weather:** call the One Call 4.0 /onecall paths and parse data[0] ([#124](https://github.com/Prog-Strength/prog-strength-api/issues/124)) ([80d2eeb](https://github.com/Prog-Strength/prog-strength-api/commit/80d2eeb2e378fd08b8db6b05be70aaea3a3dd0d9))
+
 # [0.108.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.107.0...v0.108.0) (2026-08-09)
 
 

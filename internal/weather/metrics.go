@@ -13,8 +13,8 @@ import "github.com/prometheus/client_golang/prometheus"
 // requestsTotal counts weather tile requests by final disposition:
 //
 //	cache_hit        — served from a fresh cache row, no external calls
-//	served           — provider answered, cache refreshed
-//	served_stale     — provider failed (or a geocode reservation was refused); expired cache row served
+//	served           — provider answered, cache refreshed; every section present and fresh
+//	served_stale     — payload incomplete or partially old: a section served from an expired row or lost to a failed fetch (or a geocode reservation refused/failed with an expired row served)
 //	budget_exhausted — readings reservation refused (whatever cache exists is attached), or a geocode reservation refused with no cached row
 //	disabled         — feature flag off
 //	failed           — provider errored, no usable cache

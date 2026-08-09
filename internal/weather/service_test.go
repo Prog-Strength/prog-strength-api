@@ -369,6 +369,85 @@ func TestReadingsStaleServeOnProviderError(t *testing.T) {
 	}
 }
 
+// TestReadingsMissingForecastSectionDegradesToStale: a fresh current with a
+// forecast section that was attempted and ended with nothing (fetch failed,
+// no cache row) must NOT report ok/served with a silently thin payload — the
+// missing section is degradation, so StatusStale with outcome served_stale.
+func TestReadingsMissingForecastSectionDegradesToStale(t *testing.T) {
+	p := newFakeProvider()
+	p.errs[EndpointHourly] = errors.New("openweather 500")
+	svc, cache, _, now := newTestService(t, svcCfg(), p)
+	t0 := *now
+	fresh := t0.Add(-time.Minute)
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointCurrent), p.current, fresh)
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointDaily), p.daily, fresh)
+	// No hourly row at all: the failed fetch has no stale fallback.
+
+	var r Reading
+	d := counterDelta(t, func() float64 {
+		return testutil.ToFloat64(requestsTotal.WithLabelValues("served_stale"))
+	}, func() {
+		r = svc.Readings(context.Background(), testLat, testLon)
+	})
+	if r.Status != StatusStale {
+		t.Fatalf("Status = %q, want %q (missing hourly section must degrade)", r.Status, StatusStale)
+	}
+	if d != 1 {
+		t.Errorf("served_stale outcome delta = %v, want 1", d)
+	}
+	if r.Hourly != nil {
+		t.Errorf("Hourly = %+v, want nil (section is missing)", r.Hourly)
+	}
+	if r.Current == nil || r.Current.TempC != p.current.TempC {
+		t.Errorf("Current = %+v, want the fresh cached reading attached", r.Current)
+	}
+	if r.Daily == nil {
+		t.Errorf("Daily = nil, want the fresh cached summary attached")
+	}
+	if p.calls[EndpointHourly] != 1 || p.total() != 1 {
+		t.Errorf("calls = %v, want exactly one (failed) hourly attempt", p.calls)
+	}
+}
+
+// TestReadingsCorruptCacheRowRefetches: an unparseable payload is treated as
+// missing — counted as a corrupt cache event and refetched from the provider,
+// not served and not an error.
+func TestReadingsCorruptCacheRowRefetches(t *testing.T) {
+	p := newFakeProvider()
+	svc, cache, _, now := newTestService(t, svcCfg(), p)
+	t0 := *now
+	fresh := t0.Add(-time.Minute)
+	if err := cache.Put(context.Background(), CacheRow{
+		CacheKey:    ReadingKey(testLat, testLon, EndpointCurrent),
+		PayloadJSON: "{corrupt", // would be fresh by age, but unparseable
+		FetchedAt:   fresh,
+		LastUsedAt:  fresh,
+	}); err != nil {
+		t.Fatalf("seed corrupt row: %v", err)
+	}
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointHourly), p.hourly, fresh)
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointDaily), p.daily, fresh)
+
+	var r Reading
+	d := counterDelta(t, func() float64 {
+		return testutil.ToFloat64(cacheEventsTotal.WithLabelValues("corrupt"))
+	}, func() {
+		r = svc.Readings(context.Background(), testLat, testLon)
+	})
+	if d != 1 {
+		t.Errorf("corrupt cache event delta = %v, want 1", d)
+	}
+	if r.Status != StatusOK {
+		t.Fatalf("Status = %q, want %q (corrupt row refetched)", r.Status, StatusOK)
+	}
+	if p.calls[EndpointCurrent] != 1 || p.total() != 1 {
+		t.Errorf("calls = %v, want exactly one current refetch", p.calls)
+	}
+	if r.Current == nil || r.Current.TempC != p.current.TempC {
+		t.Errorf("Current = %+v, want the refetched reading TempC=%v", r.Current, p.current.TempC)
+	}
+}
+
 // TestReadingsBudgetExhaustedServesStale: ledger at ceiling ⇒ zero provider
 // calls, stale cache attached, StatusBudgetExhausted.
 func TestReadingsBudgetExhaustedServesStale(t *testing.T) {
@@ -575,6 +654,48 @@ func TestSearchCacheServeHonorsLimit(t *testing.T) {
 	}
 	if p.calls[EndpointGeocodeDirect] != 1 {
 		t.Errorf("geocode calls = %d, want 1 (limited re-search served from cache)", p.calls[EndpointGeocodeDirect])
+	}
+}
+
+// TestSearchBudgetExhaustedServesExpiredRow: a geocode with an expired cache
+// row whose reservation is refused serves the expired row as StatusStale with
+// outcome served_stale — no provider call.
+func TestSearchBudgetExhaustedServesExpiredRow(t *testing.T) {
+	cfg := svcCfg()
+	cfg.DailyCallBudget = 1
+	p := newFakeProvider()
+	svc, cache, ledger, now := newTestService(t, cfg, p)
+	t0 := *now
+	if err := ledger.Reserve(context.Background(), 1, 1); err != nil {
+		t.Fatalf("seed ledger to ceiling: %v", err)
+	}
+	// 31 days old: past the 30-day geocoding TTL, inside the eviction window.
+	seedReading(t, cache, GeocodeDirectKey("denver"), p.direct, t0.Add(-31*24*time.Hour))
+
+	var (
+		results []GeoResult
+		status  Status
+		err     error
+	)
+	d := counterDelta(t, func() float64 {
+		return testutil.ToFloat64(requestsTotal.WithLabelValues("served_stale"))
+	}, func() {
+		results, status, err = svc.Search(context.Background(), "denver", 5)
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if status != StatusStale {
+		t.Fatalf("status = %q, want %q", status, StatusStale)
+	}
+	if d != 1 {
+		t.Errorf("served_stale outcome delta = %v, want 1", d)
+	}
+	if len(results) != 1 || results[0].Name != "Denver" {
+		t.Errorf("results = %+v, want the expired Denver row", results)
+	}
+	if p.calls[EndpointGeocodeDirect] != 0 {
+		t.Errorf("geocode calls = %d, want 0", p.calls[EndpointGeocodeDirect])
 	}
 }
 

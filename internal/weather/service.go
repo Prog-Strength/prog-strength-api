@@ -15,11 +15,21 @@ import (
 type Status string
 
 const (
-	StatusOK              Status = "ok"
-	StatusStale           Status = "stale"
-	StatusDisabled        Status = "disabled"
+	// StatusOK promises a complete, fresh payload: every section is present,
+	// from fresh cache or fetched this request.
+	StatusOK Status = "ok"
+	// StatusStale means the payload is incomplete or partially old: at least
+	// one section was served from an expired row, or was attempted and lost
+	// entirely (failed fetch, no cache row).
+	StatusStale Status = "stale"
+	// StatusDisabled: feature flag off or provider unconfigured.
+	StatusDisabled Status = "disabled"
+	// StatusBudgetExhausted: the reservation was refused; the payload is
+	// whatever cache existed (possibly nothing).
 	StatusBudgetExhausted Status = "budget_exhausted"
-	StatusUnavailable     Status = "unavailable"
+	// StatusUnavailable: no current conditions at all — the tile is unusable,
+	// though any forecast sections that did exist stay attached.
+	StatusUnavailable Status = "unavailable"
 )
 
 // Reading is the assembled tile payload for one location, still metric;
@@ -101,31 +111,34 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 		hourly  []HourlyBucket
 		daily   *Daily
 	)
-	plans := []*endpointPlan{
-		{
-			endpoint: EndpointCurrent,
-			ttl:      time.Duration(s.cfg.CurrentTTLMinutes) * time.Minute,
-			decode: func(payload string) error {
-				var c Current
-				if err := json.Unmarshal([]byte(payload), &c); err != nil {
-					return err
-				}
-				current = &c
-				return nil
-			},
-			fetch: func(ctx context.Context) (string, error) {
-				c, err := s.provider.Current(ctx, lat, lon)
-				if err != nil {
-					return "", err
-				}
-				b, err := json.Marshal(c)
-				if err != nil {
-					return "", err
-				}
-				current = &c
-				return string(b), nil
-			},
+	// currentPlan is named because the disposition treats it specially: the
+	// tile is unusable without current conditions.
+	currentPlan := &endpointPlan{
+		endpoint: EndpointCurrent,
+		ttl:      time.Duration(s.cfg.CurrentTTLMinutes) * time.Minute,
+		decode: func(payload string) error {
+			var c Current
+			if err := json.Unmarshal([]byte(payload), &c); err != nil {
+				return err
+			}
+			current = &c
+			return nil
 		},
+		fetch: func(ctx context.Context) (string, error) {
+			c, err := s.provider.Current(ctx, lat, lon)
+			if err != nil {
+				return "", err
+			}
+			b, err := json.Marshal(c)
+			if err != nil {
+				return "", err
+			}
+			current = &c
+			return string(b), nil
+		},
+	}
+	plans := []*endpointPlan{
+		currentPlan,
 		{
 			endpoint: EndpointHourly,
 			ttl:      time.Duration(s.cfg.HourlyTTLMinutes) * time.Minute,
@@ -235,14 +248,16 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 
 	// Disposition. "No current at all" trumps staleness: the tile is
 	// unusable without current conditions, though any forecast we do have
-	// stays attached.
-	currentPlan := plans[0]
+	// stays attached. With current in hand, ok/served promise every section
+	// present and fresh — a section served from an expired row OR lost
+	// entirely to a failed fetch degrades to stale/served_stale, so the
+	// payload is never silently thin.
 	switch {
 	case !currentPlan.served():
 		requestsTotal.WithLabelValues("failed").Inc()
 		s.log.WarnContext(ctx, "weather: readings unavailable", "lat", lat, "lon", lon)
 		return assemble(StatusUnavailable)
-	case anyServedStale(plans):
+	case anyDegraded(plans):
 		requestsTotal.WithLabelValues("served_stale").Inc()
 		return assemble(StatusStale)
 	default:
@@ -294,31 +309,34 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 	}
 
 	ttl := time.Duration(s.cfg.GeocodingTTLDays) * 24 * time.Hour
-	var stale []GeoResult
+	var results []GeoResult
 	state, _ := s.classify(ctx, key, ttl, func(payload string) error {
-		var results []GeoResult
-		if err := json.Unmarshal([]byte(payload), &results); err != nil {
+		var cached []GeoResult
+		if err := json.Unmarshal([]byte(payload), &cached); err != nil {
 			return err
 		}
-		stale = results
+		results = cached
 		return nil
 	})
 	if state == cacheFresh {
 		requestsTotal.WithLabelValues("cache_hit").Inc()
 		s.log.DebugContext(ctx, "weather: geocode cache hit", "endpoint", endpoint, "key", key)
-		return truncated(stale, limit), StatusOK, nil
+		return truncated(results, limit), StatusOK, nil
 	}
+	// From here results holds the expired row (when staleAvailable) — the
+	// fallback if the refetch cannot happen; a successful fetch overwrites it.
+	staleAvailable := state == cacheStale
 	serveStale := func() ([]GeoResult, Status, error) {
 		requestsTotal.WithLabelValues("served_stale").Inc()
 		s.log.WarnContext(ctx, "weather: serving expired geocode row",
 			"endpoint", endpoint, "key", key)
-		return truncated(stale, limit), StatusStale, nil
+		return truncated(results, limit), StatusStale, nil
 	}
 
 	if s.cfg.CountGeocodingCalls {
 		switch err := s.budget.Reserve(ctx, 1, activeCeiling(s.cfg)); {
 		case errors.Is(err, ErrBudgetExhausted):
-			if state == cacheStale {
+			if staleAvailable {
 				return serveStale()
 			}
 			requestsTotal.WithLabelValues("budget_exhausted").Inc()
@@ -327,7 +345,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 			// Broken ledger degrades like a provider failure.
 			s.log.ErrorContext(ctx, "weather: budget reserve failed",
 				"endpoint", endpoint, "key", key, "error", err)
-			if state == cacheStale {
+			if staleAvailable {
 				return serveStale()
 			}
 			requestsTotal.WithLabelValues("failed").Inc()
@@ -335,30 +353,32 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 		}
 	}
 
+	// One clock read stamps the fetch and the cache row, same as Readings.
+	now := s.now().UTC()
 	payload, err := s.timedFetch(ctx, endpoint, func(ctx context.Context) (string, error) {
-		results, err := call(ctx)
+		fetched, err := call(ctx)
 		if err != nil {
 			return "", err
 		}
-		b, err := json.Marshal(results)
+		b, err := json.Marshal(fetched)
 		if err != nil {
 			return "", err
 		}
-		stale = results // reuse the slot: from here on it is the answer
+		results = fetched
 		return string(b), nil
 	})
 	if err != nil {
 		s.log.WarnContext(ctx, "weather: geocode call failed",
 			"endpoint", endpoint, "key", key, "error", err)
-		if state == cacheStale {
+		if staleAvailable {
 			return serveStale()
 		}
 		requestsTotal.WithLabelValues("failed").Inc()
 		return nil, StatusUnavailable, nil
 	}
-	s.putCache(ctx, key, payload, s.now().UTC())
+	s.putCache(ctx, key, payload, now)
 	requestsTotal.WithLabelValues("served").Inc()
-	return truncated(stale, limit), StatusOK, nil
+	return truncated(results, limit), StatusOK, nil
 }
 
 // classify reads one cache row, records the cache event (hit / stale / miss
@@ -436,9 +456,13 @@ func oldestServed(plans []*endpointPlan) time.Time {
 	return oldest
 }
 
-func anyServedStale(plans []*endpointPlan) bool {
+// anyDegraded reports whether some endpoint makes the payload less than the
+// StatusOK promise of "every section present and fresh": served from an
+// expired row, or attempted and ended with nothing (failed fetch, no cache
+// row) — a silently missing section is degradation just like a stale one.
+func anyDegraded(plans []*endpointPlan) bool {
 	for _, p := range plans {
-		if p.servedStale() {
+		if p.servedStale() || !p.served() {
 			return true
 		}
 	}

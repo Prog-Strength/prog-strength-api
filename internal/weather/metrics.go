@@ -14,8 +14,8 @@ import "github.com/prometheus/client_golang/prometheus"
 //
 //	cache_hit        — served from a fresh cache row, no external calls
 //	served           — provider answered, cache refreshed
-//	served_stale     — provider failed or budget refused; expired cache row served
-//	budget_exhausted — reservation refused and no cache to fall back on
+//	served_stale     — provider failed (or a geocode reservation was refused); expired cache row served
+//	budget_exhausted — readings reservation refused (whatever cache exists is attached), or a geocode reservation refused with no cached row
 //	disabled         — feature flag off
 //	failed           — provider errored, no usable cache
 var requestsTotal = prometheus.NewCounterVec(

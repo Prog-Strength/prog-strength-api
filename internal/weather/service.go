@@ -256,25 +256,38 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 // Errors degrade to (nil, StatusUnavailable, nil) — callers never see raw
 // provider failures.
 func (s *Service) Search(ctx context.Context, query string, limit int) ([]GeoResult, Status, error) {
-	return s.geocode(ctx, GeocodeDirectKey(query), EndpointGeocodeDirect,
+	return s.geocode(ctx, GeocodeDirectKey(query), EndpointGeocodeDirect, limit,
 		func(ctx context.Context) ([]GeoResult, error) {
 			return s.provider.GeocodeDirect(ctx, query, limit)
 		})
 }
 
 // Reverse resolves coordinates to place candidates; same flow as Search on
-// the reverse key.
+// the reverse key. There is no caller-facing limit: the provider pins
+// limit=1 upstream (reverse lookup exists to label a coordinate), so the
+// geocode flow gets 0 = uncapped.
 func (s *Service) Reverse(ctx context.Context, lat, lon float64) ([]GeoResult, Status, error) {
-	return s.geocode(ctx, GeocodeReverseKey(lat, lon), EndpointGeocodeReverse,
+	return s.geocode(ctx, GeocodeReverseKey(lat, lon), EndpointGeocodeReverse, 0,
 		func(ctx context.Context) ([]GeoResult, error) {
 			return s.provider.GeocodeReverse(ctx, lat, lon)
 		})
 }
 
+// truncated caps a geocode result set to limit; limit <= 0 means uncapped.
+// Cache rows are deliberately limit-agnostic (shared across callers), so
+// every serve path — fresh hit, stale fallback, fresh fetch — must apply the
+// caller's limit on the way out.
+func truncated(results []GeoResult, limit int) []GeoResult {
+	if limit > 0 && len(results) > limit {
+		return results[:limit]
+	}
+	return results
+}
+
 // geocode is the shared Search/Reverse flow: fresh cache serves directly, an
 // expired row is refetched but kept as the stale fallback, budget refusal or
 // provider failure degrades. Increments requestsTotal exactly once.
-func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, call func(ctx context.Context) ([]GeoResult, error)) ([]GeoResult, Status, error) {
+func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, limit int, call func(ctx context.Context) ([]GeoResult, error)) ([]GeoResult, Status, error) {
 	if !s.cfg.Enabled || !s.provider.Configured() {
 		requestsTotal.WithLabelValues("disabled").Inc()
 		return nil, StatusDisabled, nil
@@ -293,13 +306,13 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, ca
 	if state == cacheFresh {
 		requestsTotal.WithLabelValues("cache_hit").Inc()
 		s.log.DebugContext(ctx, "weather: geocode cache hit", "endpoint", endpoint, "key", key)
-		return stale, StatusOK, nil
+		return truncated(stale, limit), StatusOK, nil
 	}
 	serveStale := func() ([]GeoResult, Status, error) {
 		requestsTotal.WithLabelValues("served_stale").Inc()
 		s.log.WarnContext(ctx, "weather: serving expired geocode row",
 			"endpoint", endpoint, "key", key)
-		return stale, StatusStale, nil
+		return truncated(stale, limit), StatusStale, nil
 	}
 
 	if s.cfg.CountGeocodingCalls {
@@ -345,7 +358,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, ca
 	}
 	s.putCache(ctx, key, payload, s.now().UTC())
 	requestsTotal.WithLabelValues("served").Inc()
-	return stale, StatusOK, nil
+	return truncated(stale, limit), StatusOK, nil
 }
 
 // classify reads one cache row, records the cache event (hit / stale / miss

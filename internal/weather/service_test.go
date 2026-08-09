@@ -539,6 +539,45 @@ func TestSearchUncountedGeocodingSkipsReservationButStillCaches(t *testing.T) {
 	}
 }
 
+// TestSearchCacheServeHonorsLimit: the cache key is limit-agnostic (rows are
+// shared across callers), so a cached serve must still truncate to THIS
+// caller's limit — a Search with limit 2 after a wider cached search returns
+// exactly 2, without touching the provider again.
+func TestSearchCacheServeHonorsLimit(t *testing.T) {
+	p := newFakeProvider()
+	p.direct = []GeoResult{
+		{Name: "Springfield", State: "Illinois", Country: "US"},
+		{Name: "Springfield", State: "Missouri", Country: "US"},
+		{Name: "Springfield", State: "Massachusetts", Country: "US"},
+		{Name: "Springfield", State: "Ohio", Country: "US"},
+		{Name: "Springfield", State: "Oregon", Country: "US"},
+	}
+	svc, _, _, _ := newTestService(t, svcCfg(), p)
+	ctx := context.Background()
+
+	results, status, err := svc.Search(ctx, "springfield", 10)
+	if err != nil {
+		t.Fatalf("cold Search: %v", err)
+	}
+	if status != StatusOK || len(results) != 5 {
+		t.Fatalf("cold Search = %d results status %q, want 5 results %q", len(results), status, StatusOK)
+	}
+
+	results2, status2, err := svc.Search(ctx, "springfield", 2)
+	if err != nil {
+		t.Fatalf("warm Search: %v", err)
+	}
+	if status2 != StatusOK {
+		t.Fatalf("warm status = %q, want %q", status2, StatusOK)
+	}
+	if len(results2) != 2 {
+		t.Errorf("warm results len = %d, want exactly 2 (cache serve must honor limit)", len(results2))
+	}
+	if p.calls[EndpointGeocodeDirect] != 1 {
+		t.Errorf("geocode calls = %d, want 1 (limited re-search served from cache)", p.calls[EndpointGeocodeDirect])
+	}
+}
+
 // TestReverseColdThenWarm mirrors the direct-search flow on the reverse key.
 func TestReverseColdThenWarm(t *testing.T) {
 	p := newFakeProvider()
@@ -578,8 +617,8 @@ func TestReverseColdThenWarm(t *testing.T) {
 }
 
 // TestRequestsTotalOutcomes pins that a Readings call lands exactly one
-// requestsTotal increment with its final outcome, for the two cheapest
-// dispositions to stage: cache_hit and budget_exhausted.
+// requestsTotal increment with its final outcome, across the four cheap
+// dispositions to stage: cache_hit, budget_exhausted, served, served_stale.
 func TestRequestsTotalOutcomes(t *testing.T) {
 	outcome := func(label string) func() float64 {
 		return func() float64 {
@@ -622,6 +661,40 @@ func TestRequestsTotalOutcomes(t *testing.T) {
 		})
 		if d != 1 {
 			t.Errorf("budget_exhausted outcome delta = %v, want 1", d)
+		}
+	})
+
+	t.Run("served", func(t *testing.T) {
+		p := newFakeProvider()
+		svc, _, _, _ := newTestService(t, svcCfg(), p)
+
+		d := counterDelta(t, outcome("served"), func() {
+			if r := svc.Readings(context.Background(), testLat, testLon); r.Status != StatusOK {
+				t.Fatalf("Status = %q, want %q", r.Status, StatusOK)
+			}
+		})
+		if d != 1 {
+			t.Errorf("served outcome delta = %v, want 1", d)
+		}
+	})
+
+	t.Run("served_stale", func(t *testing.T) {
+		p := newFakeProvider()
+		p.errs[EndpointCurrent] = errors.New("openweather 500")
+		svc, cache, _, now := newTestService(t, svcCfg(), p)
+		t0 := *now
+		fresh := t0.Add(-time.Minute)
+		seedReading(t, cache, ReadingKey(testLat, testLon, EndpointCurrent), p.current, t0.Add(-20*time.Minute))
+		seedReading(t, cache, ReadingKey(testLat, testLon, EndpointHourly), p.hourly, fresh)
+		seedReading(t, cache, ReadingKey(testLat, testLon, EndpointDaily), p.daily, fresh)
+
+		d := counterDelta(t, outcome("served_stale"), func() {
+			if r := svc.Readings(context.Background(), testLat, testLon); r.Status != StatusStale {
+				t.Fatalf("Status = %q, want %q", r.Status, StatusStale)
+			}
+		})
+		if d != 1 {
+			t.Errorf("served_stale outcome delta = %v, want 1", d)
 		}
 	})
 }

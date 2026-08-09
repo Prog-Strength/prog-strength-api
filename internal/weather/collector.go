@@ -69,7 +69,7 @@ func (e *Exporter) refresh(ctx context.Context) error {
 	}
 
 	// The dashboard must draw thresholds against the same ceiling the
-	// service enforces — activeCeiling is the single source (service.go),
+	// service enforces — activeCeiling is the single source (budget.go),
 	// otherwise "100% utilized" could show while calls still flow.
 	ceiling := activeCeiling(e.cfg)
 

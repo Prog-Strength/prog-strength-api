@@ -107,6 +107,13 @@ type Handler struct {
 	videoStore VideoStore
 	videoRepo  VideoRepository
 	videoCfg   VideosConfig
+
+	// weather captures the conditions at an outdoor activity's start on
+	// import and reads them back on the detail path. Optional and nil-safe
+	// like publisher/calendarSyncer: when nil no capture is spawned and the
+	// detail response simply omits the weather key. Injected
+	// post-construction via SetWeatherCapturer (see weather.go).
+	weather WeatherCapturer
 }
 
 // PhotosConfig mirrors config.PhotosConfig for the activity photo write path.
@@ -458,6 +465,10 @@ type activityDTO struct {
 	// (key absent) when the activity has no route. The map consumes this; the
 	// per-trackpoint DTO deliberately stays coordinate-free.
 	Route json.RawMessage `json:"route,omitempty"`
+	// Weather is the stored conditions at the activity's start. omitempty:
+	// the key is ABSENT when the activity has no row, the same "omit the beat
+	// entirely" contract route already has.
+	Weather *weatherDTO `json:"weather,omitempty"`
 	// Summary is the type's rendered card (registry Summarize): title,
 	// subtitle, metric chips. Present on unified list items and detail
 	// reads; omitted when no registry is wired or the row's type is
@@ -486,6 +497,29 @@ type activityDTO struct {
 	// unconfigured it stays nil and omitempty drops the key entirely. A plain
 	// slice cannot express this — omitempty drops an empty non-nil slice too.
 	Photos *[]photoDTO `json:"photos,omitempty"`
+}
+
+// weatherDTO is the stored reading at the activity's start, in METRIC units.
+// It follows the raw-measurement convention of the rest of this DTO (like
+// distance_meters): stored metric, formatted client-side — deliberately
+// unlike GET /weather, which converts server-side.
+//
+// Every reading field is a pointer so a non-ok row serializes as bare
+// {"status":"..."} rather than a wall of zeroes. That includes PrecipMM: a
+// genuine 0.0 mm on an ok row still serializes, because the client hides the
+// zero cell and the API does not pretend it never measured it.
+type weatherDTO struct {
+	Status     string     `json:"status"`
+	ObservedAt *time.Time `json:"observed_at,omitempty"`
+	TempC      *float64   `json:"temp_c,omitempty"`
+	FeelsLikeC *float64   `json:"feels_like_c,omitempty"`
+	DewPointC  *float64   `json:"dew_point_c,omitempty"`
+	Humidity   *int       `json:"humidity,omitempty"`
+	WindKMH    *float64   `json:"wind_kmh,omitempty"`
+	WindDeg    *int       `json:"wind_deg,omitempty"`
+	PrecipMM   *float64   `json:"precip_mm,omitempty"`
+	Condition  string     `json:"condition,omitempty"`
+	Icon       string     `json:"icon,omitempty"`
 }
 
 // heartRateZoneDTO is one band of the five-zone model with its accumulated
@@ -734,6 +768,9 @@ func (h *Handler) uploadTCX(w http.ResponseWriter, r *http.Request) {
 			// Never affects this response.
 			h.matchSession(r.Context(), a.UserID, SessionRef{SessionID: a.ID, StartUTC: a.StartTime})
 		}
+		// Best-effort: capture the conditions the user stepped out into.
+		// Deliberately NOT given r.Context() — see captureWeather.
+		h.captureWeather(a)
 		httpresp.Created(w, "imported activity", toActivityDTO(a, true))
 	case errors.Is(err, ErrDuplicate):
 		// IngestTCX returns the existing live row alongside ErrDuplicate

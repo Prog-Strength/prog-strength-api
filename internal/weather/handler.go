@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -252,7 +253,8 @@ func buildReadings(reading Reading, loc Location, unit user.DistanceUnit, now ti
 		}
 	}
 	// The strip shows what's coming, not what already happened: keep only
-	// buckets at >= now, capped at the next 5.
+	// buckets at >= now, capped at the next 5. Assumes provider-ascending
+	// bucket order (true for OpenWeather, preserved by the cache round-trip).
 	for _, b := range reading.Hourly {
 		if b.At.Before(now) {
 			continue
@@ -339,6 +341,14 @@ func locationItems(locs []Location) []locationItem {
 
 // ---- PUT /weather/locations ------------------------------------------------
 
+// Field caps for a saved location. Label matches what a human would type in
+// the popover; state/country are short region codes or names from the
+// geocoder (OpenWeather returns ISO country codes and short state strings).
+const (
+	maxLocationLabelLen  = 100
+	maxLocationRegionLen = 10
+)
+
 // putLocations replaces the user's whole saved list (replace, not patch —
 // same contract as the dashboard layout). Provided ids are preserved so
 // existing rows keep their identity across reorders; rows without an id are
@@ -368,24 +378,84 @@ func (h *Handler) putLocations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	locs := make([]Location, 0, len(req.Locations))
+	seenID := make(map[string]bool, len(req.Locations))
 	for _, item := range req.Locations {
 		label := strings.TrimSpace(item.Label)
 		if label == "" {
 			httpresp.Error(w, http.StatusBadRequest, "location label is required")
 			return
 		}
+		if utf8.RuneCountInString(label) > maxLocationLabelLen {
+			httpresp.Error(w, http.StatusBadRequest,
+				fmt.Sprintf("location label is too long (max %d characters)", maxLocationLabelLen))
+			return
+		}
+		country := strings.TrimSpace(item.Country)
+		if country == "" {
+			httpresp.Error(w, http.StatusBadRequest, "location country is required")
+			return
+		}
+		if utf8.RuneCountInString(country) > maxLocationRegionLen {
+			httpresp.Error(w, http.StatusBadRequest,
+				fmt.Sprintf("location country is too long (max %d characters)", maxLocationRegionLen))
+			return
+		}
+		// An empty/blank state normalizes to NULL so a hand-edited row reads
+		// back the same as a geocode-sourced one (state omitted, not "").
+		var state *string
+		if item.State != nil {
+			if s := strings.TrimSpace(*item.State); s != "" {
+				if utf8.RuneCountInString(s) > maxLocationRegionLen {
+					httpresp.Error(w, http.StatusBadRequest,
+						fmt.Sprintf("location state is too long (max %d characters)", maxLocationRegionLen))
+					return
+				}
+				state = &s
+			}
+		}
 		if !validCoords(item.Lat, item.Lon) {
 			httpresp.Error(w, http.StatusBadRequest, "invalid coordinates")
 			return
 		}
+		if item.ID != "" {
+			// A repeated id within one request would collide on the global
+			// primary key mid-transaction; catch it here as a client error.
+			if seenID[item.ID] {
+				httpresp.Error(w, http.StatusBadRequest, "invalid location id")
+				return
+			}
+			seenID[item.ID] = true
+		}
 		locs = append(locs, Location{
 			ID:      item.ID,
 			Label:   label,
-			State:   item.State,
-			Country: item.Country,
+			State:   state,
+			Country: country,
 			Lat:     item.Lat,
 			Lon:     item.Lon,
 		})
+	}
+
+	// Client-supplied ids must belong to the caller's own rows: the id column
+	// is a GLOBAL primary key, so an id from another user's row would blow up
+	// as a PK conflict (the delete only clears the caller's rows) — a
+	// plausible client bug that should be a 400, not a 500 alert.
+	if len(seenID) > 0 {
+		existing, err := h.locations.List(ctx, userID)
+		if err != nil {
+			httpresp.ServerError(w, ctx, "list weather locations", err)
+			return
+		}
+		owned := make(map[string]bool, len(existing))
+		for _, l := range existing {
+			owned[l.ID] = true
+		}
+		for id := range seenID {
+			if !owned[id] {
+				httpresp.Error(w, http.StatusBadRequest, "invalid location id")
+				return
+			}
+		}
 	}
 
 	if err := h.locations.ReplaceAll(ctx, userID, locs); err != nil {

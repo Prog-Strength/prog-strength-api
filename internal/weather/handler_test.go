@@ -3,6 +3,7 @@ package weather
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -33,8 +34,13 @@ func handlerCfg() config.WeatherConfig {
 // an FK to users and the unit preference is read from the users table.
 type handlerFixture struct {
 	router   chi.Router
+	h        *Handler
+	svc      *Service
+	cfg      config.WeatherConfig
 	provider *fakeProvider
+	cache    *SQLiteCacheRepository
 	locs     *SQLiteLocationsRepository
+	users    *user.SQLiteRepository
 	userID   string
 }
 
@@ -49,13 +55,17 @@ func newHandlerFixture(t *testing.T, cfg config.WeatherConfig, unit user.Distanc
 	}
 
 	locs := NewSQLiteLocationsRepository(db)
+	cache := NewSQLiteCacheRepository(db)
 	p := newFakeProvider()
-	svc := NewService(cfg, NewSQLiteCacheRepository(db), NewBudgetLedger(db), p, testLogger())
+	svc := NewService(cfg, cache, NewBudgetLedger(db), p, testLogger())
 	h := NewHandler(svc, locs, cfg, users, testLogger())
 
 	r := chi.NewRouter()
 	h.Mount(r)
-	return &handlerFixture{router: r, provider: p, locs: locs, userID: u.ID}
+	return &handlerFixture{
+		router: r, h: h, svc: svc, cfg: cfg, provider: p,
+		cache: cache, locs: locs, users: users, userID: u.ID,
+	}
 }
 
 // do drives one request through the mounted router with the fixture user in
@@ -333,19 +343,20 @@ func TestReadingsHourlyTruncation(t *testing.T) {
 	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
 	f.seed(t, denverLocation())
 
-	// Two past buckets (must be filtered) plus twelve future ones (must be
-	// capped at 5).
-	base := time.Now().UTC().Truncate(time.Hour)
+	// Pin the handler's clock so the "future" boundary is exact, then hand
+	// the provider two past buckets (must be filtered) and twelve future
+	// ones (must be capped at 5).
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	f.h.now = func() time.Time { return now }
 	var buckets []HourlyBucket
 	for i := -2; i <= 12; i++ {
 		if i == 0 {
 			continue
 		}
-		buckets = append(buckets, HourlyBucket{At: base.Add(time.Duration(i) * time.Hour), TempC: 20, Icon: "01d"})
+		buckets = append(buckets, HourlyBucket{At: now.Add(time.Duration(i) * time.Hour), TempC: 20, Icon: "01d"})
 	}
 	f.provider.hourly = buckets
 
-	before := time.Now().UTC()
 	w := f.do(t, "GET", "/weather?timezone=UTC", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
@@ -355,16 +366,15 @@ func TestReadingsHourlyTruncation(t *testing.T) {
 	if len(data.Hourly) != 5 {
 		t.Fatalf("len(hourly) = %d, want exactly 5", len(data.Hourly))
 	}
-	// Every served bucket is at >= now: `before` was captured just before the
-	// request, so nothing served may precede it.
+	// Every served bucket is at >= the pinned now, and the cap kept the
+	// FIRST five future buckets (now+1h .. now+5h).
 	for i, b := range data.Hourly {
-		if b.At.Before(before) {
-			t.Errorf("hourly[%d].at = %v is before the request time %v", i, b.At, before)
+		if b.At.Before(now) {
+			t.Errorf("hourly[%d].at = %v is before now %v", i, b.At, now)
 		}
-	}
-	// And the cap kept the FIRST five future buckets (base+1h..base+5h).
-	if want := base.Add(5 * time.Hour); !data.Hourly[4].At.Equal(want) {
-		t.Errorf("hourly[4].at = %v, want %v (first five future buckets)", data.Hourly[4].At, want)
+		if want := now.Add(time.Duration(i+1) * time.Hour); !b.At.Equal(want) {
+			t.Errorf("hourly[%d].at = %v, want %v", i, b.At, want)
+		}
 	}
 }
 
@@ -484,6 +494,13 @@ func TestPutLocationsValidation(t *testing.T) {
 	}{
 		{"too many", sixLocations(), "too many locations (max 5)"},
 		{"blank label", `{"locations":[{"label":"   ","country":"US","lat":10,"lon":10}]}`, "location label is required"},
+		{"label too long", `{"locations":[{"label":"` + strings.Repeat("a", 101) + `","country":"US","lat":10,"lon":10}]}`,
+			"location label is too long (max 100 characters)"},
+		{"missing country", `{"locations":[{"label":"X","lat":10,"lon":10}]}`, "location country is required"},
+		{"country too long", `{"locations":[{"label":"X","country":"` + strings.Repeat("c", 11) + `","lat":10,"lon":10}]}`,
+			"location country is too long (max 10 characters)"},
+		{"state too long", `{"locations":[{"label":"X","state":"` + strings.Repeat("s", 11) + `","country":"US","lat":10,"lon":10}]}`,
+			"location state is too long (max 10 characters)"},
 		{"lat too big", `{"locations":[{"label":"X","country":"US","lat":90.5,"lon":10}]}`, "invalid coordinates"},
 		{"lon too small", `{"locations":[{"label":"X","country":"US","lat":10,"lon":-180.5}]}`, "invalid coordinates"},
 		{"malformed body", `{"locations":`, "invalid request body"},
@@ -663,5 +680,180 @@ func TestMissingUserInContextIs500(t *testing.T) {
 	f.router.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 when auth middleware was not applied", w.Code)
+	}
+}
+
+// ---- id validation on PUT --------------------------------------------------
+
+// TestPutLocationsRejectsDuplicateID: the id column is a global primary key,
+// so the same id twice in one request would be a PK conflict mid-transaction.
+// It must surface as a 400, and the stored list must be untouched.
+func TestPutLocationsRejectsDuplicateID(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	saved := f.seed(t, denverLocation())
+
+	body := fmt.Sprintf(`{"locations":[
+		{"id":%q,"label":"A","country":"US","lat":1,"lon":1},
+		{"id":%q,"label":"B","country":"US","lat":2,"lon":2}
+	]}`, saved[0].ID, saved[0].ID)
+	w := f.do(t, "PUT", "/weather/locations", body)
+	wantError(t, w, http.StatusBadRequest, "invalid location id", "")
+
+	after, err := f.locs.List(context.Background(), f.userID)
+	if err != nil {
+		t.Fatalf("list after rejected PUT: %v", err)
+	}
+	if len(after) != 1 || after[0].ID != saved[0].ID || after[0].Label != "Denver" {
+		t.Errorf("stored list changed after a 400: %+v", after)
+	}
+}
+
+// TestPutLocationsRejectsForeignID: an id belonging to another user's row
+// would also collide on the global primary key (the replace only deletes the
+// caller's rows). A 400, and the other user's row stays intact.
+func TestPutLocationsRejectsForeignID(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+
+	other := &user.User{Email: "other@example.com", DisplayName: "Other", WeightUnit: user.WeightUnitPounds, DistanceUnit: user.DistanceUnitMiles}
+	if err := f.users.Create(context.Background(), other); err != nil {
+		t.Fatalf("seed other user: %v", err)
+	}
+	if err := f.locs.ReplaceAll(context.Background(), other.ID, []Location{
+		{Label: "Golden", Country: "US", Lat: 39.75, Lon: -105.22},
+	}); err != nil {
+		t.Fatalf("seed other user's location: %v", err)
+	}
+	theirs, err := f.locs.List(context.Background(), other.ID)
+	if err != nil {
+		t.Fatalf("list other user's locations: %v", err)
+	}
+
+	body := fmt.Sprintf(`{"locations":[{"id":%q,"label":"Hijack","country":"US","lat":10,"lon":10}]}`, theirs[0].ID)
+	w := f.do(t, "PUT", "/weather/locations", body)
+	wantError(t, w, http.StatusBadRequest, "invalid location id", "")
+
+	// The caller saved nothing and the other user's row is untouched.
+	mine, err := f.locs.List(context.Background(), f.userID)
+	if err != nil {
+		t.Fatalf("list caller's locations: %v", err)
+	}
+	if len(mine) != 0 {
+		t.Errorf("caller's list = %+v, want empty after the rejected PUT", mine)
+	}
+	after, err := f.locs.List(context.Background(), other.ID)
+	if err != nil {
+		t.Fatalf("re-list other user's locations: %v", err)
+	}
+	if len(after) != 1 || after[0].ID != theirs[0].ID || after[0].Label != "Golden" {
+		t.Errorf("other user's row changed: %+v", after)
+	}
+}
+
+func TestPutLocationsNormalizesBlankStateToNull(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	w := f.do(t, "PUT", "/weather/locations",
+		`{"locations":[{"label":"Denver","state":"  ","country":"US","lat":39.74,"lon":-104.99}]}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data locationsData
+	decodeData(t, w, &data)
+	if len(data.Locations) != 1 {
+		t.Fatalf("len(locations) = %d, want 1", len(data.Locations))
+	}
+	if data.Locations[0].State != nil {
+		t.Errorf("state = %q, want omitted (blank state stored as NULL)", *data.Locations[0].State)
+	}
+}
+
+// ---- degraded readings pass-through ----------------------------------------
+
+// TestReadingsBudgetExhaustedPassthrough: a refused reservation with stale
+// cache serves the stale sections under status budget_exhausted — the handler
+// passes the service status through verbatim with location/units attached and
+// the omitempty sections populated from the stale rows.
+func TestReadingsBudgetExhaustedPassthrough(t *testing.T) {
+	cfg := handlerCfg()
+	cfg.DailyCallBudget = 0 // ceiling 0: every reservation is refused
+	f := newHandlerFixture(t, cfg, user.DistanceUnitMiles)
+	loc := f.seed(t, denverLocation())[0]
+
+	// Stale rows for all three endpoints, fetched a day ago (past every TTL).
+	old := time.Now().UTC().Add(-24 * time.Hour).Truncate(time.Second)
+	seedReading(t, f.cache, ReadingKey(testLat, testLon, EndpointCurrent),
+		Current{TempC: 3.3, FeelsLikeC: -1.7, Humidity: 41, WindKMH: 22.5, Condition: "Clear", Icon: "01d"}, old)
+	seedReading(t, f.cache, ReadingKey(testLat, testLon, EndpointHourly),
+		[]HourlyBucket{{At: time.Now().UTC().Add(time.Hour), TempC: 3.3, Icon: "01d"}}, old)
+	seedReading(t, f.cache, ReadingKey(testLat, testLon, EndpointDaily),
+		Daily{HighC: 7.8, LowC: -4.4, Sunrise: old, Sunset: old.Add(14 * time.Hour)}, old)
+
+	w := f.do(t, "GET", "/weather?timezone=UTC", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+
+	if data.Status != "budget_exhausted" {
+		t.Errorf("status = %q, want budget_exhausted", data.Status)
+	}
+	if data.Location == nil || data.Location.ID != loc.ID {
+		t.Errorf("location = %+v, want the resolved saved location", data.Location)
+	}
+	if data.Units == nil || data.Units.Temp != "F" || data.Units.Wind != "mph" {
+		t.Errorf("units = %+v, want F/mph even on a degraded payload", data.Units)
+	}
+	if data.Current == nil || data.Current.Temp != 38 {
+		t.Errorf("current = %+v, want the stale row converted (38F)", data.Current)
+	}
+	if data.Today == nil || data.Today.High != 46 {
+		t.Errorf("today = %+v, want the stale daily attached (high 46)", data.Today)
+	}
+	if len(data.Hourly) != 1 {
+		t.Errorf("hourly = %+v, want the stale future bucket attached", data.Hourly)
+	}
+	if want := old.Format(time.RFC3339); data.FetchedAt != want {
+		t.Errorf("fetched_at = %q, want the stale rows' fetch time %q", data.FetchedAt, want)
+	}
+	if f.provider.total() != 0 {
+		t.Errorf("provider called %d times with the budget refused, want 0", f.provider.total())
+	}
+}
+
+// ---- unit-preference fallback ----------------------------------------------
+
+// failingUserReader always errors, standing in for a flaky users table.
+type failingUserReader struct{}
+
+func (failingUserReader) GetByID(ctx context.Context, id string) (*user.User, error) {
+	return nil, errors.New("user store down")
+}
+
+// TestReadingsUnitFallbackWhenUserReadFails: a failed preference read must
+// degrade to the "mi" default (the users-table default), never 500 the whole
+// weather request.
+func TestReadingsUnitFallbackWhenUserReadFails(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitKilometers)
+	f.seed(t, denverLocation())
+	metricSeed(f)
+
+	// Rewire the handler with a users seam that always fails; everything
+	// else (service, locations, cfg) stays real.
+	h := NewHandler(f.svc, f.locs, f.cfg, failingUserReader{}, testLogger())
+	r := chi.NewRouter()
+	h.Mount(r)
+	f.router = r
+
+	w := f.do(t, "GET", "/weather?timezone=UTC", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a preference read failure must not fail the request; body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Units == nil || data.Units.Temp != "F" || data.Units.Wind != "mph" {
+		t.Errorf("units = %+v, want the F/mph default when the user read fails", data.Units)
+	}
+	if data.Current == nil || data.Current.Temp != 38 {
+		t.Errorf("current = %+v, want the mi-converted reading (38F)", data.Current)
 	}
 }

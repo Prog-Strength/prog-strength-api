@@ -71,6 +71,24 @@ var cacheWritesTotal = prometheus.NewCounterVec(
 	[]string{"result"},
 )
 
+// activityCapturesTotal counts activity_weather capture attempts by outcome:
+//
+//	ok             — a reading was fetched and stored
+//	no_coordinates — terminal, no provider call: the activity recorded no position
+//	unavailable    — terminal: the provider has no reading for that hour
+//	failed         — transient (provider error, broken ledger, failed write); no row
+//
+// A budget refusal is deliberately absent from that set — activity_capture.go
+// records why: a backfill stopping on the day's ceiling is a clean stop, and
+// `failed` is the band an operator is meant to read as "stop and look".
+var activityCapturesTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "api_weather_activity_captures_total",
+		Help: "Activity weather capture attempts by result (ok/no_coordinates/unavailable/failed).",
+	},
+	[]string{"result"},
+)
+
 // The gauges below are read from durable SQLite state by the Exporter, never
 // from process memory. That is deliberate: the WHOOP counter postmortem showed
 // in-memory spend/liveness series reset on every restart and lie to alerts,
@@ -111,6 +129,28 @@ var savedLocationsGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 	Help: "Saved weather locations across all users, read from durable SQLite state.",
 })
 
+// The two activity gauges are published by the Exporter from durable SQLite
+// for the same reason as the budget gauges above, and one more: "how much
+// history is left to backfill" is only meaningful if it survives a restart.
+//
+// Both count LIVE activities only. The repository's CountOK joins activities
+// and drops soft-deleted ones so it shares CountPending's universe — otherwise
+// captured + pending would not describe the same set of activities and the two
+// stat panels would quietly disagree.
+var activitiesWithWeatherGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "api_weather_activities_with_weather",
+	Help: "Live (non-deleted) activities with a stored 'ok' weather reading, read from durable SQLite state.",
+})
+
+// Pending counts only the activities a backfill would spend a call on: an
+// outdoor activity with a start coordinate and no row. Activities with no GPS
+// are resolved for free and are excluded, so this gauge trending to zero is
+// backfill progress rather than a number with an unreachable floor.
+var activitiesPendingCaptureGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "api_weather_activities_pending_capture",
+	Help: "Outdoor GPS activities still owed a weather capture (one provider call each), read from durable SQLite state; zero means the backfill is complete.",
+})
+
 func init() {
 	prometheus.MustRegister(
 		requestsTotal,
@@ -125,5 +165,8 @@ func init() {
 		lastSuccessGauge,
 		enabledGauge,
 		savedLocationsGauge,
+		activityCapturesTotal,
+		activitiesWithWeatherGauge,
+		activitiesPendingCaptureGauge,
 	)
 }

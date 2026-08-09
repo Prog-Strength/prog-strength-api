@@ -64,6 +64,9 @@ func (h *Handler) buildDetailDTO(ctx context.Context, userID string, a Activity,
 	if err := h.attachVideos(ctx, userID, a.ID, &dto); err != nil {
 		return activityDTO{}, err
 	}
+	if err := h.attachWeather(ctx, a.ID, &dto); err != nil {
+		return activityDTO{}, err
+	}
 	// Read-time derivation + invariant gate (running only). Violations are
 	// ERROR-logged but the response is still served: a read never 500s over
 	// an accounting mismatch — CI fixtures assert the gate stays quiet.
@@ -208,6 +211,44 @@ func (h *Handler) attachPhotos(ctx context.Context, userID, activityID string, d
 		dtos = append(dtos, pd)
 	}
 	dto.Photos = &dtos
+	return nil
+}
+
+// attachWeather populates the detail DTO's weather block from the stored
+// activity_weather row. Gated on the DATA, never on a.ActivityType or
+// a.Environment: an activity retagged outdoor → indoor keeps its reading and
+// still serves it, because hiding the widget is the client's job and deleting
+// the row would turn a reversible UI toggle into a budget-spending operation.
+//
+// No row (the common case, and every activity until the backfill runs) leaves
+// dto.Weather nil so omitempty drops the key entirely.
+func (h *Handler) attachWeather(ctx context.Context, activityID string, dto *activityDTO) error {
+	if h.weather == nil {
+		return nil
+	}
+	row, err := h.weather.Get(ctx, activityID)
+	if err != nil {
+		return err
+	}
+	if row == nil {
+		return nil
+	}
+	wd := weatherDTO{Status: string(row.Status)}
+	// Reading fields exist only on an ok row; a no_coordinates or unavailable
+	// row serializes as bare {"status":"..."}.
+	if obs := row.Observation; obs != nil {
+		wd.ObservedAt = &obs.ObservedAt
+		wd.TempC = &obs.TempC
+		wd.FeelsLikeC = &obs.FeelsLikeC
+		wd.DewPointC = &obs.DewPointC
+		wd.Humidity = &obs.Humidity
+		wd.WindKMH = &obs.WindKMH
+		wd.WindDeg = &obs.WindDeg
+		wd.PrecipMM = &obs.PrecipMM
+		wd.Condition = obs.Condition
+		wd.Icon = obs.Icon
+	}
+	dto.Weather = &wd
 	return nil
 }
 

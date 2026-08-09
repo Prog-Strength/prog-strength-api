@@ -3,6 +3,7 @@ package weather
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -58,7 +59,115 @@ func newSeededExporter(t *testing.T, cfg config.WeatherConfig, used int, fetched
 		t.Fatalf("seed locations: %v", err)
 	}
 
-	return NewExporter(cfg, ledger, cache, locations), database
+	return NewExporter(cfg, ledger, cache, locations, NewSQLiteActivityWeatherRepository(database)), database
+}
+
+// seedActivityWeatherFixtures produces a known capture split on the exporter's
+// database: two captured live activities, one outdoor activity still owed a
+// paid call, and one with no GPS (pending, but free — so deliberately not part
+// of the pending-capture gauge).
+func seedActivityWeatherFixtures(t *testing.T, database *sql.DB) {
+	t.Helper()
+	mustInsertUser(t, database, "u1")
+	for _, id := range []string{"captured-1", "captured-2", "owed", "owed-nogps"} {
+		seedOutdoorRun(t, database, id, defaultActivityStart)
+	}
+	mustInsertTrackpoint(t, database, "owed", 1, 39.7392, -104.9847)
+	mustInsertTrackpoint(t, database, "owed-nogps", 1, nil, nil)
+
+	repo := NewSQLiteActivityWeatherRepository(database)
+	for _, id := range []string{"captured-1", "captured-2"} {
+		if err := repo.Put(context.Background(), okRow(id)); err != nil {
+			t.Fatalf("seed ok row %q: %v", id, err)
+		}
+	}
+}
+
+// TestExporterPublishesActivityCaptureCounts: both new gauges come straight
+// from the repository, and pending counts only what a backfill would spend on.
+func TestExporterPublishesActivityCaptureCounts(t *testing.T) {
+	e, database := newSeededExporter(t, exporterCfg(), 400, time.Time{})
+	seedActivityWeatherFixtures(t, database)
+
+	if err := e.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if got := testutil.ToFloat64(activitiesWithWeatherGauge); got != 2 {
+		t.Errorf("activities_with_weather = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(activitiesPendingCaptureGauge); got != 1 {
+		t.Errorf("activities_pending_capture = %v, want 1 (the no-GPS activity is free and excluded)", got)
+	}
+}
+
+// TestExporterNilActivityRepositorySkipsCaptureGauges: the constructor stays
+// usable without a capture repository — the two gauges are skipped, not
+// panicked on and not zeroed.
+func TestExporterNilActivityRepositorySkipsCaptureGauges(t *testing.T) {
+	e, database := newSeededExporter(t, exporterCfg(), 400, time.Time{})
+	seedActivityWeatherFixtures(t, database)
+	if err := e.refresh(context.Background()); err != nil {
+		t.Fatalf("seeding refresh: %v", err)
+	}
+
+	e.activityWeather = nil
+	if err := e.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh without a capture repository: %v", err)
+	}
+	if got := testutil.ToFloat64(activitiesWithWeatherGauge); got != 2 {
+		t.Errorf("activities_with_weather = %v, want the previous 2 (skipped, not republished)", got)
+	}
+}
+
+// failingActivityWeatherRepo fails the two count reads while every other
+// durable read succeeds. A closed database cannot stand in for this: the
+// ledger read fails first, so refresh never reaches the capture reads and the
+// all-or-nothing contract would go untested for them.
+type failingActivityWeatherRepo struct {
+	ActivityWeatherRepository
+	err error
+}
+
+func (r failingActivityWeatherRepo) CountOK(context.Context) (int, error) { return 0, r.err }
+
+func (r failingActivityWeatherRepo) CountPending(context.Context) (PendingCounts, error) {
+	return PendingCounts{}, r.err
+}
+
+// TestExporterActivityReadErrorKeepsPreviousValues: a failed capture read
+// leaves EVERY gauge — including the budget ones read before it — at its
+// previous value, so a half-published refresh can never reach the alerts.
+func TestExporterActivityReadErrorKeepsPreviousValues(t *testing.T) {
+	e, database := newSeededExporter(t, exporterCfg(), 400, time.Time{})
+	seedActivityWeatherFixtures(t, database)
+	if err := e.refresh(context.Background()); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+
+	// Move a value that the next refresh WOULD publish, so "unchanged" is
+	// evidence that nothing was published rather than that nothing changed.
+	e.cfg.DailyCallBudget = 1
+	e.activityWeather = failingActivityWeatherRepo{err: errors.New("activity_weather read failed")}
+
+	if err := e.refresh(context.Background()); err == nil {
+		t.Fatal("refresh with a failing capture read = nil error, want error")
+	}
+	checks := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"daily_budget", testutil.ToFloat64(dailyBudgetGauge), 800},
+		{"calls_used_today", testutil.ToFloat64(callsUsedTodayGauge), 400},
+		{"saved_locations", testutil.ToFloat64(savedLocationsGauge), 2},
+		{"activities_with_weather", testutil.ToFloat64(activitiesWithWeatherGauge), 2},
+		{"activities_pending_capture", testutil.ToFloat64(activitiesPendingCaptureGauge), 1},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("api_weather_%s after a failed refresh = %v, want previous %v", c.name, c.got, c.want)
+		}
+	}
 }
 
 // TestExporterRefreshPublishesDurableState is the happy path: every gauge

@@ -24,10 +24,14 @@ type Exporter struct {
 	ledger    *BudgetLedger
 	cache     CacheRepository
 	locations LocationsRepository
+	// activityWeather may be nil: the two capture gauges are then simply not
+	// published, so a caller that only wants the budget gauges does not have
+	// to construct a repository it will never read.
+	activityWeather ActivityWeatherRepository
 }
 
-func NewExporter(cfg config.WeatherConfig, ledger *BudgetLedger, cache CacheRepository, locations LocationsRepository) *Exporter {
-	return &Exporter{cfg: cfg, ledger: ledger, cache: cache, locations: locations}
+func NewExporter(cfg config.WeatherConfig, ledger *BudgetLedger, cache CacheRepository, locations LocationsRepository, activityWeather ActivityWeatherRepository) *Exporter {
+	return &Exporter{cfg: cfg, ledger: ledger, cache: cache, locations: locations, activityWeather: activityWeather}
 }
 
 // Run refreshes immediately, then every refreshInterval, until ctx is
@@ -67,6 +71,21 @@ func (e *Exporter) refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Read under the same all-or-nothing contract as everything above: a
+	// failure here must leave the budget gauges at their previous values too,
+	// not publish half a picture.
+	var (
+		capturedOK int
+		pending    PendingCounts
+	)
+	if e.activityWeather != nil {
+		if capturedOK, err = e.activityWeather.CountOK(ctx); err != nil {
+			return err
+		}
+		if pending, err = e.activityWeather.CountPending(ctx); err != nil {
+			return err
+		}
+	}
 
 	// The dashboard must draw thresholds against the same ceiling the
 	// service enforces — activeCeiling is the single source (budget.go),
@@ -93,6 +112,13 @@ func (e *Exporter) refresh(ctx context.Context) error {
 	// 0 (not absent) when the cache has never been written, mirroring the
 	// WHOOP liveness gauge: an enabled integration that has never fetched
 	// should read as infinitely stale, not unknown.
+	//
+	// Caveat worth writing down because it otherwise reads as a bug: activity
+	// captures deliberately do NOT advance this gauge. It is the newest
+	// fetched_at across weather_cache, and historical readings never touch
+	// that table (they are a durable store, not a cache). So a backfill can
+	// run all day while "time since last successful call" climbs — correct,
+	// because this gauge measures TILE liveness.
 	if lastSuccess.IsZero() {
 		lastSuccessGauge.Set(0)
 	} else {
@@ -105,5 +131,12 @@ func (e *Exporter) refresh(ctx context.Context) error {
 		enabledGauge.Set(0)
 	}
 	savedLocationsGauge.Set(float64(locationCount))
+	if e.activityWeather != nil {
+		activitiesWithWeatherGauge.Set(float64(capturedOK))
+		// Eligible only — the no-GPS pending activities cost nothing and are
+		// resolved without a provider call, so counting them would give the
+		// backfill-progress panel a floor it can never reach.
+		activitiesPendingCaptureGauge.Set(float64(pending.Eligible))
+	}
 	return nil
 }

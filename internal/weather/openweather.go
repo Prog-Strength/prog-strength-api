@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,16 @@ import (
 // pagination URLs, alerts, pop, wind_gust, and the lunar block. Following a
 // pagination link is a separately BILLED call, so the first page is always
 // the whole answer as far as this file is concerned.
+//
+// The historical ("timemachine") surface carries its own trap, and one the
+// others do not: its readings are stored FOREVER rather than cached for an
+// hour, so a silently-wrong decode is not a bad tile that self-heals — it is
+// an immutable 0 °C fact attached to a run. It is also the only surface with
+// a definitive negative (see ErrNoHistoricalData): a timestamp outside the
+// history window answers 400 and no retry will ever change that, while every
+// other failure must stay transient so nothing terminal gets recorded.
+// Unlike the three above, its fixtures are NOT live captures — see the note
+// on them in openweather_test.go, and the plan's Open Question 1.
 
 const openWeatherBaseURL = "https://api.openweathermap.org"
 
@@ -37,6 +49,23 @@ const openWeatherBaseURL = "https://api.openweathermap.org"
 // copies of the prefix is exactly how the /onecall segment came to be
 // missing from all three paths at once.
 const oneCallBasePath = "/data/4.0/onecall"
+
+// historicalPath is the One Call 4.0 historical ("timemachine") surface. It is
+// a named constant for the same reason oneCallBasePath is: the /onecall
+// omission that 404'd every reading in production came from inlined copies.
+//
+// NOT YET VERIFIED AGAINST A LIVE CALL — see the plan's Open Question 1. The
+// fixtures pinning this shape are hand-authored to the documented envelope, not
+// captured. Probe once with the production key and re-capture before rollout.
+const historicalPath = oneCallBasePath + "/timemachine"
+
+// historicalTimeParam is the unix-seconds timestamp selecting the observation
+// hour. Named alongside historicalPath so correcting the surface after a live
+// probe stays a one-line change.
+const historicalTimeParam = "dt"
+
+// errorSnippetBytes bounds how much of an error body reaches a log line.
+const errorSnippetBytes = 256
 
 // hourlyBucketCount is how many forecast hours the provider returns. The
 // tile shows 5; returning 12 lets the service re-slice without a re-fetch
@@ -167,6 +196,62 @@ func (p *OpenWeatherProvider) Daily(ctx context.Context, lat, lon float64) (Dail
 	}, nil
 }
 
+// owPrecipBlock is the rain/snow sub-object; both report the millimeters that
+// fell during the observation hour under the same "1h" key.
+type owPrecipBlock struct {
+	OneH float64 `json:"1h"`
+}
+
+func (p *OpenWeatherProvider) Historical(ctx context.Context, lat, lon float64, at time.Time) (Observation, error) {
+	params := metricParams(lat, lon)
+	params.Set(historicalTimeParam, strconv.FormatInt(at.UTC().Unix(), 10))
+	var payload struct {
+		Data []struct {
+			DT        int64          `json:"dt"`
+			Temp      float64        `json:"temp"`
+			FeelsLike float64        `json:"feels_like"`
+			DewPoint  float64        `json:"dew_point"`
+			Humidity  int            `json:"humidity"`
+			WindSpeed float64        `json:"wind_speed"`
+			WindDeg   int            `json:"wind_deg"`
+			Rain      owPrecipBlock  `json:"rain"`
+			Snow      owPrecipBlock  `json:"snow"`
+			Weather   []owWeatherTag `json:"weather"`
+		} `json:"data"`
+	}
+	if err := p.get(ctx, historicalPath, params, &payload); err != nil {
+		return Observation{}, err
+	}
+	if len(payload.Data) == 0 {
+		// Same guard as Current and Daily, and the reason this file's header
+		// calls the envelope load-bearing: decoding the wrong shape succeeds
+		// silently and would store a plausible 0 °C reading as a fact.
+		return Observation{}, fmt.Errorf("openweather historical: response carried no data entries")
+	}
+	e := payload.Data[0]
+	out := Observation{
+		// The provider's own hour, not the requested one, so a reading is
+		// never attributed to a timestamp it does not describe.
+		ObservedAt: unixUTC(e.DT),
+		TempC:      e.Temp,
+		FeelsLikeC: e.FeelsLike,
+		DewPointC:  e.DewPoint,
+		Humidity:   e.Humidity,
+		WindKMH:    e.WindSpeed * 3.6, // metric units are m/s; the canonical model is km/h
+		WindDeg:    e.WindDeg,
+		// Rain and snow are reported separately and are both "water that fell
+		// in this hour"; the model carries one total.
+		PrecipMM: e.Rain.OneH + e.Snow.OneH,
+	}
+	// A missing weather tag degrades to empty condition/icon rather than
+	// failing the whole reading, exactly as Current does.
+	if len(e.Weather) > 0 {
+		out.Condition = e.Weather[0].Main
+		out.Icon = e.Weather[0].Icon
+	}
+	return out, nil
+}
+
 // owGeoEntry is the Geocoding 1.0 result shape; "state" is omitted for
 // most non-US places, which maps onto GeoResult.State's omitempty.
 type owGeoEntry struct {
@@ -215,6 +300,24 @@ func (p *OpenWeatherProvider) get(ctx context.Context, path string, params url.V
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusBadRequest && path == historicalPath {
+		// OpenWeather answers 400 for a timestamp outside its history window.
+		// That is the one failure worth recording as terminal; everything else
+		// (5xx, timeouts, 429) is transient and must leave no row.
+		//
+		// Scoped to the historical surface deliberately. A 400 from /current
+		// or geocoding means WE sent a malformed request, and letting that
+		// read as a definitive negative would have the backfill write
+		// permanent `unavailable` rows to record a bug in our own query
+		// string.
+		//
+		// The vendor's message rides along because this is the ONE error that
+		// writes a permanent row: an operator asking why a night of backfill
+		// went terminal needs to read "requested time is out of allowed
+		// range" rather than infer it. Bounded, because it is untrusted input
+		// on its way into a log line.
+		return fmt.Errorf("openweather %s: %w: %s", path, ErrNoHistoricalData, errorSnippet(resp.Body))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("openweather %s: unexpected status %d", path, resp.StatusCode)
 	}
@@ -222,6 +325,17 @@ func (p *OpenWeatherProvider) get(ctx context.Context, path string, params url.V
 		return fmt.Errorf("openweather %s: decode response: %w", path, err)
 	}
 	return nil
+}
+
+// errorSnippet reads at most errorSnippetBytes of an error response for the
+// log line. A read failure yields "" rather than an error of its own — the
+// status already carries the outcome, the body is only ever detail.
+func errorSnippet(body io.Reader) string {
+	b, err := io.ReadAll(io.LimitReader(body, errorSnippetBytes))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // latLonParams is the bare coordinate pair — geocoding sends exactly this.

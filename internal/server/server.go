@@ -418,13 +418,23 @@ func New(cfg config.Config) (*Server, error) {
 	weatherCacheRepo := weather.NewSQLiteCacheRepository(database)
 	weatherLocationsRepo := weather.NewSQLiteLocationsRepository(database)
 	weatherLedger := weather.NewBudgetLedger(database)
+	weatherActivityRepo := weather.NewSQLiteActivityWeatherRepository(database)
+	// One provider instance for the tile and the activity capture: the budget
+	// is an account-level constraint against OpenWeather, so both surfaces
+	// share the ledger, and sharing the client that spends it keeps the
+	// connection pool and the 8s timeout in one place too.
+	weatherProvider := weather.NewOpenWeatherProvider(weatherClient, cfg.Weather.APIKey)
 	weatherSvc := weather.NewService(
 		cfg.Weather,
 		weatherCacheRepo,
 		weatherLedger,
-		weather.NewOpenWeatherProvider(weatherClient, cfg.Weather.APIKey),
+		weatherProvider,
 		weatherLogger,
 	)
+	// The import-time conditions capture (sows/activity-weather-conditions).
+	// Wired into the activity handler below; cmd/weather-backfill builds the
+	// same thing from the same config so there is one capture path to trust.
+	weatherCapturer := weather.NewActivityCapturer(cfg.Weather, weatherActivityRepo, weatherLedger, weatherProvider, weatherLogger)
 	// userRepo satisfies the handler's narrow userReader seam — it only reads
 	// the distance-unit preference (°F/mph vs °C/km/h).
 	weatherHandler := weather.NewHandler(weatherSvc, weatherLocationsRepo, cfg.Weather, userRepo, weatherLogger)
@@ -432,7 +442,11 @@ func New(cfg config.Config) (*Server, error) {
 	// provider_configured=false means every /weather route will serve status
 	// "disabled" while api_weather_enabled reports 1 — an operator should see
 	// the missing OPENWEATHER_API_KEY here, not discover it from a blank tile.
-	log.Printf("weather: enabled=%v provider_configured=%v", cfg.Weather.Enabled, cfg.Weather.APIKey != "")
+	// capture_activity_weather is on the same line because it is the knob an
+	// operator turns off during a backfill, and its effect is otherwise
+	// invisible: captures that never happen leave no rows and no log lines.
+	log.Printf("weather: enabled=%v provider_configured=%v capture_activity_weather=%v",
+		cfg.Weather.Enabled, cfg.Weather.APIKey != "", cfg.Weather.CaptureActivityWeather)
 
 	// Auth: mounts /auth/google/* when Google OAuth is configured and
 	// /auth/dev/token when DEV_AUTH=true. Always mounted so that login
@@ -586,7 +600,7 @@ func New(cfg config.Config) (*Server, error) {
 	// it never calls OpenWeather so it cannot spend budget, and it publishes
 	// the enabled/disabled gauge itself, so a disabled deploy still reports
 	// its (zero) spend to the budget alerts.
-	go weather.NewExporter(cfg.Weather, weatherLedger, weatherCacheRepo, weatherLocationsRepo).Run(bgCtx)
+	go weather.NewExporter(cfg.Weather, weatherLedger, weatherCacheRepo, weatherLocationsRepo, weatherActivityRepo).Run(bgCtx)
 
 	// Exercise routes — public read of the shared catalog.
 	exerciseHandler := exercise.NewHandler(exerciseRepo)
@@ -671,6 +685,12 @@ func New(cfg config.Config) (*Server, error) {
 		// 015 and prog-strength-docs/sows/running-tracking-via-tcx-import.md.
 		activityHandler := activity.NewHandler(activityRepo)
 		activityHandler.SetPublisher(timelinePublisher)
+		// Conditions at the start of every outdoor GPS import, and the stored
+		// reading on the detail response. Wired unconditionally: the capturer
+		// owns its own kill switches (weather `enabled` plus
+		// capture_activity_weather), so a disabled install stays
+		// distinguishable from an unwired one.
+		activityHandler.SetWeatherCapturer(weatherCapturer)
 		// Activity type registry: the closed set of session types the unified
 		// /activities surface can validate, persist, and summarize. This is
 		// the ONE place descriptors register — internal/activity (the parent)

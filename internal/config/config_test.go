@@ -627,18 +627,19 @@ func TestGoldenManifest(t *testing.T) {
 			MaxAttempts:         5,
 		},
 		Weather: WeatherConfig{
-			Enabled:               true,
-			APIKey:                "",
-			DailyCallBudget:       800,
-			AllowPaidOverage:      false,
-			DailyCallHardCeiling:  2000,
-			CountGeocodingCalls:   true,
-			CurrentTTLMinutes:     15,
-			HourlyTTLMinutes:      60,
-			DailyTTLMinutes:       180,
-			GeocodingTTLDays:      30,
-			MaxLocations:          5,
-			EagerLoadAllLocations: false,
+			Enabled:                true,
+			APIKey:                 "",
+			DailyCallBudget:        800,
+			AllowPaidOverage:       false,
+			DailyCallHardCeiling:   2000,
+			CountGeocodingCalls:    true,
+			CurrentTTLMinutes:      15,
+			HourlyTTLMinutes:       60,
+			DailyTTLMinutes:        180,
+			GeocodingTTLDays:       30,
+			MaxLocations:           5,
+			EagerLoadAllLocations:  false,
+			CaptureActivityWeather: true,
 		},
 		Photos: PhotosConfig{
 			MaxPerActivity:      10,
@@ -856,18 +857,19 @@ func TestWeatherSectionParses(t *testing.T) {
 	}
 
 	want := WeatherConfig{
-		Enabled:               true,
-		APIKey:                "",
-		DailyCallBudget:       800,
-		AllowPaidOverage:      false,
-		DailyCallHardCeiling:  2000,
-		CountGeocodingCalls:   true,
-		CurrentTTLMinutes:     15,
-		HourlyTTLMinutes:      60,
-		DailyTTLMinutes:       180,
-		GeocodingTTLDays:      30,
-		MaxLocations:          5,
-		EagerLoadAllLocations: false,
+		Enabled:                true,
+		APIKey:                 "",
+		DailyCallBudget:        800,
+		AllowPaidOverage:       false,
+		DailyCallHardCeiling:   2000,
+		CountGeocodingCalls:    true,
+		CurrentTTLMinutes:      15,
+		HourlyTTLMinutes:       60,
+		DailyTTLMinutes:        180,
+		GeocodingTTLDays:       30,
+		MaxLocations:           5,
+		EagerLoadAllLocations:  false,
+		CaptureActivityWeather: true,
 	}
 	if !reflect.DeepEqual(cfg.Weather, want) {
 		t.Errorf("Weather = %#v, want %#v", cfg.Weather, want)
@@ -892,6 +894,34 @@ func TestWeatherAPIKeyInterpolationFromEnv(t *testing.T) {
 	}
 	if cfg.Weather.APIKey != "ow-key-123" {
 		t.Errorf("Weather.APIKey = %q, want ow-key-123", cfg.Weather.APIKey)
+	}
+}
+
+// TestWeatherCaptureActivityWeatherParses pins both sides of the capture knob
+// and, in the third case, what happens when the key is absent entirely: false,
+// like every other [weather] literal. There is no defaults layer for feature
+// knobs — a plain bool cannot tell "absent" from an explicit `false` — so the
+// committed config.toml is the only source of the documented true, and a
+// manifest that omits the key spends nothing on import. See
+// sows/activity-weather-conditions.md.
+func TestWeatherCaptureActivityWeatherParses(t *testing.T) {
+	cases := []struct {
+		name string
+		toml string
+		want bool
+	}{
+		{"explicit true", minimalTOML + "\n[weather]\ncapture_activity_weather = true\n", true},
+		{"explicit false", minimalTOML + "\n[weather]\ncapture_activity_weather = false\n", false},
+		{"key absent", minimalTOML + "\n[weather]\nenabled = true\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			cfg := load(t, tc.toml, nil)
+			if cfg.Weather.CaptureActivityWeather != tc.want {
+				t.Errorf("Weather.CaptureActivityWeather = %v, want %v", cfg.Weather.CaptureActivityWeather, tc.want)
+			}
+		})
 	}
 }
 

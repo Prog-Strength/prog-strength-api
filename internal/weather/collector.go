@@ -68,13 +68,10 @@ func (e *Exporter) refresh(ctx context.Context) error {
 		return err
 	}
 
-	// The active ceiling: with paid overage allowed the hard ceiling is the
-	// real stop line, so that is what the dashboard must draw thresholds
-	// against — otherwise "100% utilized" would show while calls still flow.
-	ceiling := e.cfg.DailyCallBudget
-	if e.cfg.AllowPaidOverage {
-		ceiling = e.cfg.DailyCallHardCeiling
-	}
+	// The dashboard must draw thresholds against the same ceiling the
+	// service enforces — activeCeiling is the single source (service.go),
+	// otherwise "100% utilized" could show while calls still flow.
+	ceiling := activeCeiling(e.cfg)
 
 	callsUsedTodayGauge.Set(float64(used))
 	dailyBudgetGauge.Set(float64(ceiling))

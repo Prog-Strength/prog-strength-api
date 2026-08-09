@@ -6,7 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Prog-Strength/prog-strength-api/internal/config"
 )
+
+// activeCeiling is the single source of the enforced daily ceiling: the paid
+// hard ceiling when overage is allowed, else the free-tier budget. The
+// collector and the service must never compute this independently — drift
+// here means the dashboard disagrees with actual enforcement.
+func activeCeiling(cfg config.WeatherConfig) int {
+	if cfg.AllowPaidOverage {
+		return cfg.DailyCallHardCeiling
+	}
+	return cfg.DailyCallBudget
+}
 
 // ErrBudgetExhausted means today's reservation would cross the active
 // ceiling; the provider call must not happen.

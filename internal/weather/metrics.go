@@ -93,7 +93,7 @@ var budgetUtilizationGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 
 var shutoffActiveGauge = prometheus.NewGauge(prometheus.GaugeOpts{
 	Name: "api_weather_shutoff_active",
-	Help: "1 when today's durable spend has reached the active ceiling and provider calls are refused, else 0.",
+	Help: "1 when today's reserved spend has reached the active ceiling, else 0 (a multi-call reservation can be refused slightly before this flips).",
 })
 
 var lastSuccessGauge = prometheus.NewGauge(prometheus.GaugeOpts{

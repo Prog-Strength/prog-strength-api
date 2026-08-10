@@ -2,7 +2,9 @@ package dashboard
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -23,8 +25,42 @@ func testRecoveryEngine() *recoverytrend.Engine {
 		BalancedZ:          1.0,
 		TrendZ:             0.5,
 		MinStdDevMs:        1.0,
+		BaselineDriftDays:  28,
+		BaselineDriftZ:     0.35,
 	})
 }
+
+// entriesBetween builds daily whoop entries for the local dates from fromOffset
+// days before now down to toOffset days before now (inclusive), oldest first.
+// hrvAt is called with each entry's own offset, so a fixture can vary HRV
+// across the window; the other two metrics are constant and uninteresting.
+func entriesBetween(now time.Time, loc *time.Location, fromOffset, toOffset int, hrvAt func(offset int) float64) []whooprecovery.Entry {
+	local := now.In(loc)
+	y, mo, d := local.Date()
+	out := make([]whooprecovery.Entry, 0, fromOffset-toOffset+1)
+	for i := fromOffset; i >= toOffset; i-- {
+		day := time.Date(y, mo, d-i, 0, 0, 0, 0, loc)
+		out = append(out, whooprecovery.Entry{
+			Date:             day.Format("2006-01-02"),
+			RestingHeartRate: rhrPtr(52),
+			RecoveryScore:    rhrPtr(65),
+			HRVRmssdMilli:    rhrPtr(hrvAt(i)),
+		})
+	}
+	return out
+}
+
+// entriesEndingAt builds n consecutive daily whoop entries ending on the local
+// date of now, oldest first, with a constant HRV.
+func entriesEndingAt(now time.Time, loc *time.Location, n int, hrv float64) []whooprecovery.Entry {
+	return entriesBetween(now, loc, n-1, 0, func(int) float64 { return hrv })
+}
+
+// rampHRV gives every offset a DISTINCT HRV, rising toward today. Fixtures that
+// need to tell one charted day's band from another's use it: under a constant
+// HRV every day's trailing baseline is identical, so a mis-zipped band would be
+// indistinguishable from a correct one.
+func rampHRV(offset int) float64 { return 100 - float64(offset) }
 
 func TestBuildWhoop_TodayAndSpark(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
@@ -227,6 +263,158 @@ func TestBuildWhoop_NoEntriesBaselineUnknown(t *testing.T) {
 	}
 }
 
+// TestBuildWhoop_ScalarBlocksUnchangedByLeadIn is the compatibility promise:
+// adding a window of lead-in ahead of the charted days must not move the scalar
+// baseline/hrv blocks by so much as a bit. The lead-in carries a wildly
+// different HRV, so any leakage into Compute's sample would be obvious.
+func TestBuildWhoop_ScalarBlocksUnchangedByLeadIn(t *testing.T) {
+	denver := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
+
+	narrow := entriesEndingAt(now, denver, 31, 80)
+	before := buildWhoop(narrow, testRecoveryEngine(), now, denver)
+	if before == nil {
+		t.Fatal("connected user should always get a section")
+		return
+	}
+	// Snapshot the values before the second call. buildWhoop allocates a fresh
+	// section per call, so these are not aliased to the second result — the
+	// assertions below would be vacuous if they were.
+	wantBaseline, wantHRV := before.Baseline, before.HRV
+
+	// 30 strictly-older dates (offsets 60..31) with a very different HRV, then
+	// the same charted window.
+	wide := append(entriesBetween(now, denver, 60, 31, func(int) float64 { return 200 }), narrow...)
+	if len(wide) != 61 {
+		t.Fatalf("len(wide) = %d, want 61", len(wide))
+	}
+
+	after := buildWhoop(wide, testRecoveryEngine(), now, denver)
+	if after == nil {
+		t.Fatal("connected user should always get a section")
+		return
+	}
+	if !reflect.DeepEqual(after.Baseline, wantBaseline) {
+		t.Errorf("Baseline changed by lead-in:\n got %+v\nwant %+v", after.Baseline, wantBaseline)
+	}
+	if !reflect.DeepEqual(after.HRV, wantHRV) {
+		t.Errorf("HRV changed by lead-in:\n got %+v\nwant %+v", after.HRV, wantHRV)
+	}
+}
+
+// TestBuildWhoop_DaysCarryPerDayBands pins the band-to-day correspondence end
+// to end: EVERY charted day's date and its own trailing baseline, the baseline
+// recomputed independently in the test rather than read back from the engine.
+// The fixture ramps HRV so no two days share a baseline — under a constant HRV
+// all 31 results are byte-identical and any mis-zip (an off-by-one, or a full
+// reversal of the mapping) sails through. The last-day-agrees-with-the-scalar-
+// block assertions follow; they are the right invariant but not sufficient
+// alone.
+func TestBuildWhoop_DaysCarryPerDayBands(t *testing.T) {
+	denver := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
+
+	got := buildWhoop(entriesBetween(now, denver, 60, 0, rampHRV), testRecoveryEngine(), now, denver)
+	if got == nil {
+		t.Fatal("connected user should always get a section")
+		return
+	}
+	if len(got.Days) != 31 {
+		t.Fatalf("len(Days) = %d, want 31 charted days", len(got.Days))
+	}
+
+	for i, day := range got.Days {
+		// Days[i] is the local date i-from-the-oldest, i.e. today − (30 − i).
+		offset := 30 - i
+		wantDate := time.Date(2026, 8, 1-offset, 0, 0, 0, 0, denver).Format("2006-01-02")
+		if day.Date != wantDate {
+			t.Errorf("Days[%d].date = %q, want %q", i, day.Date, wantDate)
+		}
+		// That day's band comes from the 30 dates PRECEDING it — offsets
+		// offset+30 (oldest) down to offset+1 — summed oldest→newest, the same
+		// order the engine collects them in.
+		var sum float64
+		for o := offset + 30; o >= offset+1; o-- {
+			sum += rampHRV(o)
+		}
+		wantAvg := sum / 30
+		if day.BaselineAvg == nil {
+			t.Errorf("Days[%d] (%s) baseline_avg = nil, want %v", i, day.Date, wantAvg)
+			continue
+		}
+		if math.Abs(*day.BaselineAvg-wantAvg) > 1e-9 {
+			t.Errorf("Days[%d] (%s) baseline_avg = %v, want %v — band zipped to the wrong day",
+				i, day.Date, *day.BaselineAvg, wantAvg)
+		}
+	}
+
+	last := got.Days[len(got.Days)-1]
+	if last.Date != "2026-08-01" {
+		t.Errorf("Days[last].date = %q, want 2026-08-01 (today)", last.Date)
+	}
+	if last.Status != got.HRV.Status {
+		t.Errorf("Days[last].status = %q, want %q (= hrv.status)", last.Status, got.HRV.Status)
+	}
+	if last.BalancedLow == nil || got.HRV.BalancedLow == nil || *last.BalancedLow != *got.HRV.BalancedLow {
+		t.Errorf("Days[last].balanced_low = %v, want %v (= hrv.balanced_low)", last.BalancedLow, got.HRV.BalancedLow)
+	}
+	if last.BalancedHigh == nil || got.HRV.BalancedHigh == nil || *last.BalancedHigh != *got.HRV.BalancedHigh {
+		t.Errorf("Days[last].balanced_high = %v, want %v (= hrv.balanced_high)", last.BalancedHigh, got.HRV.BalancedHigh)
+	}
+	if last.BaselineAvg == nil || got.Baseline.HRVAvg == nil || *last.BaselineAvg != *got.Baseline.HRVAvg {
+		t.Errorf("Days[last].baseline_avg = %v, want %v (= baseline.hrv_avg)", last.BaselineAvg, got.Baseline.HRVAvg)
+	}
+}
+
+// TestBuildWhoop_LeadInNotSerialized: the lead-in feeds the engine and is never
+// emitted — the charted window still starts exactly baseline_window_days back.
+func TestBuildWhoop_LeadInNotSerialized(t *testing.T) {
+	denver := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
+
+	got := buildWhoop(entriesEndingAt(now, denver, 61, 80), testRecoveryEngine(), now, denver)
+	if got == nil {
+		t.Fatal("connected user should always get a section")
+		return
+	}
+	const oldest = "2026-07-02" // today − 30 days
+	if len(got.Days) == 0 {
+		t.Fatal("Days should be the full charted window, got none")
+		return
+	}
+	if got.Days[0].Date != oldest {
+		t.Fatalf("Days[0].date = %q, want %s", got.Days[0].Date, oldest)
+	}
+	// Dates are YYYY-MM-DD, so lexicographic < is chronological <.
+	for _, day := range got.Days {
+		if day.Date < oldest {
+			t.Errorf("lead-in day %q leaked into Days (oldest charted is %s)", day.Date, oldest)
+		}
+	}
+}
+
+// TestBuildWhoop_BaselineTrendPresentWhenNoEntries: a connected-but-empty user
+// gets "nothing to say" as an unknown direction, never a missing key.
+func TestBuildWhoop_BaselineTrendPresentWhenNoEntries(t *testing.T) {
+	denver := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
+
+	got := buildWhoop(nil, testRecoveryEngine(), now, denver)
+	if got == nil {
+		t.Fatal("connected user with no data still gets a section")
+		return
+	}
+	if got.BaselineTrend.Direction != recoverytrend.TrendUnknown {
+		t.Errorf("baseline_trend.direction = %q, want %q", got.BaselineTrend.Direction, recoverytrend.TrendUnknown)
+	}
+	if got.BaselineTrend.OverDays != 28 {
+		t.Errorf("baseline_trend.over_days = %d, want 28", got.BaselineTrend.OverDays)
+	}
+	if got.BaselineTrend.DeltaMs != nil || got.BaselineTrend.FromAvg != nil {
+		t.Errorf("baseline_trend delta/from = %v/%v, want nil/nil", got.BaselineTrend.DeltaMs, got.BaselineTrend.FromAvg)
+	}
+}
+
 // TestRecoverySection_JSONKeys is the contract assertion: the recovery section
 // serializes exactly the keys the web mirror (lib/api.ts DashboardRecovery)
 // consumes. If a field name drifts, this and the web type disagree.
@@ -243,7 +431,7 @@ func TestRecoverySection_JSONKeys(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, k := range []string{"today", "resting_hr_spark", "days", "baseline", "hrv"} {
+	for _, k := range []string{"today", "resting_hr_spark", "days", "baseline", "hrv", "baseline_trend"} {
 		if _, ok := m[k]; !ok {
 			t.Errorf("recovery section missing key %q", k)
 		}
@@ -264,6 +452,81 @@ func TestRecoverySection_JSONKeys(t *testing.T) {
 	for _, k := range []string{"status", "balanced_low", "balanced_high", "z_score", "trend", "short_avg"} {
 		if _, ok := hrv[k]; !ok {
 			t.Errorf("hrv missing key %q", k)
+		}
+	}
+	var drift map[string]json.RawMessage
+	if err := json.Unmarshal(m["baseline_trend"], &drift); err != nil {
+		t.Fatalf("unmarshal baseline_trend: %v", err)
+	}
+	assertExactKeys(t, "baseline_trend", drift, "direction", "delta_ms", "from_avg", "over_days")
+
+	// days[] is the embedded RecoveryDay's four keys flattened plus the five
+	// band keys — nine, no more. A stray field here (e.g. someone replacing the
+	// embed with a named member) silently changes the wire shape.
+	var days []map[string]json.RawMessage
+	if err := json.Unmarshal(m["days"], &days); err != nil {
+		t.Fatalf("unmarshal days: %v", err)
+	}
+	if len(days) == 0 {
+		t.Fatal("days should be a full null window, got none")
+	}
+	for i, day := range days {
+		assertExactKeys(t, "days["+strconv.Itoa(i)+"]", day,
+			"date", "resting_heart_rate", "recovery_score", "hrv_rmssd_milli",
+			"baseline_avg", "balanced_low", "balanced_high", "z_score", "status")
+	}
+}
+
+// TestRecoverySection_TodayJSONKeysUnchanged pins today's wire shape: exactly
+// the original four keys. buildWhoop(nil, …) leaves Today null, so this needs
+// its own fixture with a row for today.
+//
+// What this covers is Today's TYPE: widening it to RecoveryDayPoint would leak
+// the five band keys in here and fail. It does NOT cover the embed flattening —
+// Today is a *RecoveryDay, so it never exercises the embed at all; tagging the
+// embed is caught by the days[] loop in TestRecoverySection_JSONKeys.
+func TestRecoverySection_TodayJSONKeysUnchanged(t *testing.T) {
+	denver := mustLoad(t, "America/Denver")
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
+	got := buildWhoop(entriesEndingAt(now, denver, 61, 80), testRecoveryEngine(), now, denver)
+	if got == nil || got.Today == nil {
+		t.Fatal("expected a section with today's row")
+		return
+	}
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var today map[string]json.RawMessage
+	if err := json.Unmarshal(m["today"], &today); err != nil {
+		t.Fatalf("unmarshal today: %v", err)
+	}
+	if today == nil {
+		t.Fatal("today should be a non-null object")
+	}
+	// today keeps the bare RecoveryDay shape — no band fields leak in.
+	assertExactKeys(t, "today", today, "date", "resting_heart_rate", "recovery_score", "hrv_rmssd_milli")
+}
+
+// assertExactKeys fails unless obj's key set is exactly want — no missing keys
+// and, just as importantly, no extra ones.
+func assertExactKeys(t *testing.T, label string, obj map[string]json.RawMessage, want ...string) {
+	t.Helper()
+	wanted := make(map[string]bool, len(want))
+	for _, k := range want {
+		wanted[k] = true
+		if _, ok := obj[k]; !ok {
+			t.Errorf("%s missing key %q", label, k)
+		}
+	}
+	for k := range obj {
+		if !wanted[k] {
+			t.Errorf("%s has unexpected key %q", label, k)
 		}
 	}
 }

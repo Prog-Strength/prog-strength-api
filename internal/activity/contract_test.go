@@ -161,6 +161,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 		recoverytrend.New(recoverytrend.Config{
 			BaselineWindowDays: 30, MinBaselineDays: 14, TrendWindowDays: 7,
 			MinTrendDays: 4, BalancedZ: 1.0, TrendZ: 0.5, MinStdDevMs: 1.0,
+			BaselineDriftDays: 28, BaselineDriftZ: 0.35,
 		}))
 
 	r := chi.NewRouter()

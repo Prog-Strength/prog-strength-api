@@ -620,6 +620,8 @@ func TestGoldenManifest(t *testing.T) {
 			BalancedZ:          1.0,
 			TrendZ:             0.5,
 			MinStdDevMs:        1.0,
+			BaselineDriftDays:  28,
+			BaselineDriftZ:     0.35,
 		},
 		CalendarSync: CalendarSyncConfig{
 			Enabled:             true,
@@ -744,6 +746,12 @@ func TestRecoverySectionParses(t *testing.T) {
 	}
 	if cfg.Recovery.MinStdDevMs != 1.0 {
 		t.Errorf("MinStdDevMs = %v, want 1.0", cfg.Recovery.MinStdDevMs)
+	}
+	if cfg.Recovery.BaselineDriftDays != 28 {
+		t.Errorf("BaselineDriftDays = %d, want 28", cfg.Recovery.BaselineDriftDays)
+	}
+	if cfg.Recovery.BaselineDriftZ != 0.35 {
+		t.Errorf("BaselineDriftZ = %v, want 0.35", cfg.Recovery.BaselineDriftZ)
 	}
 }
 

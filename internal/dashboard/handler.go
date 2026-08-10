@@ -418,9 +418,11 @@ func (h *Handler) buildBloodPressureSection(ctx context.Context, r *http.Request
 // buildRecoverySection assembles the Whoop recovery tile. It is present only
 // when the user has a CONNECTED Whoop connection: an absent/revoked/errored
 // connection (or a failed connection read) yields a nil section so the card
-// stays hidden. When connected, it fetches the trailing baseline_window_days+1
-// local days of recovery and builds today's row, the 7-day resting-HR
-// sparkline, the date-aligned days history, and the derived baseline/HRV blocks.
+// stays hidden. When connected, it fetches 2×baseline_window_days+1 local days
+// of recovery — a window of lead-in ahead of the charted window, so every
+// charted day has a full trailing baseline — and builds today's row, the 7-day
+// resting-HR sparkline, the date-aligned days history, and the derived
+// baseline/HRV blocks.
 // A failed recovery read degrades to nil (never a 500), like the other section
 // reads.
 func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, userID string, now time.Time, loc *time.Location) *RecoverySection {
@@ -435,12 +437,13 @@ func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, use
 		return nil
 	}
 
-	// baseline_window_days local dates BEFORE today through today inclusive — the
-	// full window the trend engine needs (31 dates at the default). Same single
-	// indexed ListRange call as before (idx_user_whoop_recovery_user_date covers
-	// (user_id, date DESC)); the read just returns ≤31 rows instead of ≤7.
+	// TWO baseline windows plus today: baseline_window_days of lead-in so the
+	// OLDEST charted day still has a full trailing sample, then the charted
+	// window itself (61 dates at the defaults). Same single indexed ListRange
+	// call as before — idx_user_whoop_recovery_user_date covers (user_id,
+	// date DESC) — the read just returns ≤61 rows instead of ≤31.
 	win := h.recovery.BaselineWindowDays()
-	sinceStr := now.In(loc).AddDate(0, 0, -win).Format("2006-01-02")
+	sinceStr := now.In(loc).AddDate(0, 0, -2*win).Format("2006-01-02")
 	untilStr := now.In(loc).Format("2006-01-02")
 	entries := defer1(ctx, r, "whoop recovery", func() ([]whooprecovery.Entry, error) {
 		return h.whoopRecovery.ListRange(ctx, userID, sinceStr, untilStr)

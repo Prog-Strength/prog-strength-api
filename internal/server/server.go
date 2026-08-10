@@ -828,6 +828,8 @@ func New(cfg config.Config) (*Server, error) {
 			BalancedZ:          cfg.Recovery.BalancedZ,
 			TrendZ:             cfg.Recovery.TrendZ,
 			MinStdDevMs:        cfg.Recovery.MinStdDevMs,
+			BaselineDriftDays:  cfg.Recovery.BaselineDriftDays,
+			BaselineDriftZ:     cfg.Recovery.BaselineDriftZ,
 		})
 		activityHandler.SetDemographicsLoader(user.EstimateDemographicsLoader{Repo: userRepo})
 		activityHandler.Mount(r)

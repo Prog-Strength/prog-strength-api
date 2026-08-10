@@ -1,6 +1,7 @@
 package recoverytrend
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -16,6 +17,8 @@ func defaultCfg() Config {
 		BalancedZ:          1.0,
 		TrendZ:             0.5,
 		MinStdDevMs:        1.0,
+		BaselineDriftDays:  28,
+		BaselineDriftZ:     0.35,
 	}
 }
 
@@ -284,5 +287,314 @@ func TestCompute_PartialNullsPerMetricCounts(t *testing.T) {
 	}
 	if !approx(b.RecoveryScoreAvg, 60) {
 		t.Errorf("RecoveryScoreAvg = %v, want 60", b.RecoveryScoreAvg)
+	}
+}
+
+// wide builds a date-ascending window of len(hrv) days named d000, d001, …, so
+// a test can assert on the exact dates ComputeSeries echoes back. Resting HR
+// and recovery score are left nil — ComputeSeries only reads HRV.
+func wide(hrv []*float64) []Day {
+	days := make([]Day, len(hrv))
+	for i, v := range hrv {
+		days[i] = Day{Date: fmt.Sprintf("d%03d", i), HRV: v}
+	}
+	return days
+}
+
+// ramp returns n HRV pointers rising linearly from start by step per day.
+func ramp(n int, start, step float64) []*float64 {
+	out := make([]*float64, n)
+	for i := range out {
+		out[i] = p(start + step*float64(i))
+	}
+	return out
+}
+
+func TestComputeSeries_LengthAndLeadIn(t *testing.T) {
+	e := New(defaultCfg())
+	days := wide(flat(61, 80))
+	series, _ := e.ComputeSeries(days)
+	if len(series) != 31 {
+		t.Fatalf("len(series) = %d, want 31", len(series))
+	}
+	for i, r := range series {
+		if want := days[30+i].Date; r.Date != want {
+			t.Errorf("series[%d].Date = %q, want %q", i, r.Date, want)
+		}
+	}
+}
+
+func TestComputeSeries_PerDayBaselineExcludesTheDayItself(t *testing.T) {
+	e := New(defaultCfg())
+	hrv := flat(61, 80)
+	// One large outlier at charted index 10 (input index 40).
+	hrv[40] = p(200)
+	series, _ := e.ComputeSeries(wide(hrv))
+
+	// The outlier's OWN baseline is the 30 flat days behind it — untouched.
+	if !approx(series[10].BaselineAvg, 80) {
+		t.Errorf("outlier day's own baseline = %v, want 80 (day excluded from its own sample)", series[10].BaselineAvg)
+	}
+	// The NEXT day's baseline includes it: (29*80 + 200)/30 = 84.
+	if !approx(series[11].BaselineAvg, 84) {
+		t.Errorf("next day's baseline = %v, want 84 (outlier now in sample)", series[11].BaselineAvg)
+	}
+}
+
+func TestComputeSeries_AgreesWithComputeOnToday(t *testing.T) {
+	// Run the same agreement block under two BalancedZ values. The shipped 1.0
+	// is a multiplicative identity, so a band that dropped the BalancedZ factor
+	// altogether would still agree with itself; 1.5 makes the factor
+	// observable. Equality is exact (!=, not approx) — the two entry points
+	// share band/classify, so agreement to the last bit is the whole invariant.
+	widerZ := defaultCfg()
+	widerZ.BalancedZ = 1.5
+	cfgs := []struct {
+		name string
+		cfg  Config
+	}{
+		{"balanced_z_1.0", defaultCfg()},
+		{"balanced_z_1.5", widerZ},
+	}
+	for _, tc := range cfgs {
+		t.Run(tc.name, func(t *testing.T) {
+			e := New(tc.cfg)
+			days := wide(ramp(61, 70, 0.5))
+			series, _ := e.ComputeSeries(days)
+			baseline, hrv := e.Compute(days[30:])
+
+			last := series[len(series)-1]
+			if last.BaselineAvg == nil || baseline.HRVAvg == nil || *last.BaselineAvg != *baseline.HRVAvg {
+				t.Errorf("BaselineAvg = %v, want scalar HRVAvg %v (exact)", last.BaselineAvg, baseline.HRVAvg)
+			}
+			if last.BalancedLow == nil || hrv.BalancedLow == nil || *last.BalancedLow != *hrv.BalancedLow {
+				t.Errorf("BalancedLow = %v, want %v (exact)", last.BalancedLow, hrv.BalancedLow)
+			}
+			if last.BalancedHigh == nil || hrv.BalancedHigh == nil || *last.BalancedHigh != *hrv.BalancedHigh {
+				t.Errorf("BalancedHigh = %v, want %v (exact)", last.BalancedHigh, hrv.BalancedHigh)
+			}
+			if last.ZScore == nil || hrv.ZScore == nil || *last.ZScore != *hrv.ZScore {
+				t.Errorf("ZScore = %v, want %v (exact)", last.ZScore, hrv.ZScore)
+			}
+			if last.Status != hrv.Status {
+				t.Errorf("Status = %q, want %q", last.Status, hrv.Status)
+			}
+		})
+	}
+}
+
+func TestComputeSeries_ShortHistoryLeavesEarlyDaysUnknown(t *testing.T) {
+	e := New(defaultCfg())
+	hrv := make([]*float64, 61)
+	// Only the last 25 input days have readings, so the first charted days have
+	// fewer than min_baseline_days (14) behind them.
+	for i := 36; i < 61; i++ {
+		hrv[i] = p(80)
+	}
+	series, _ := e.ComputeSeries(wide(hrv))
+
+	// Charted index 0 is input index 30: its sample is days[0:30] — all nil.
+	if series[0].BaselineAvg != nil || series[0].BalancedLow != nil || series[0].BalancedHigh != nil {
+		t.Errorf("series[0] should carry no band, got %+v", series[0])
+	}
+	if series[0].Status != StatusUnknown {
+		t.Errorf("series[0].Status = %q, want %q", series[0].Status, StatusUnknown)
+	}
+	// Charted index 20 is input index 50: its sample days[20:50] holds 14
+	// readings (indices 36..49) — exactly min_baseline_days.
+	if !approx(series[20].BaselineAvg, 80) {
+		t.Errorf("series[20].BaselineAvg = %v, want 80", series[20].BaselineAvg)
+	}
+	if series[20].Status != StatusBalanced {
+		t.Errorf("series[20].Status = %q, want %q", series[20].Status, StatusBalanced)
+	}
+}
+
+func TestComputeSeries_NullDayKeepsBandDropsZ(t *testing.T) {
+	e := New(defaultCfg())
+	hrv := flat(61, 80)
+	hrv[45] = nil // charted index 15, a missing morning with a full history
+	series, _ := e.ComputeSeries(wide(hrv))
+
+	r := series[15]
+	if !approx(r.BaselineAvg, 80) {
+		t.Errorf("BaselineAvg = %v, want 80 — a missing morning must not erase the band", r.BaselineAvg)
+	}
+	if r.BalancedLow == nil || r.BalancedHigh == nil {
+		t.Errorf("bounds should survive a null reading, got %+v", r)
+	}
+	if r.ZScore != nil {
+		t.Errorf("ZScore = %v, want nil", r.ZScore)
+	}
+	if r.Status != StatusUnknown {
+		t.Errorf("Status = %q, want %q", r.Status, StatusUnknown)
+	}
+}
+
+func TestDrift_RisingFallingSteady(t *testing.T) {
+	e := New(defaultCfg())
+	// Drift reaches back BaselineDriftDays(28) from the newest charted day:
+	// back = len(series)-1-28 = 2, so it compares charted 30 (input 60) against
+	// charted 2 (input 32). Delta and from-value are pinned exactly, not merely
+	// non-nil — otherwise an off-by-one in `back`, or reporting `now` as `from`,
+	// reads identically on a linear ramp where every 28-day step is the same.
+	//   rising:  baseline[30] = mean(85..99.5) = 92.25, baseline[2] = mean(71..85.5) = 78.25
+	//   falling: baseline[30] = mean(85..70.5) = 77.75, baseline[2] = mean(99..84.5) = 91.75
+	cases := []struct {
+		name      string
+		hrv       []*float64
+		want      string
+		wantDelta float64
+		wantFrom  float64
+	}{
+		{"rising", ramp(61, 70, 0.5), TrendRising, 14, 78.25},
+		{"falling", ramp(61, 100, -0.5), TrendFalling, -14, 91.75},
+		{"steady", flat(61, 80), TrendSteady, 0, 80},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, bt := e.ComputeSeries(wide(tc.hrv))
+			if bt.Direction != tc.want {
+				t.Errorf("Direction = %q, want %q", bt.Direction, tc.want)
+			}
+			// approx subsumes the nil check: it returns false on a nil pointer.
+			if !approx(bt.DeltaMs, tc.wantDelta) {
+				t.Errorf("DeltaMs = %v, want %v (now − then, exact)", bt.DeltaMs, tc.wantDelta)
+			}
+			if !approx(bt.FromAvg, tc.wantFrom) {
+				t.Errorf("FromAvg = %v, want %v (the baseline 28 days back, not today's)", bt.FromAvg, tc.wantFrom)
+			}
+			if bt.OverDays != 28 {
+				t.Errorf("OverDays = %d, want 28", bt.OverDays)
+			}
+		})
+	}
+}
+
+func TestDrift_ThresholdIsSDRelative(t *testing.T) {
+	e := New(defaultCfg())
+	// A pure linear ramp can NEVER read steady: slope drives both the move and
+	// the spread, so delta/threshold pins at ~9x no matter how gentle the
+	// slope. Nothing in a ramp-only suite constrains BaselineDriftZ — drop the
+	// factor to 0 and the ramp cases stay green. Constraining it needs a wide
+	// spread under a SMALL move, which is what the oscillation below buys.
+	//
+	// HRV is level(i) + osc(i), where osc alternates ±20 and level steps by d
+	// at i=32. The oscillation sums to exactly zero over ANY 30 consecutive
+	// indices, so it inflates every SD without shifting a single baseline —
+	// delete it as "noise" and both thresholds below collapse. Hence:
+	//   baseline[2]  = mean(days[2:32])  = 80 exactly (level flat, osc cancels)
+	//   baseline[30] = mean(days[30:60]) = 80 + d*28/30 (28 of the 30 stepped)
+	//
+	// The ±20 MAGNITUDE is load-bearing too: it puts sdEff at ~20, so the
+	// threshold lands at 0.35*20 ~= 7, which is what brackets the two moves
+	// below (3.73 and 14.93) with ~2x clearance on either side. Shrink it and
+	// the steady case crosses the threshold; grow it and the rising case stops
+	// crossing. The fixture is symmetric about the level, so the spread — and
+	// therefore the threshold — is identical for negative d.
+	step := func(d float64) []*float64 {
+		out := make([]*float64, 61)
+		for i := range out {
+			level := 80.0
+			// 32 is the EXCLUSIVE end of the `then` window days[2:32], so every
+			// day in that sample predates the step — which is what pins FromAvg
+			// at exactly 80 while the newest baseline carries d*28/30 of it.
+			if i >= 32 {
+				level += d
+			}
+			osc := 20.0
+			if i%2 == 1 {
+				osc = -20
+			}
+			out[i] = p(level + osc)
+		}
+		return out
+	}
+
+	cases := []struct {
+		name string
+		d    float64
+		want string
+	}{
+		// delta = 4*28/30 = 3.733; sdEff = 20.025; threshold = 0.35*20.025 = 7.009.
+		// A real, nonzero baseline move that is still smaller than the noise.
+		{"below_threshold_reads_steady", 4, TrendSteady},
+		// delta = 16*28/30 = 14.933; sdEff = 20.394; threshold = 7.138.
+		{"above_threshold_reads_rising", 16, TrendRising},
+		// Both arms of the switch need their own threshold case: the linear
+		// `falling` ramp cannot constrain the negative side any more than the
+		// linear `rising` ramp could constrain the positive one. Deltas mirror
+		// exactly (-3.733, -14.933) against the same ~7 threshold.
+		{"below_threshold_negative_reads_steady", -4, TrendSteady},
+		{"above_threshold_negative_reads_falling", -16, TrendFalling},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, bt := e.ComputeSeries(wide(step(tc.d)))
+			if bt.Direction != tc.want {
+				t.Errorf("Direction = %q, want %q (delta %.3f vs threshold +/-~7)", bt.Direction, tc.want, tc.d*28/30)
+			}
+			if wantDelta := tc.d * 28 / 30; !approx(bt.DeltaMs, wantDelta) {
+				t.Errorf("DeltaMs = %v, want %v", bt.DeltaMs, wantDelta)
+			}
+			if !approx(bt.FromAvg, 80) {
+				t.Errorf("FromAvg = %v, want 80 (oscillation cancels over the 30-day sample)", bt.FromAvg)
+			}
+		})
+	}
+}
+
+func TestDrift_UnknownWhenSeriesTooShort(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.BaselineDriftDays = 40 // the documented misconfiguration: > the series
+	e := New(cfg)
+	_, bt := e.ComputeSeries(wide(flat(61, 80)))
+	if bt.Direction != TrendUnknown {
+		t.Errorf("Direction = %q, want %q", bt.Direction, TrendUnknown)
+	}
+	if bt.DeltaMs != nil || bt.FromAvg != nil {
+		t.Errorf("DeltaMs/FromAvg = %v/%v, want nil/nil", bt.DeltaMs, bt.FromAvg)
+	}
+	if bt.OverDays != 40 {
+		t.Errorf("OverDays = %d, want 40", bt.OverDays)
+	}
+}
+
+func TestDrift_UnknownWhenBaselineAbsent(t *testing.T) {
+	e := New(defaultCfg())
+	series, bt := e.ComputeSeries(wide(make([]*float64, 61)))
+	if len(series) != 31 {
+		t.Fatalf("len(series) = %d, want 31", len(series))
+	}
+	if bt.Direction != TrendUnknown {
+		t.Errorf("Direction = %q, want %q", bt.Direction, TrendUnknown)
+	}
+	if bt.DeltaMs != nil || bt.FromAvg != nil {
+		t.Errorf("DeltaMs/FromAvg = %v/%v, want nil/nil", bt.DeltaMs, bt.FromAvg)
+	}
+	if bt.OverDays != 28 {
+		t.Errorf("OverDays = %d, want 28", bt.OverDays)
+	}
+}
+
+func TestDrift_IsNotShortAvg(t *testing.T) {
+	e := New(defaultCfg())
+	// Baseline climbing all month (0..53 rise 70→96.5), then the last week
+	// collapses to 75. The 30-day baseline is still well above where it stood
+	// four weeks ago, while the 7-day mean sits well below it.
+	hrv := ramp(61, 70, 0.5)
+	for i := 54; i < 61; i++ {
+		hrv[i] = p(75)
+	}
+	days := wide(hrv)
+
+	_, hrvBlock := e.Compute(days[30:])
+	_, bt := e.ComputeSeries(days)
+
+	if hrvBlock.Trend != TrendFalling {
+		t.Errorf("HRV.Trend = %q, want %q (7-day mean below baseline)", hrvBlock.Trend, TrendFalling)
+	}
+	if bt.Direction != TrendRising {
+		t.Errorf("BaselineTrend.Direction = %q, want %q (baseline above its own past)", bt.Direction, TrendRising)
 	}
 }

@@ -12,6 +12,8 @@ type Config struct {
 	BalancedZ          float64 // |z| within this many SDs of baseline reads as balanced
 	TrendZ             float64 // recent mean must sit this many SDs off baseline to read rising/falling
 	MinStdDevMs        float64 // SD floor, so a near-flat history cannot divide by ~0
+	BaselineDriftDays  int     // how far back the baseline is compared against
+	BaselineDriftZ     float64 // |delta| must exceed this many SDs to read rising/falling
 }
 
 // HRV status values. Directional on purpose: elevated and suppressed are
@@ -67,6 +69,31 @@ type HRV struct {
 	ShortAvg     *float64
 }
 
+// DayResult is one charted day read against ITS OWN trailing baseline — the
+// window of BaselineWindowDays ending the day before it. Every field is nil
+// (Status unknown) until that day has MinBaselineDays samples behind it, which
+// is why the band on a chart legitimately begins part-way across.
+type DayResult struct {
+	Date         string
+	BaselineAvg  *float64
+	BalancedLow  *float64
+	BalancedHigh *float64
+	ZScore       *float64
+	Status       string
+}
+
+// BaselineTrend is the baseline measured against its own past: today's
+// baseline minus the baseline as it stood BaselineDriftDays earlier. This is a
+// DIFFERENT question from HRV.Trend, which compares the recent mean against the
+// window it sits inside. The two may legitimately point opposite ways — a
+// rising baseline under a suppressed morning is a real state, not a bug.
+type BaselineTrend struct {
+	Direction string   // rising | falling | steady | unknown
+	DeltaMs   *float64 // now − then; nil when either baseline is absent
+	FromAvg   *float64 // the baseline it moved from
+	OverDays  int      // always populated, even when Direction is unknown
+}
+
 // Engine computes recovery baselines and HRV balance from a fixed Config.
 type Engine struct{ cfg Config }
 
@@ -118,24 +145,14 @@ func (e *Engine) Compute(days []Day) (Baseline, HRV) {
 	b.HRVAvg = &avg
 	sd := stdDevPop(hrv, avg)
 	b.HRVStdDev = &sd
-	sdEff := math.Max(sd, e.cfg.MinStdDevMs)
-
-	low := avg - e.cfg.BalancedZ*sdEff
-	high := avg + e.cfg.BalancedZ*sdEff
+	low, high, sdEff := e.band(avg, sd)
 	h.BalancedLow = &low
 	h.BalancedHigh = &high
 
 	if today.HRV != nil {
 		z := (*today.HRV - avg) / sdEff
 		h.ZScore = &z
-		switch {
-		case math.Abs(z) <= e.cfg.BalancedZ:
-			h.Status = StatusBalanced
-		case z > e.cfg.BalancedZ:
-			h.Status = StatusElevated
-		default:
-			h.Status = StatusSuppressed
-		}
+		h.Status = e.classify(z)
 	}
 
 	trendHRV := collect(lastN(days, e.cfg.TrendWindowDays), func(d Day) *float64 { return d.HRV })
@@ -154,6 +171,102 @@ func (e *Engine) Compute(days []Day) (Baseline, HRV) {
 	}
 
 	return b, h
+}
+
+// band returns the balanced bounds and the effective (floored) SD for a
+// baseline mean and spread. The floored SD is returned because the caller
+// needs the SAME divisor for the z-score — a band and a z computed from
+// different divisors could disagree about which side of the bound a day is on.
+func (e *Engine) band(avg, sd float64) (low, high, sdEff float64) {
+	sdEff = math.Max(sd, e.cfg.MinStdDevMs)
+	return avg - e.cfg.BalancedZ*sdEff, avg + e.cfg.BalancedZ*sdEff, sdEff
+}
+
+// classify maps a z-score to a status. Inclusive at the boundary: |z| within
+// BalancedZ reads balanced, above reads elevated, below reads suppressed.
+func (e *Engine) classify(z float64) string {
+	switch {
+	case math.Abs(z) <= e.cfg.BalancedZ:
+		return StatusBalanced
+	case z > e.cfg.BalancedZ:
+		return StatusElevated
+	default:
+		return StatusSuppressed
+	}
+}
+
+// ComputeSeries derives, for every charted day, that day's own trailing
+// baseline and the standing of that day's reading against it, plus the drift of
+// the baseline against its own past.
+//
+// days must be date-ascending and must carry BaselineWindowDays days of LEAD-IN
+// before the first charted day, so the oldest charted day has a full trailing
+// sample. The returned slice covers days[BaselineWindowDays:] in the same order
+// — 31 entries at the default 30-day window fed a 61-day input.
+//
+// Pure: no clock, no DB, no I/O. Absent days must be present in the input with
+// nil metrics, exactly as Compute requires.
+func (e *Engine) ComputeSeries(days []Day) ([]DayResult, BaselineTrend) {
+	lead := e.cfg.BaselineWindowDays
+	if lead > len(days) {
+		lead = len(days)
+	}
+
+	series := make([]DayResult, 0, len(days)-lead)
+	var lastSDEff float64
+	for i := lead; i < len(days); i++ {
+		// Trailing window ending the day BEFORE i — the same exclude-the-day-
+		// itself rule Compute applies to today, applied to every day.
+		from := i - e.cfg.BaselineWindowDays
+		if from < 0 {
+			from = 0
+		}
+		sample := collect(days[from:i], func(d Day) *float64 { return d.HRV })
+
+		r := DayResult{Date: days[i].Date, Status: StatusUnknown}
+		if len(sample) >= e.cfg.MinBaselineDays {
+			avg := mean(sample)
+			sd := stdDevPop(sample, avg)
+			low, high, sdEff := e.band(avg, sd)
+			lastSDEff = sdEff
+			r.BaselineAvg, r.BalancedLow, r.BalancedHigh = &avg, &low, &high
+			if v := days[i].HRV; v != nil {
+				z := (*v - avg) / sdEff
+				r.ZScore = &z
+				r.Status = e.classify(z)
+			}
+		}
+		series = append(series, r)
+	}
+
+	return series, e.drift(series, lastSDEff)
+}
+
+// drift compares the newest baseline in the series against the baseline
+// BaselineDriftDays earlier. Unknown when the series is too short to reach
+// back that far, when either endpoint has no baseline yet, or when no day in
+// the series produced a spread to threshold against.
+func (e *Engine) drift(series []DayResult, sdEff float64) BaselineTrend {
+	bt := BaselineTrend{Direction: TrendUnknown, OverDays: e.cfg.BaselineDriftDays}
+	back := len(series) - 1 - e.cfg.BaselineDriftDays
+	if back < 0 || sdEff <= 0 {
+		return bt
+	}
+	now, then := series[len(series)-1].BaselineAvg, series[back].BaselineAvg
+	if now == nil || then == nil {
+		return bt
+	}
+	d := *now - *then
+	bt.DeltaMs, bt.FromAvg = &d, then
+	switch {
+	case d > e.cfg.BaselineDriftZ*sdEff:
+		bt.Direction = TrendRising
+	case d < -e.cfg.BaselineDriftZ*sdEff:
+		bt.Direction = TrendFalling
+	default:
+		bt.Direction = TrendSteady
+	}
+	return bt
 }
 
 // collect returns the non-nil values of one metric across days, in order.

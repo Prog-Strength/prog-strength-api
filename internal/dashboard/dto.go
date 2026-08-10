@@ -60,13 +60,15 @@ type QuoteSection struct {
 
 // RecoverySection is the Whoop recovery tile. nil at the Summary level unless a
 // connected Whoop connection exists. Today and RestingHRSpark are unchanged in
-// shape, semantics, and content; Days, Baseline, and HRV are additive.
+// shape, semantics, and content; Days, Baseline, HRV, and BaselineTrend are
+// additive.
 type RecoverySection struct {
-	Today          *RecoveryDay     `json:"today"`            // nil when no row today
-	RestingHRSpark []float64        `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted
-	Days           []RecoveryDay    `json:"days"`             // full window, date-aligned oldest→newest, missing days present with null metrics
-	Baseline       RecoveryBaseline `json:"baseline"`         // trailing averages + HRV spread; always present
-	HRV            RecoveryHRV      `json:"hrv"`              // today's HRV vs the user's own baseline; always present
+	Today          *RecoveryDay          `json:"today"`            // nil when no row today
+	RestingHRSpark []float64             `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted
+	Days           []RecoveryDayPoint    `json:"days"`             // full window, date-aligned oldest→newest, missing days present with null metrics
+	Baseline       RecoveryBaseline      `json:"baseline"`         // trailing averages + HRV spread; always present
+	HRV            RecoveryHRV           `json:"hrv"`              // today's HRV vs the user's own baseline; always present
+	BaselineTrend  RecoveryBaselineTrend `json:"baseline_trend"`   // the baseline vs its own past; always present
 }
 
 // RecoveryDay is a single day's Whoop recovery snapshot for the tile. The three
@@ -77,6 +79,20 @@ type RecoveryDay struct {
 	RestingHeartRate *float64 `json:"resting_heart_rate"`
 	RecoveryScore    *float64 `json:"recovery_score"`
 	HRVRmssdMilli    *float64 `json:"hrv_rmssd_milli"`
+}
+
+// RecoveryDayPoint is one charted day: the day's raw metrics (embedded, so the
+// existing four keys serialize unchanged) plus the band as it stood on THAT
+// day. The band fields are null and Status is "unknown" until the day has
+// min_baseline_days behind it, so a client's band legitimately begins part-way
+// across the series for a user with short history.
+type RecoveryDayPoint struct {
+	RecoveryDay
+	BaselineAvg  *float64 `json:"baseline_avg"`
+	BalancedLow  *float64 `json:"balanced_low"`
+	BalancedHigh *float64 `json:"balanced_high"`
+	ZScore       *float64 `json:"z_score"`
+	Status       string   `json:"status"` // balanced | elevated | suppressed | unknown
 }
 
 // RecoveryBaseline carries the trailing averages and the spread behind the HRV
@@ -103,6 +119,17 @@ type RecoveryHRV struct {
 	ZScore       *float64 `json:"z_score"`
 	Trend        string   `json:"trend"` // rising | falling | steady | unknown
 	ShortAvg     *float64 `json:"short_avg"`
+}
+
+// RecoveryBaselineTrend is the baseline against its own past. NOT the same
+// question as RecoveryHRV.Trend, which compares the recent mean against the
+// window it sits inside; these two may point opposite ways. Always present —
+// "nothing to say" is Direction "unknown", never an absent key.
+type RecoveryBaselineTrend struct {
+	Direction string   `json:"direction"` // rising | falling | steady | unknown
+	DeltaMs   *float64 `json:"delta_ms"`
+	FromAvg   *float64 `json:"from_avg"`
+	OverDays  int      `json:"over_days"`
 }
 
 // RunningSection is the ONE shared payload every running-family tile reads

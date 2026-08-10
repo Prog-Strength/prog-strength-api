@@ -590,22 +590,27 @@ func (connectedWhoopConn) Get(_ context.Context, userID string) (*whoopconn.Conn
 	return &whoopconn.Connection{UserID: userID, Status: whoopconn.StatusConnected}, nil
 }
 
-// captureRecoveryRepo records the since/until it is called with so a test can
-// assert the fetched window width.
+// captureRecoveryRepo records the since/until it is called with, and how many
+// times, so a test can assert both the fetched window width and that widening
+// that window did not cost a second query.
 type captureRecoveryRepo struct {
 	whooprecovery.Repository
 	since, until string
+	calls        int
 }
 
 func (c *captureRecoveryRepo) ListRange(_ context.Context, _ string, since, until string) ([]whooprecovery.Entry, error) {
+	c.calls++
 	c.since, c.until = since, until
 	return nil, nil
 }
 
-// TestBuildRecoverySection_WidenedWindow asserts the recovery read now fetches
-// baseline_window_days (30) local dates before today through today inclusive,
-// rather than the legacy trailing 7. For now pinned to local 2026-08-01, the
-// window is since=2026-07-02, until=2026-08-01.
+// TestBuildRecoverySection_WidenedWindow asserts the recovery read fetches
+// 2×baseline_window_days (60) local dates before today through today inclusive
+// — a window of lead-in ahead of the charted window, so every charted day has a
+// full trailing baseline. For now pinned to local 2026-08-01, the window is
+// since=2026-06-02, until=2026-08-01. The call count is asserted too: the wider
+// window must still be ONE indexed ListRange, not a second read bolted on.
 func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
 	loc := mustLoad(t, "America/Denver")
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, loc)
@@ -621,11 +626,14 @@ func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/dashboard/summary", nil)
 	h.buildRecoverySection(req.Context(), req, "user-1", now, loc)
 
-	if capture.since != "2026-07-02" {
-		t.Errorf("since = %q, want 2026-07-02 (30 days back)", capture.since)
+	if capture.since != "2026-06-02" {
+		t.Errorf("since = %q, want 2026-06-02 (60 days back)", capture.since)
 	}
 	if capture.until != "2026-08-01" {
 		t.Errorf("until = %q, want 2026-08-01 (today)", capture.until)
+	}
+	if capture.calls != 1 {
+		t.Errorf("ListRange calls = %d, want exactly 1 indexed read per request", capture.calls)
 	}
 }
 

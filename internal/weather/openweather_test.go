@@ -123,22 +123,29 @@ const owDailyJSON = `{
 }`
 
 // ---------------------------------------------------------------------------
-// HISTORICAL ("timemachine") FIXTURES — NOT LIVE CAPTURES.
+// HISTORICAL FIXTURES — STILL HAND-AUTHORED, BUT NOW TO A VERIFIED CONTRACT.
 //
-// Unlike every fixture above, the owHistorical* bodies below are HAND-AUTHORED
-// to the DOCUMENTED One Call timemachine envelope. No OpenWeather key was
-// available to the change that added them, so nothing here has been observed
-// coming out of the live API. They therefore prove only that the parser agrees
-// with the documentation — exactly the weaker guarantee the header above warns
-// about.
+// The bodies below remain hand-authored rather than captured: no key was
+// available here either. What changed is that the CONTRACT they are authored
+// against is no longer guesswork. A live probe (recorded in
+// sows/activity-weather-conditions.md § "Endpoint contract (verified against
+// live responses, 2026-08-09)") established that One Call 4.0 has NO historical
+// endpoint at all — history is the same /onecall/timeline/1h that Hourly calls,
+// with a `start` unix timestamp added, returning 20 buckets whose data[0].dt
+// equals `start`.
 //
-// RE-CAPTURE BEFORE ROLLOUT: probe /data/4.0/onecall/timemachine once with the
-// production key and replace these bodies with the real response, together
-// with the path constant in openweather.go if it turns out to differ.
+// The envelope these fixtures pin (a `data` array of hourly entries) is
+// therefore the same one the live-captured owHourlyJSON above pins, which is
+// the strongest corroboration available without a key: note that owHourlyJSON's
+// captured next/prev URLs are literally
+// /data/4.0/onecall/timeline/1h?cnt=20&start=… — the live API naming both the
+// path and the param this file previously got wrong.
 //
-// They still earn their place: the shape they pin is the one the provider must
-// fail loudly on when wrong, and the empty-array and root-shape guards below
-// are independent of whether this exact envelope is correct.
+// The earlier version of this comment asked for a re-capture "together with the
+// path constant in openweather.go if it turns out to differ." It did differ, by
+// a 404 on every production call, and these tests did not catch it because they
+// asserted the same wrong path the code used. Assert the path against the
+// probed contract, not against whatever the implementation happens to send.
 
 const owHistoricalJSON = `{
 	"lat": 39.74,
@@ -462,7 +469,7 @@ func TestOpenWeatherDailyEmptyTimelineErrors(t *testing.T) {
 var historicalAt = time.Date(2026, 8, 9, 14, 40, 0, 0, time.UTC)
 
 func TestOpenWeatherHistorical(t *testing.T) {
-	srv, query, path := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalJSON)
+	srv, query, path := owServer(t, "/data/4.0/onecall/timeline/1h", owHistoricalJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
@@ -470,14 +477,23 @@ func TestOpenWeatherHistorical(t *testing.T) {
 		t.Fatalf("Historical: %v", err)
 	}
 
-	if *path != "/data/4.0/onecall/timemachine" {
-		t.Errorf("path = %q, want /data/4.0/onecall/timemachine", *path)
+	// The probed contract: history is the hourly timeline, NOT a timemachine
+	// path of its own. Getting this wrong 404'd every production capture while
+	// this very test passed, because it used to assert whatever the code sent.
+	if *path != "/data/4.0/onecall/timeline/1h" {
+		t.Errorf("path = %q, want /data/4.0/onecall/timeline/1h (One Call 4.0 has no historical endpoint)", *path)
 	}
 	assertCommonParams(t, *query, "39.7392", "-104.9847")
-	// dt is the whole reason this endpoint is not just another timeline read:
-	// unix seconds, UTC, and the provider must not be asked for "now".
-	if want := strconv.FormatInt(historicalAt.Unix(), 10); query.Get("dt") != want {
-		t.Errorf("dt param = %q, want %q", query.Get("dt"), want)
+	// `start` — not `dt` — is what turns the hourly timeline into a historical
+	// read. Unix seconds, UTC; ISO 8601 is rejected with 400 "wrong start time".
+	if want := strconv.FormatInt(historicalAt.Unix(), 10); query.Get("start") != want {
+		t.Errorf("start param = %q, want %q", query.Get("start"), want)
+	}
+	// A leftover `dt` would be silently ignored by the API and would make the
+	// call return "now" rather than the requested hour — a plausible reading
+	// stored forever against the wrong instant.
+	if got := query.Get("dt"); got != "" {
+		t.Errorf("dt param = %q, want absent (superseded by start)", got)
 	}
 
 	// Every expectation is a value from data[0]. A parser reading the ROOT
@@ -518,7 +534,7 @@ func TestOpenWeatherHistorical(t *testing.T) {
 }
 
 func TestOpenWeatherHistoricalSumsRainAndSnow(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalPrecipJSON)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1h", owHistoricalPrecipJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
@@ -531,7 +547,7 @@ func TestOpenWeatherHistoricalSumsRainAndSnow(t *testing.T) {
 }
 
 func TestOpenWeatherHistoricalEmptyDataArrayErrors(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", `{"lat": 39.74, "lon": -104.98, "data": []}`)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1h", `{"lat": 39.74, "lon": -104.98, "data": []}`)
 	p := newTestProvider(srv)
 
 	if _, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt); err == nil {
@@ -546,7 +562,7 @@ func TestOpenWeatherHistoricalEmptyDataArrayErrors(t *testing.T) {
 // nothing plausible leaks out alongside the error, since the alternative is
 // storing 0 °C forever as an immutable historical fact.
 func TestOpenWeatherHistoricalRootShapeErrors(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalRootShapeJSON)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1h", owHistoricalRootShapeJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
@@ -559,7 +575,7 @@ func TestOpenWeatherHistoricalRootShapeErrors(t *testing.T) {
 }
 
 func TestOpenWeatherHistoricalEmptyWeatherArrayDegrades(t *testing.T) {
-	srv, _, _ := owServer(t, "/data/4.0/onecall/timemachine", owHistoricalNoWeatherJSON)
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1h", owHistoricalNoWeatherJSON)
 	p := newTestProvider(srv)
 
 	got, err := p.Historical(context.Background(), 39.7392, -104.9847, historicalAt)
@@ -609,19 +625,40 @@ func TestOpenWeatherHistoricalBadRequestIsNoHistoricalData(t *testing.T) {
 // status code. A 400 anywhere else means we sent a malformed request, and
 // reading that as "no data will ever exist" would let the backfill write
 // permanent `unavailable` rows to record a bug of our own.
+// Hourly is in this table for a specific reason. Now that history is served by
+// /timeline/1h, Hourly and Historical call the SAME PATH — so a discriminator
+// written as `path == historicalPath` classifies every dashboard-tile 400 as a
+// definitive "no history will ever exist here". What separates the two callers
+// is the `start` param, and that is what the provider must key on. Without this
+// case the suite cannot tell a correct discriminator from that regression.
 func TestOpenWeatherBadRequestIsTerminalOnlyForHistorical(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, `{"cod":"400","message":"bad request"}`, http.StatusBadRequest)
-	}))
-	t.Cleanup(srv.Close)
-	p := newTestProvider(srv)
+	for _, tc := range []struct {
+		name string
+		call func(*OpenWeatherProvider) error
+	}{
+		{"current", func(p *OpenWeatherProvider) error {
+			_, err := p.Current(context.Background(), 39.7392, -104.9847)
+			return err
+		}},
+		{"hourly_shares_the_historical_path", func(p *OpenWeatherProvider) error {
+			_, err := p.Hourly(context.Background(), 39.7392, -104.9847)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"cod":"400","message":"bad request"}`, http.StatusBadRequest)
+			}))
+			t.Cleanup(srv.Close)
 
-	_, err := p.Current(context.Background(), 39.7392, -104.9847)
-	if err == nil {
-		t.Fatal("Current on 400: want error, got nil")
-	}
-	if errors.Is(err, ErrNoHistoricalData) {
-		t.Errorf("Current 400 must not be ErrNoHistoricalData, got %v", err)
+			err := tc.call(newTestProvider(srv))
+			if err == nil {
+				t.Fatalf("%s on 400: want error, got nil", tc.name)
+			}
+			if errors.Is(err, ErrNoHistoricalData) {
+				t.Errorf("%s 400 must not be ErrNoHistoricalData, got %v", tc.name, err)
+			}
+		})
 	}
 }
 

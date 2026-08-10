@@ -264,7 +264,11 @@ type HRZonesConfig struct {
 // average; MinBaselineDays is the sample floor before an average is emitted;
 // TrendWindowDays/MinTrendDays bound the near-term window; BalancedZ is the
 // balanced-band half-width in the user's own SDs; TrendZ is the rising/falling
-// threshold; MinStdDevMs floors the SD divisor.
+// threshold; MinStdDevMs floors the SD divisor. BaselineDriftDays/BaselineDriftZ
+// bound the rolling-baseline drift read: how far back the baseline is compared
+// against, and how far it must have moved (in the user's own current SDs) to
+// read rising or falling. BaselineDriftDays MUST be strictly less than
+// BaselineWindowDays or the drift is permanently "unknown".
 type RecoveryConfig struct {
 	BaselineWindowDays int
 	MinBaselineDays    int
@@ -273,6 +277,8 @@ type RecoveryConfig struct {
 	BalancedZ          float64
 	TrendZ             float64
 	MinStdDevMs        float64
+	BaselineDriftDays  int
+	BaselineDriftZ     float64
 }
 
 // PhotosConfig groups the Activity Photos tunables. All are non-secret public
@@ -470,6 +476,8 @@ type fileConfig struct {
 		BalancedZ          float64 `toml:"balanced_z"`
 		TrendZ             float64 `toml:"trend_z"`
 		MinStdDevMs        float64 `toml:"min_std_dev_ms"`
+		BaselineDriftDays  int     `toml:"baseline_drift_days"`
+		BaselineDriftZ     float64 `toml:"baseline_drift_z"`
 	} `toml:"recovery"`
 	CalendarSync struct {
 		Enabled             bool `toml:"enabled"`
@@ -671,6 +679,8 @@ func Load(defaultTOML []byte) (Config, error) {
 			BalancedZ:          fc.Recovery.BalancedZ,
 			TrendZ:             fc.Recovery.TrendZ,
 			MinStdDevMs:        fc.Recovery.MinStdDevMs,
+			BaselineDriftDays:  fc.Recovery.BaselineDriftDays,
+			BaselineDriftZ:     fc.Recovery.BaselineDriftZ,
 		},
 		CalendarSync: CalendarSyncConfig{
 			Enabled:             fc.CalendarSync.Enabled,

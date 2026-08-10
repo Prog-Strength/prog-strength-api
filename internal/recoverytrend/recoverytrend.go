@@ -12,6 +12,8 @@ type Config struct {
 	BalancedZ          float64 // |z| within this many SDs of baseline reads as balanced
 	TrendZ             float64 // recent mean must sit this many SDs off baseline to read rising/falling
 	MinStdDevMs        float64 // SD floor, so a near-flat history cannot divide by ~0
+	BaselineDriftDays  int     // how far back the baseline is compared against
+	BaselineDriftZ     float64 // |delta| must exceed this many SDs to read rising/falling
 }
 
 // HRV status values. Directional on purpose: elevated and suppressed are

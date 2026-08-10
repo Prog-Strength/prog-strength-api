@@ -23,6 +23,8 @@ func testRecoveryEngine() *recoverytrend.Engine {
 		BalancedZ:          1.0,
 		TrendZ:             0.5,
 		MinStdDevMs:        1.0,
+		BaselineDriftDays:  28,
+		BaselineDriftZ:     0.35,
 	})
 }
 

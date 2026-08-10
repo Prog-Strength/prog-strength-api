@@ -342,26 +342,44 @@ func TestComputeSeries_PerDayBaselineExcludesTheDayItself(t *testing.T) {
 }
 
 func TestComputeSeries_AgreesWithComputeOnToday(t *testing.T) {
-	e := New(defaultCfg())
-	days := wide(ramp(61, 70, 0.5))
-	series, _ := e.ComputeSeries(days)
-	baseline, hrv := e.Compute(days[30:])
+	// Run the same agreement block under two BalancedZ values. The shipped 1.0
+	// is a multiplicative identity, so a band that dropped the BalancedZ factor
+	// altogether would still agree with itself; 1.5 makes the factor
+	// observable. Equality is exact (!=, not approx) — the two entry points
+	// share band/classify, so agreement to the last bit is the whole invariant.
+	widerZ := defaultCfg()
+	widerZ.BalancedZ = 1.5
+	cfgs := []struct {
+		name string
+		cfg  Config
+	}{
+		{"balanced_z_1.0", defaultCfg()},
+		{"balanced_z_1.5", widerZ},
+	}
+	for _, tc := range cfgs {
+		t.Run(tc.name, func(t *testing.T) {
+			e := New(tc.cfg)
+			days := wide(ramp(61, 70, 0.5))
+			series, _ := e.ComputeSeries(days)
+			baseline, hrv := e.Compute(days[30:])
 
-	last := series[len(series)-1]
-	if last.BaselineAvg == nil || baseline.HRVAvg == nil || *last.BaselineAvg != *baseline.HRVAvg {
-		t.Errorf("BaselineAvg = %v, want scalar HRVAvg %v (exact)", last.BaselineAvg, baseline.HRVAvg)
-	}
-	if last.BalancedLow == nil || hrv.BalancedLow == nil || *last.BalancedLow != *hrv.BalancedLow {
-		t.Errorf("BalancedLow = %v, want %v (exact)", last.BalancedLow, hrv.BalancedLow)
-	}
-	if last.BalancedHigh == nil || hrv.BalancedHigh == nil || *last.BalancedHigh != *hrv.BalancedHigh {
-		t.Errorf("BalancedHigh = %v, want %v (exact)", last.BalancedHigh, hrv.BalancedHigh)
-	}
-	if last.ZScore == nil || hrv.ZScore == nil || *last.ZScore != *hrv.ZScore {
-		t.Errorf("ZScore = %v, want %v (exact)", last.ZScore, hrv.ZScore)
-	}
-	if last.Status != hrv.Status {
-		t.Errorf("Status = %q, want %q", last.Status, hrv.Status)
+			last := series[len(series)-1]
+			if last.BaselineAvg == nil || baseline.HRVAvg == nil || *last.BaselineAvg != *baseline.HRVAvg {
+				t.Errorf("BaselineAvg = %v, want scalar HRVAvg %v (exact)", last.BaselineAvg, baseline.HRVAvg)
+			}
+			if last.BalancedLow == nil || hrv.BalancedLow == nil || *last.BalancedLow != *hrv.BalancedLow {
+				t.Errorf("BalancedLow = %v, want %v (exact)", last.BalancedLow, hrv.BalancedLow)
+			}
+			if last.BalancedHigh == nil || hrv.BalancedHigh == nil || *last.BalancedHigh != *hrv.BalancedHigh {
+				t.Errorf("BalancedHigh = %v, want %v (exact)", last.BalancedHigh, hrv.BalancedHigh)
+			}
+			if last.ZScore == nil || hrv.ZScore == nil || *last.ZScore != *hrv.ZScore {
+				t.Errorf("ZScore = %v, want %v (exact)", last.ZScore, hrv.ZScore)
+			}
+			if last.Status != hrv.Status {
+				t.Errorf("Status = %q, want %q", last.Status, hrv.Status)
+			}
+		})
 	}
 }
 
@@ -415,14 +433,23 @@ func TestComputeSeries_NullDayKeepsBandDropsZ(t *testing.T) {
 
 func TestDrift_RisingFallingSteady(t *testing.T) {
 	e := New(defaultCfg())
+	// Drift reaches back BaselineDriftDays(28) from the newest charted day:
+	// back = len(series)-1-28 = 2, so it compares charted 30 (input 60) against
+	// charted 2 (input 32). Delta and from-value are pinned exactly, not merely
+	// non-nil — otherwise an off-by-one in `back`, or reporting `now` as `from`,
+	// reads identically on a linear ramp where every 28-day step is the same.
+	//   rising:  baseline[30] = mean(85..99.5) = 92.25, baseline[2] = mean(71..85.5) = 78.25
+	//   falling: baseline[30] = mean(85..70.5) = 77.75, baseline[2] = mean(99..84.5) = 91.75
 	cases := []struct {
-		name string
-		hrv  []*float64
-		want string
+		name      string
+		hrv       []*float64
+		want      string
+		wantDelta float64
+		wantFrom  float64
 	}{
-		{"rising", ramp(61, 70, 0.5), TrendRising},
-		{"falling", ramp(61, 100, -0.5), TrendFalling},
-		{"steady", flat(61, 80), TrendSteady},
+		{"rising", ramp(61, 70, 0.5), TrendRising, 14, 78.25},
+		{"falling", ramp(61, 100, -0.5), TrendFalling, -14, 91.75},
+		{"steady", flat(61, 80), TrendSteady, 0, 80},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -430,14 +457,72 @@ func TestDrift_RisingFallingSteady(t *testing.T) {
 			if bt.Direction != tc.want {
 				t.Errorf("Direction = %q, want %q", bt.Direction, tc.want)
 			}
-			if bt.DeltaMs == nil {
-				t.Error("DeltaMs = nil, want a value")
+			// approx subsumes the nil check: it returns false on a nil pointer.
+			if !approx(bt.DeltaMs, tc.wantDelta) {
+				t.Errorf("DeltaMs = %v, want %v (now − then, exact)", bt.DeltaMs, tc.wantDelta)
 			}
-			if bt.FromAvg == nil {
-				t.Error("FromAvg = nil, want a value")
+			if !approx(bt.FromAvg, tc.wantFrom) {
+				t.Errorf("FromAvg = %v, want %v (the baseline 28 days back, not today's)", bt.FromAvg, tc.wantFrom)
 			}
 			if bt.OverDays != 28 {
 				t.Errorf("OverDays = %d, want 28", bt.OverDays)
+			}
+		})
+	}
+}
+
+func TestDrift_ThresholdIsSDRelative(t *testing.T) {
+	e := New(defaultCfg())
+	// A pure linear ramp can NEVER read steady: slope drives both the move and
+	// the spread, so delta/threshold pins at ~9x no matter how gentle the
+	// slope. Nothing in a ramp-only suite constrains BaselineDriftZ — drop the
+	// factor to 0 and the ramp cases stay green. Constraining it needs a wide
+	// spread under a SMALL move, which is what the oscillation below buys.
+	//
+	// HRV is level(i) + osc(i), where osc alternates ±20 and level steps by d
+	// at i=32. The oscillation sums to exactly zero over ANY 30 consecutive
+	// indices, so it inflates every SD without shifting a single baseline —
+	// delete it as "noise" and both thresholds below collapse. Hence:
+	//   baseline[2]  = mean(days[2:32])  = 80 exactly (level flat, osc cancels)
+	//   baseline[30] = mean(days[30:60]) = 80 + d*28/30 (28 of the 30 stepped)
+	step := func(d float64) []*float64 {
+		out := make([]*float64, 61)
+		for i := range out {
+			level := 80.0
+			if i >= 32 {
+				level += d
+			}
+			osc := 20.0
+			if i%2 == 1 {
+				osc = -20
+			}
+			out[i] = p(level + osc)
+		}
+		return out
+	}
+
+	cases := []struct {
+		name string
+		d    float64
+		want string
+	}{
+		// delta = 4*28/30 = 3.733; sdEff = 20.025; threshold = 0.35*20.025 = 7.009.
+		// A real, nonzero baseline move that is still smaller than the noise.
+		{"below_threshold_reads_steady", 4, TrendSteady},
+		// delta = 16*28/30 = 14.933; sdEff = 20.394; threshold = 7.138.
+		{"above_threshold_reads_rising", 16, TrendRising},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, bt := e.ComputeSeries(wide(step(tc.d)))
+			if bt.Direction != tc.want {
+				t.Errorf("Direction = %q, want %q (delta %.3f vs threshold ~7)", bt.Direction, tc.want, tc.d*28/30)
+			}
+			if wantDelta := tc.d * 28 / 30; !approx(bt.DeltaMs, wantDelta) {
+				t.Errorf("DeltaMs = %v, want %v", bt.DeltaMs, wantDelta)
+			}
+			if !approx(bt.FromAvg, 80) {
+				t.Errorf("FromAvg = %v, want 80 (oscillation cancels over the 30-day sample)", bt.FromAvg)
 			}
 		})
 	}

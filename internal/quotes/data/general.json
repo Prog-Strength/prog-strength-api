@@ -1,5 +1,25 @@
 [
   {
+    "id": "addair-other-side-of-fear",
+    "text": "Everything you've ever wanted is on the other side of fear.",
+    "author": "George Addair",
+    "tags": ["fear"]
+  },
+  {
+    "id": "brown-accept-responsibility",
+    "text": "Accept responsibility for your life. Know that it is you who will get you where you want to go, no one else.",
+    "author": "Les Brown",
+    "author_url": "https://en.wikipedia.org/wiki/Les_Brown_(politician)",
+    "tags": ["ownership"]
+  },
+  {
+    "id": "brown-living-our-fears",
+    "text": "Too many of us are not living our dreams because we are living our fears.",
+    "author": "Les Brown",
+    "author_url": "https://en.wikipedia.org/wiki/Les_Brown_(politician)",
+    "tags": ["fear"]
+  },
+  {
     "id": "buddha-unguarded-thoughts",
     "text": "Your worst enemy cannot harm you as much as your own thoughts unguarded.",
     "author": "Buddha",
@@ -31,11 +51,25 @@
     "tags": ["action"]
   },
   {
+    "id": "davinci-knowing-is-not-enough",
+    "text": "I have been impressed with the urgency of doing. Knowing is not enough; we must apply. Being willing is not enough; we must do.",
+    "author": "Leonardo da Vinci",
+    "author_url": "https://en.wikipedia.org/wiki/Leonardo_da_Vinci",
+    "tags": ["action"]
+  },
+  {
     "id": "earhart-decision-to-act",
     "text": "The most difficult thing is the decision to act; the rest is merely tenacity.",
     "author": "Amelia Earhart",
     "author_url": "https://en.wikipedia.org/wiki/Amelia_Earhart",
     "tags": ["action"]
+  },
+  {
+    "id": "einstein-be-of-value",
+    "text": "Strive not to be a success, but rather to be of value.",
+    "author": "Albert Einstein",
+    "author_url": "https://en.wikipedia.org/wiki/Albert_Einstein",
+    "tags": ["value"]
   },
   {
     "id": "emerson-insist-on-yourself",
@@ -45,6 +79,20 @@
     "tags": ["independence"]
   },
   {
+    "id": "ford-airplane-against-the-wind",
+    "text": "When everything seems to be going against you, remember that the airplane takes off against the wind, not with it.",
+    "author": "Henry Ford",
+    "author_url": "https://en.wikipedia.org/wiki/Henry_Ford",
+    "tags": ["resilience"]
+  },
+  {
+    "id": "ford-think-you-can",
+    "text": "Whether you think you can or you think you can't, you're right.",
+    "author": "Henry Ford",
+    "author_url": "https://en.wikipedia.org/wiki/Henry_Ford",
+    "tags": ["mindset"]
+  },
+  {
     "id": "frost-it-goes-on",
     "text": "In three words I can sum up everything I've learned about life: It goes on.",
     "author": "Robert Frost",
@@ -52,11 +100,67 @@
     "tags": ["resilience"]
   },
   {
+    "id": "goethe-boldness-has-genius",
+    "text": "Whatever you can do, or dream you can, begin it. Boldness has genius, power and magic in it.",
+    "author": "Johann Wolfgang von Goethe",
+    "author_url": "https://en.wikipedia.org/wiki/Johann_Wolfgang_von_Goethe",
+    "tags": ["courage"]
+  },
+  {
+    "id": "gray-build-your-own-dreams",
+    "text": "Build your own dreams, or someone else will hire you to build theirs.",
+    "author": "Farrah Gray",
+    "author_url": "https://en.wikipedia.org/wiki/Farrah_Gray",
+    "tags": ["independence"]
+  },
+  {
+    "id": "hemingway-superior-to-former-self",
+    "text": "There is nothing noble in being superior to your fellow man; true nobility is being superior to your former self.",
+    "author": "Ernest Hemingway",
+    "author_url": "https://en.wikipedia.org/wiki/Ernest_Hemingway",
+    "tags": ["growth"]
+  },
+  {
+    "id": "jobs-love-what-you-do",
+    "text": "The only way to do great work is to love what you do.",
+    "author": "Steve Jobs",
+    "author_url": "https://en.wikipedia.org/wiki/Steve_Jobs",
+    "tags": ["passion"]
+  },
+  {
+    "id": "jobs-someone-elses-life",
+    "text": "Your time is limited, so don't waste it living someone else's life.",
+    "author": "Steve Jobs",
+    "author_url": "https://en.wikipedia.org/wiki/Steve_Jobs",
+    "tags": ["independence"]
+  },
+  {
+    "id": "kennedy-change-is-the-law-of-life",
+    "text": "Change is the law of life and those who look only to the past or present are certain to miss the future.",
+    "author": "John F. Kennedy",
+    "author_url": "https://en.wikipedia.org/wiki/John_F._Kennedy",
+    "tags": ["change"]
+  },
+  {
+    "id": "king-silent-about-things-that-matter",
+    "text": "Our lives begin to end the day we become silent about things that matter.",
+    "author": "Martin Luther King Jr.",
+    "author_url": "https://en.wikipedia.org/wiki/Martin_Luther_King_Jr.",
+    "tags": ["courage"]
+  },
+  {
     "id": "laozi-change-your-direction",
     "text": "If you don't change your direction, you may end up where you are going.",
     "author": "Lao Tzu",
     "author_url": "https://en.wikipedia.org/wiki/Laozi",
     "tags": ["direction"]
+  },
+  {
+    "id": "laozi-what-i-might-be",
+    "text": "When I let go of what I am, I become what I might be.",
+    "author": "Lao Tzu",
+    "author_url": "https://en.wikipedia.org/wiki/Laozi",
+    "tags": ["growth"]
   },
   {
     "id": "nietzsche-why-to-live",
@@ -73,6 +177,34 @@
     "tags": ["action"]
   },
   {
+    "id": "pichai-failure-stepping-stone",
+    "text": "Failure is not the opposite of success; it is a stepping stone towards it.",
+    "author": "Sundar Pichai",
+    "author_url": "https://en.wikipedia.org/wiki/Sundar_Pichai",
+    "tags": ["failure"]
+  },
+  {
+    "id": "qubein-change-brings-opportunity",
+    "text": "Change brings opportunity.",
+    "author": "Nido Qubein",
+    "author_url": "https://en.wikipedia.org/wiki/Nido_Qubein",
+    "tags": ["change"]
+  },
+  {
+    "id": "rand-who-is-going-to-stop-me",
+    "text": "The question isn't who is going to let me; it's who is going to stop me.",
+    "author": "Ayn Rand",
+    "author_url": "https://en.wikipedia.org/wiki/Ayn_Rand",
+    "tags": ["independence"]
+  },
+  {
+    "id": "roosevelt-inferior-without-consent",
+    "text": "Remember no one can make you feel inferior without your consent.",
+    "author": "Eleanor Roosevelt",
+    "author_url": "https://en.wikipedia.org/wiki/Eleanor_Roosevelt",
+    "tags": ["self-worth"]
+  },
+  {
     "id": "sinatra-best-revenge",
     "text": "The best revenge is massive success.",
     "author": "Frank Sinatra",
@@ -85,5 +217,33 @@
     "author": "Mark Twain",
     "author_url": "https://en.wikipedia.org/wiki/Mark_Twain",
     "tags": ["independence"]
+  },
+  {
+    "id": "twain-throw-off-the-bowlines",
+    "text": "Twenty years from now you will be more disappointed by the things that you didn't do than by the ones you did do. So throw off the bowlines. Sail away from the safe harbor. Catch the trade winds in your sails. Explore. Dream. Discover.",
+    "author": "Mark Twain",
+    "author_url": "https://en.wikipedia.org/wiki/Mark_Twain",
+    "tags": ["regret"]
+  },
+  {
+    "id": "van-gogh-passion-not-boredom",
+    "text": "I would rather die of passion than of boredom.",
+    "author": "Vincent van Gogh",
+    "author_url": "https://en.wikipedia.org/wiki/Vincent_van_Gogh",
+    "tags": ["passion"]
+  },
+  {
+    "id": "warren-products-not-prisoners",
+    "text": "We are products of our past, but we don't have to be prisoners of it.",
+    "author": "Rick Warren",
+    "author_url": "https://en.wikipedia.org/wiki/Rick_Warren",
+    "tags": ["growth"]
+  },
+  {
+    "id": "washington-lift-up-someone-else",
+    "text": "If you want to lift yourself up, lift up someone else.",
+    "author": "Booker T. Washington",
+    "author_url": "https://en.wikipedia.org/wiki/Booker_T._Washington",
+    "tags": ["service"]
   }
 ]

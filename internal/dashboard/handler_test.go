@@ -602,10 +602,11 @@ func (c *captureRecoveryRepo) ListRange(_ context.Context, _ string, since, unti
 	return nil, nil
 }
 
-// TestBuildRecoverySection_WidenedWindow asserts the recovery read now fetches
-// baseline_window_days (30) local dates before today through today inclusive,
-// rather than the legacy trailing 7. For now pinned to local 2026-08-01, the
-// window is since=2026-07-02, until=2026-08-01.
+// TestBuildRecoverySection_WidenedWindow asserts the recovery read fetches
+// 2×baseline_window_days (60) local dates before today through today inclusive
+// — a window of lead-in ahead of the charted window, so every charted day has a
+// full trailing baseline. For now pinned to local 2026-08-01, the window is
+// since=2026-06-02, until=2026-08-01. Still ONE indexed ListRange call.
 func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
 	loc := mustLoad(t, "America/Denver")
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, loc)
@@ -621,8 +622,8 @@ func TestBuildRecoverySection_WidenedWindow(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/dashboard/summary", nil)
 	h.buildRecoverySection(req.Context(), req, "user-1", now, loc)
 
-	if capture.since != "2026-07-02" {
-		t.Errorf("since = %q, want 2026-07-02 (30 days back)", capture.since)
+	if capture.since != "2026-06-02" {
+		t.Errorf("since = %q, want 2026-06-02 (60 days back)", capture.since)
 	}
 	if capture.until != "2026-08-01" {
 		t.Errorf("until = %q, want 2026-08-01 (today)", capture.until)

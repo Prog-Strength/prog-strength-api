@@ -22,8 +22,10 @@ const recoverySparkDays = 7
 // null-metric Days window, and an unknown baseline/HRV block).
 //
 // Today and RestingHRSpark are built exactly as before; Days is the honest
-// date-aligned history (missing days present with null metrics), and the engine
-// derives Baseline and HRV from it.
+// date-aligned history (missing days present with null metrics) with each day's
+// own trailing band attached, and the engine derives Baseline, HRV, and
+// BaselineTrend from a window that carries baseline_window_days of lead-in
+// ahead of the charted days.
 func buildWhoop(entries []whooprecovery.Entry, eng *recoverytrend.Engine, now time.Time, loc *time.Location) *RecoverySection {
 	if loc == nil {
 		loc = time.UTC
@@ -61,34 +63,50 @@ func buildWhoop(entries []whooprecovery.Entry, eng *recoverytrend.Engine, now ti
 		}
 	}
 
-	// The full date-aligned window: baseline_window_days local dates preceding
-	// today, plus today — oldest→newest, every day present, missing days carrying
-	// null metrics (never omitted, never zero-filled).
+	// Materialize the WIDE window: 2*win + 1 local dates ending today,
+	// oldest→newest, every date present, missing days carrying null metrics
+	// (never omitted, never zero-filled). The first `win` dates are lead-in for
+	// the rolling baseline and are NOT serialized.
 	win := eng.BaselineWindowDays()
-	section.Days = make([]RecoveryDay, 0, win+1)
-	for i := win; i >= 0; i-- {
+	total := 2*win + 1
+	engineDays := make([]recoverytrend.Day, 0, total)
+	for i := total - 1; i >= 0; i-- {
 		day := time.Date(y, mo, d-i, 0, 0, 0, 0, loc)
 		ds := day.Format("2006-01-02")
-		rd := RecoveryDay{Date: ds}
+		ed := recoverytrend.Day{Date: ds}
 		if e, ok := byDate[ds]; ok {
-			rd.RestingHeartRate = e.RestingHeartRate
-			rd.RecoveryScore = e.RecoveryScore
-			rd.HRVRmssdMilli = e.HRVRmssdMilli
+			ed.RestingHR = e.RestingHeartRate
+			ed.RecoveryScore = e.RecoveryScore
+			ed.HRV = e.HRVRmssdMilli
 		}
-		section.Days = append(section.Days, rd)
+		engineDays = append(engineDays, ed)
 	}
 
-	// Derive the baseline and HRV blocks from the date-aligned window.
-	engineDays := make([]recoverytrend.Day, len(section.Days))
-	for i, rd := range section.Days {
-		engineDays[i] = recoverytrend.Day{
-			Date:          rd.Date,
-			RestingHR:     rd.RestingHeartRate,
-			HRV:           rd.HRVRmssdMilli,
-			RecoveryScore: rd.RecoveryScore,
+	// The charted window is the last win+1 dates — byte-for-byte the window
+	// this function built before the lead-in was added.
+	charted := engineDays[win:]
+	series, drift := eng.ComputeSeries(engineDays)
+	baseline, hrv := eng.Compute(charted)
+
+	// Zip the charted metrics with their per-day bands. Index-aligned by
+	// construction: ComputeSeries returns exactly one result per charted day,
+	// in the same order.
+	section.Days = make([]RecoveryDayPoint, len(charted))
+	for i, ed := range charted {
+		section.Days[i] = RecoveryDayPoint{
+			RecoveryDay: RecoveryDay{
+				Date:             ed.Date,
+				RestingHeartRate: ed.RestingHR,
+				RecoveryScore:    ed.RecoveryScore,
+				HRVRmssdMilli:    ed.HRV,
+			},
+			BaselineAvg:  series[i].BaselineAvg,
+			BalancedLow:  series[i].BalancedLow,
+			BalancedHigh: series[i].BalancedHigh,
+			ZScore:       series[i].ZScore,
+			Status:       series[i].Status,
 		}
 	}
-	baseline, hrv := eng.Compute(engineDays)
 
 	section.Baseline = RecoveryBaseline{
 		WindowDays:        baseline.WindowDays,
@@ -107,6 +125,12 @@ func buildWhoop(entries []whooprecovery.Entry, eng *recoverytrend.Engine, now ti
 		ZScore:       hrv.ZScore,
 		Trend:        hrv.Trend,
 		ShortAvg:     hrv.ShortAvg,
+	}
+	section.BaselineTrend = RecoveryBaselineTrend{
+		Direction: drift.Direction,
+		DeltaMs:   drift.DeltaMs,
+		FromAvg:   drift.FromAvg,
+		OverDays:  drift.OverDays,
 	}
 
 	return section

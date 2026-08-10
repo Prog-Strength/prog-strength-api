@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"strconv"
 	"testing"
@@ -29,27 +30,11 @@ func testRecoveryEngine() *recoverytrend.Engine {
 	})
 }
 
-// entriesEndingAt builds n consecutive daily whoop entries ending on the local
-// date of now, oldest first, with a constant HRV.
-func entriesEndingAt(now time.Time, loc *time.Location, n int, hrv float64) []whooprecovery.Entry {
-	local := now.In(loc)
-	y, mo, d := local.Date()
-	out := make([]whooprecovery.Entry, 0, n)
-	for i := n - 1; i >= 0; i-- {
-		day := time.Date(y, mo, d-i, 0, 0, 0, 0, loc)
-		out = append(out, whooprecovery.Entry{
-			Date:             day.Format("2006-01-02"),
-			RestingHeartRate: rhrPtr(52),
-			RecoveryScore:    rhrPtr(65),
-			HRVRmssdMilli:    rhrPtr(hrv),
-		})
-	}
-	return out
-}
-
-// entriesBetween builds daily entries for the local dates from `fromOffset`
-// days before now down to `toOffset` days before now (inclusive), oldest first.
-func entriesBetween(now time.Time, loc *time.Location, fromOffset, toOffset int, hrv float64) []whooprecovery.Entry {
+// entriesBetween builds daily whoop entries for the local dates from fromOffset
+// days before now down to toOffset days before now (inclusive), oldest first.
+// hrvAt is called with each entry's own offset, so a fixture can vary HRV
+// across the window; the other two metrics are constant and uninteresting.
+func entriesBetween(now time.Time, loc *time.Location, fromOffset, toOffset int, hrvAt func(offset int) float64) []whooprecovery.Entry {
 	local := now.In(loc)
 	y, mo, d := local.Date()
 	out := make([]whooprecovery.Entry, 0, fromOffset-toOffset+1)
@@ -59,11 +44,23 @@ func entriesBetween(now time.Time, loc *time.Location, fromOffset, toOffset int,
 			Date:             day.Format("2006-01-02"),
 			RestingHeartRate: rhrPtr(52),
 			RecoveryScore:    rhrPtr(65),
-			HRVRmssdMilli:    rhrPtr(hrv),
+			HRVRmssdMilli:    rhrPtr(hrvAt(i)),
 		})
 	}
 	return out
 }
+
+// entriesEndingAt builds n consecutive daily whoop entries ending on the local
+// date of now, oldest first, with a constant HRV.
+func entriesEndingAt(now time.Time, loc *time.Location, n int, hrv float64) []whooprecovery.Entry {
+	return entriesBetween(now, loc, n-1, 0, func(int) float64 { return hrv })
+}
+
+// rampHRV gives every offset a DISTINCT HRV, rising toward today. Fixtures that
+// need to tell one charted day's band from another's use it: under a constant
+// HRV every day's trailing baseline is identical, so a mis-zipped band would be
+// indistinguishable from a correct one.
+func rampHRV(offset int) float64 { return 100 - float64(offset) }
 
 func TestBuildWhoop_TodayAndSpark(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
@@ -287,7 +284,7 @@ func TestBuildWhoop_ScalarBlocksUnchangedByLeadIn(t *testing.T) {
 
 	// 30 strictly-older dates (offsets 60..31) with a very different HRV, then
 	// the same charted window.
-	wide := append(entriesBetween(now, denver, 60, 31, 200), narrow...)
+	wide := append(entriesBetween(now, denver, 60, 31, func(int) float64 { return 200 }), narrow...)
 	if len(wide) != 61 {
 		t.Fatalf("len(wide) = %d, want 61", len(wide))
 	}
@@ -305,14 +302,19 @@ func TestBuildWhoop_ScalarBlocksUnchangedByLeadIn(t *testing.T) {
 	}
 }
 
-// TestBuildWhoop_DaysCarryPerDayBands pins the days[last]-agrees-with-the-
-// scalar-block invariant: the final charted day's band is computed from exactly
-// the window Compute uses for today.
+// TestBuildWhoop_DaysCarryPerDayBands pins the band-to-day correspondence end
+// to end: EVERY charted day's date and its own trailing baseline, the baseline
+// recomputed independently in the test rather than read back from the engine.
+// The fixture ramps HRV so no two days share a baseline — under a constant HRV
+// all 31 results are byte-identical and any mis-zip (an off-by-one, or a full
+// reversal of the mapping) sails through. The last-day-agrees-with-the-scalar-
+// block assertions follow; they are the right invariant but not sufficient
+// alone.
 func TestBuildWhoop_DaysCarryPerDayBands(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)
 
-	got := buildWhoop(entriesEndingAt(now, denver, 61, 80), testRecoveryEngine(), now, denver)
+	got := buildWhoop(entriesBetween(now, denver, 60, 0, rampHRV), testRecoveryEngine(), now, denver)
 	if got == nil {
 		t.Fatal("connected user should always get a section")
 		return
@@ -320,6 +322,32 @@ func TestBuildWhoop_DaysCarryPerDayBands(t *testing.T) {
 	if len(got.Days) != 31 {
 		t.Fatalf("len(Days) = %d, want 31 charted days", len(got.Days))
 	}
+
+	for i, day := range got.Days {
+		// Days[i] is the local date i-from-the-oldest, i.e. today − (30 − i).
+		offset := 30 - i
+		wantDate := time.Date(2026, 8, 1-offset, 0, 0, 0, 0, denver).Format("2006-01-02")
+		if day.Date != wantDate {
+			t.Errorf("Days[%d].date = %q, want %q", i, day.Date, wantDate)
+		}
+		// That day's band comes from the 30 dates PRECEDING it — offsets
+		// offset+30 (oldest) down to offset+1 — summed oldest→newest, the same
+		// order the engine collects them in.
+		var sum float64
+		for o := offset + 30; o >= offset+1; o-- {
+			sum += rampHRV(o)
+		}
+		wantAvg := sum / 30
+		if day.BaselineAvg == nil {
+			t.Errorf("Days[%d] (%s) baseline_avg = nil, want %v", i, day.Date, wantAvg)
+			continue
+		}
+		if math.Abs(*day.BaselineAvg-wantAvg) > 1e-9 {
+			t.Errorf("Days[%d] (%s) baseline_avg = %v, want %v — band zipped to the wrong day",
+				i, day.Date, *day.BaselineAvg, wantAvg)
+		}
+	}
+
 	last := got.Days[len(got.Days)-1]
 	if last.Date != "2026-08-01" {
 		t.Errorf("Days[last].date = %q, want 2026-08-01 (today)", last.Date)
@@ -350,8 +378,12 @@ func TestBuildWhoop_LeadInNotSerialized(t *testing.T) {
 		return
 	}
 	const oldest = "2026-07-02" // today − 30 days
-	if len(got.Days) == 0 || got.Days[0].Date != oldest {
-		t.Fatalf("Days[0].date = %v, want %s", got.Days, oldest)
+	if len(got.Days) == 0 {
+		t.Fatal("Days should be the full charted window, got none")
+		return
+	}
+	if got.Days[0].Date != oldest {
+		t.Fatalf("Days[0].date = %q, want %s", got.Days[0].Date, oldest)
 	}
 	// Dates are YYYY-MM-DD, so lexicographic < is chronological <.
 	for _, day := range got.Days {
@@ -448,6 +480,11 @@ func TestRecoverySection_JSONKeys(t *testing.T) {
 // TestRecoverySection_TodayJSONKeysUnchanged pins today's wire shape: exactly
 // the original four keys. buildWhoop(nil, …) leaves Today null, so this needs
 // its own fixture with a row for today.
+//
+// What this covers is Today's TYPE: widening it to RecoveryDayPoint would leak
+// the five band keys in here and fail. It does NOT cover the embed flattening —
+// Today is a *RecoveryDay, so it never exercises the embed at all; tagging the
+// embed is caught by the days[] loop in TestRecoverySection_JSONKeys.
 func TestRecoverySection_TodayJSONKeysUnchanged(t *testing.T) {
 	denver := mustLoad(t, "America/Denver")
 	now := time.Date(2026, 8, 1, 12, 0, 0, 0, denver)

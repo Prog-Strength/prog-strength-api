@@ -485,10 +485,20 @@ func TestDrift_ThresholdIsSDRelative(t *testing.T) {
 	// delete it as "noise" and both thresholds below collapse. Hence:
 	//   baseline[2]  = mean(days[2:32])  = 80 exactly (level flat, osc cancels)
 	//   baseline[30] = mean(days[30:60]) = 80 + d*28/30 (28 of the 30 stepped)
+	//
+	// The ±20 MAGNITUDE is load-bearing too: it puts sdEff at ~20, so the
+	// threshold lands at 0.35*20 ~= 7, which is what brackets the two moves
+	// below (3.73 and 14.93) with ~2x clearance on either side. Shrink it and
+	// the steady case crosses the threshold; grow it and the rising case stops
+	// crossing. The fixture is symmetric about the level, so the spread — and
+	// therefore the threshold — is identical for negative d.
 	step := func(d float64) []*float64 {
 		out := make([]*float64, 61)
 		for i := range out {
 			level := 80.0
+			// 32 is the EXCLUSIVE end of the `then` window days[2:32], so every
+			// day in that sample predates the step — which is what pins FromAvg
+			// at exactly 80 while the newest baseline carries d*28/30 of it.
 			if i >= 32 {
 				level += d
 			}
@@ -511,12 +521,18 @@ func TestDrift_ThresholdIsSDRelative(t *testing.T) {
 		{"below_threshold_reads_steady", 4, TrendSteady},
 		// delta = 16*28/30 = 14.933; sdEff = 20.394; threshold = 7.138.
 		{"above_threshold_reads_rising", 16, TrendRising},
+		// Both arms of the switch need their own threshold case: the linear
+		// `falling` ramp cannot constrain the negative side any more than the
+		// linear `rising` ramp could constrain the positive one. Deltas mirror
+		// exactly (-3.733, -14.933) against the same ~7 threshold.
+		{"below_threshold_negative_reads_steady", -4, TrendSteady},
+		{"above_threshold_negative_reads_falling", -16, TrendFalling},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, bt := e.ComputeSeries(wide(step(tc.d)))
 			if bt.Direction != tc.want {
-				t.Errorf("Direction = %q, want %q (delta %.3f vs threshold ~7)", bt.Direction, tc.want, tc.d*28/30)
+				t.Errorf("Direction = %q, want %q (delta %.3f vs threshold +/-~7)", bt.Direction, tc.want, tc.d*28/30)
 			}
 			if wantDelta := tc.d * 28 / 30; !approx(bt.DeltaMs, wantDelta) {
 				t.Errorf("DeltaMs = %v, want %v", bt.DeltaMs, wantDelta)

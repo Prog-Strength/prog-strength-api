@@ -1,3 +1,10 @@
+## [0.109.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.1...v0.109.2) (2026-08-10)
+
+
+### Bug Fixes
+
+* **weather:** read history from /timeline/1h with start, not /timemachine ([#127](https://github.com/Prog-Strength/prog-strength-api/issues/127)) ([e68d1bf](https://github.com/Prog-Strength/prog-strength-api/commit/e68d1bf652ab5b46c8eb20023f83f7cf5079f368))
+
 ## [0.109.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.0...v0.109.1) (2026-08-10)
 
 

@@ -32,15 +32,20 @@ import (
 // pagination link is a separately BILLED call, so the first page is always
 // the whole answer as far as this file is concerned.
 //
-// The historical ("timemachine") surface carries its own trap, and one the
-// others do not: its readings are stored FOREVER rather than cached for an
-// hour, so a silently-wrong decode is not a bad tile that self-heals — it is
-// an immutable 0 °C fact attached to a run. It is also the only surface with
-// a definitive negative (see ErrNoHistoricalData): a timestamp outside the
-// history window answers 400 and no retry will ever change that, while every
-// other failure must stay transient so nothing terminal gets recorded.
-// Unlike the three above, its fixtures are NOT live captures — see the note
-// on them in openweather_test.go, and the plan's Open Question 1.
+// The historical surface carries its own trap, and one the others do not: its
+// readings are stored FOREVER rather than cached for an hour, so a
+// silently-wrong decode is not a bad tile that self-heals — it is an immutable
+// 0 °C fact attached to a run. It is also the only surface with a definitive
+// negative (see ErrNoHistoricalData): a timestamp outside the history window
+// answers 400 and no retry will ever change that, while every other failure
+// must stay transient so nothing terminal gets recorded.
+//
+// History is NOT a separate endpoint. One Call 4.0 has no timemachine path;
+// history is served by the same /timeline/1h that Hourly calls, with a `start`
+// unix timestamp added. That makes Historical the second caller of a path this
+// file already speaks, which has one consequence worth stating up front: the
+// path can no longer distinguish the two, so anything that must apply to only
+// one of them keys on the `start` param instead (see get's 400 handling).
 
 const openWeatherBaseURL = "https://api.openweathermap.org"
 
@@ -50,19 +55,28 @@ const openWeatherBaseURL = "https://api.openweathermap.org"
 // missing from all three paths at once.
 const oneCallBasePath = "/data/4.0/onecall"
 
-// historicalPath is the One Call 4.0 historical ("timemachine") surface. It is
-// a named constant for the same reason oneCallBasePath is: the /onecall
-// omission that 404'd every reading in production came from inlined copies.
+// hourlyTimelinePath serves BOTH the forecast (Hourly) and history
+// (Historical) — the latter by adding historicalTimeParam. It is one named
+// constant rather than two literals precisely because the two callers must not
+// drift apart: this file's previous version gave history its own
+// "/timemachine" path, which does not exist in One Call 4.0 and 404'd every
+// capture in production while the tests passed against the same wrong path.
 //
-// NOT YET VERIFIED AGAINST A LIVE CALL — see the plan's Open Question 1. The
-// fixtures pinning this shape are hand-authored to the documented envelope, not
-// captured. Probe once with the production key and re-capture before rollout.
-const historicalPath = oneCallBasePath + "/timemachine"
+// Verified by live probe, 2026-08-09 — see
+// sows/activity-weather-conditions.md § "Endpoint contract". Corroborated in
+// openweather_test.go by the live-captured owHourlyJSON, whose next/prev URLs
+// are literally /data/4.0/onecall/timeline/1h?cnt=20&start=…
+const hourlyTimelinePath = oneCallBasePath + "/timeline/1h"
 
-// historicalTimeParam is the unix-seconds timestamp selecting the observation
-// hour. Named alongside historicalPath so correcting the surface after a live
-// probe stays a one-line change.
-const historicalTimeParam = "dt"
+// historicalTimeParam turns hourlyTimelinePath into a historical read: unix
+// seconds, UTC. ISO 8601 is rejected with 400 {"cod":"400","message":"wrong
+// start time"}. The response is 20 hourly buckets from this instant forward,
+// with data[0].dt equal to it — so Historical reads data[0] and ignores the
+// rest, and never follows next/prev (each is a separately billed call).
+//
+// It doubles as the discriminator in get: presence of this param is what makes
+// a call historical, now that the path alone cannot say.
+const historicalTimeParam = "start"
 
 // errorSnippetBytes bounds how much of an error body reaches a log line.
 const errorSnippetBytes = 256
@@ -150,7 +164,7 @@ func (p *OpenWeatherProvider) Hourly(ctx context.Context, lat, lon float64) ([]H
 			Weather []owWeatherTag `json:"weather"`
 		} `json:"data"`
 	}
-	if err := p.get(ctx, oneCallBasePath+"/timeline/1h", metricParams(lat, lon), &payload); err != nil {
+	if err := p.get(ctx, hourlyTimelinePath, metricParams(lat, lon), &payload); err != nil {
 		return nil, err
 	}
 	entries := payload.Data
@@ -219,7 +233,7 @@ func (p *OpenWeatherProvider) Historical(ctx context.Context, lat, lon float64, 
 			Weather   []owWeatherTag `json:"weather"`
 		} `json:"data"`
 	}
-	if err := p.get(ctx, historicalPath, params, &payload); err != nil {
+	if err := p.get(ctx, hourlyTimelinePath, params, &payload); err != nil {
 		return Observation{}, err
 	}
 	if len(payload.Data) == 0 {
@@ -300,10 +314,15 @@ func (p *OpenWeatherProvider) get(ctx context.Context, path string, params url.V
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusBadRequest && path == historicalPath {
+	if resp.StatusCode == http.StatusBadRequest && params.Has(historicalTimeParam) {
 		// OpenWeather answers 400 for a timestamp outside its history window.
 		// That is the one failure worth recording as terminal; everything else
 		// (5xx, timeouts, 429) is transient and must leave no row.
+		//
+		// Keyed on the `start` param, NOT on the path. History rides the same
+		// /timeline/1h that Hourly calls, so `path == …` would sweep every
+		// dashboard-tile 400 into the terminal branch; `start` is present on
+		// exactly the historical calls and nothing else.
 		//
 		// Scoped to the historical surface deliberately. A 400 from /current
 		// or geocoding means WE sent a malformed request, and letting that

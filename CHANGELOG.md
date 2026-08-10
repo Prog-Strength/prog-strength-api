@@ -1,3 +1,10 @@
+# [0.110.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.2...v0.110.0) (2026-08-10)
+
+
+### Features
+
+* **quotes:** add 23 quotes to the corpus ([#128](https://github.com/Prog-Strength/prog-strength-api/issues/128)) ([31d993e](https://github.com/Prog-Strength/prog-strength-api/commit/31d993ef7fd2ba832961ed7ebafb6b4febec83d7))
+
 ## [0.109.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.1...v0.109.2) (2026-08-10)
 
 

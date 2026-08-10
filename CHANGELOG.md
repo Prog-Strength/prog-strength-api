@@ -1,3 +1,10 @@
+## [0.109.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.0...v0.109.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **weather:** ship the weather-backfill binary in the api image ([#126](https://github.com/Prog-Strength/prog-strength-api/issues/126)) ([9fd209f](https://github.com/Prog-Strength/prog-strength-api/commit/9fd209f161c3e251dc246248f44e4a631cd0ad2a)), closes [#125](https://github.com/Prog-Strength/prog-strength-api/issues/125)
+
 # [0.109.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.108.1...v0.109.0) (2026-08-09)
 
 

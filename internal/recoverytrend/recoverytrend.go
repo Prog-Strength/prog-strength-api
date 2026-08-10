@@ -118,24 +118,14 @@ func (e *Engine) Compute(days []Day) (Baseline, HRV) {
 	b.HRVAvg = &avg
 	sd := stdDevPop(hrv, avg)
 	b.HRVStdDev = &sd
-	sdEff := math.Max(sd, e.cfg.MinStdDevMs)
-
-	low := avg - e.cfg.BalancedZ*sdEff
-	high := avg + e.cfg.BalancedZ*sdEff
+	low, high, sdEff := e.band(avg, sd)
 	h.BalancedLow = &low
 	h.BalancedHigh = &high
 
 	if today.HRV != nil {
 		z := (*today.HRV - avg) / sdEff
 		h.ZScore = &z
-		switch {
-		case math.Abs(z) <= e.cfg.BalancedZ:
-			h.Status = StatusBalanced
-		case z > e.cfg.BalancedZ:
-			h.Status = StatusElevated
-		default:
-			h.Status = StatusSuppressed
-		}
+		h.Status = e.classify(z)
 	}
 
 	trendHRV := collect(lastN(days, e.cfg.TrendWindowDays), func(d Day) *float64 { return d.HRV })
@@ -154,6 +144,28 @@ func (e *Engine) Compute(days []Day) (Baseline, HRV) {
 	}
 
 	return b, h
+}
+
+// band returns the balanced bounds and the effective (floored) SD for a
+// baseline mean and spread. The floored SD is returned because the caller
+// needs the SAME divisor for the z-score — a band and a z computed from
+// different divisors could disagree about which side of the bound a day is on.
+func (e *Engine) band(avg, sd float64) (low, high, sdEff float64) {
+	sdEff = math.Max(sd, e.cfg.MinStdDevMs)
+	return avg - e.cfg.BalancedZ*sdEff, avg + e.cfg.BalancedZ*sdEff, sdEff
+}
+
+// classify maps a z-score to a status. Inclusive at the boundary: |z| within
+// BalancedZ reads balanced, above reads elevated, below reads suppressed.
+func (e *Engine) classify(z float64) string {
+	switch {
+	case math.Abs(z) <= e.cfg.BalancedZ:
+		return StatusBalanced
+	case z > e.cfg.BalancedZ:
+		return StatusElevated
+	default:
+		return StatusSuppressed
+	}
 }
 
 // collect returns the non-nil values of one metric across days, in order.

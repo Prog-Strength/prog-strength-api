@@ -56,4 +56,46 @@
 // the product tells one story ("X below your 30-day baseline") with one
 // baseline. Overlap dampens the measured delta but cannot invert it, and
 // TrendZ is calibrated against that dampened scale.
+//
+// # The series and the drift
+//
+// Compute answers one question about one day. ComputeSeries answers it once per
+// charted day: for every day in the series it derives that day's OWN trailing
+// baseline from the BaselineWindowDays that preceded it, applying the same
+// exclude-the-day-itself rule Compute applies to today. A client can therefore
+// color each night against the band as it stood on that night's morning rather
+// than against today's band, which would measure July against an August
+// baseline.
+//
+// This is why the input is WIDE. ComputeSeries takes BaselineWindowDays of
+// lead-in ahead of the first charted day — 61 dates for a 31-day series at the
+// default window — so the OLDEST charted day still has a full trailing sample.
+// Without the lead-in the left edge of the band would wobble as the sample
+// truncated, an artifact of the window rather than anything about the athlete.
+// The lead-in is input only; the returned slice covers days[BaselineWindowDays:]
+// and nothing older is ever serialized. An input no longer than the lead-in has
+// no charted days at all and returns an empty series.
+//
+// Both entry points share band and classify, so the bounds and status the
+// series reports for its last day are bit-identical to the scalar HRV block
+// computed from the same sample. That agreement is structural, not a
+// convention, and it is pinned by test.
+//
+// BaselineTrend is a DIFFERENT question from HRV.Trend, and the distinction is
+// the point of the whole series. HRV.Trend compares the recent TrendWindowDays
+// mean against the baseline it sits inside: "is this week off my normal?"
+// BaselineTrend compares the baseline against the baseline as it stood
+// BaselineDriftDays ago: "is my normal itself moving?" A climbing baseline is
+// adaptation; a sinking one is a reason to look at sleep, load, or illness. The
+// two can legitimately point opposite ways — a rising baseline under a
+// suppressed morning is a real state, not a bug, and a client that renders both
+// must not try to reconcile them.
+//
+// The drift threshold is SD-relative, like every other threshold here: a 6 ms
+// move is signal for an athlete whose spread is 8 ms and noise for one whose
+// spread is 25 ms. It uses the MOST RECENT day's effective SD, so the verdict is
+// scaled to the spread the athlete has now rather than one they have grown out
+// of. Direction is unknown when the series cannot reach back BaselineDriftDays,
+// when either endpoint has no baseline yet, or when no charted day ever reached
+// MinBaselineDays — the same honest silence the bounds already use.
 package recoverytrend

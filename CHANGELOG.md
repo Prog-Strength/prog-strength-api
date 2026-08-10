@@ -1,3 +1,10 @@
+# [0.111.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.110.0...v0.111.0) (2026-08-10)
+
+
+### Features
+
+* **dashboard:** per-day recovery bands and baseline drift ([#129](https://github.com/Prog-Strength/prog-strength-api/issues/129)) ([f55e627](https://github.com/Prog-Strength/prog-strength-api/commit/f55e627d633c8d95469111c8d1704415830e721a))
+
 # [0.110.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.109.2...v0.110.0) (2026-08-10)
 
 

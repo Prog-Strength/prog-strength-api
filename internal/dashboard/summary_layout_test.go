@@ -222,7 +222,7 @@ func TestSummary_LayoutReadFailure_FallsBackToDefault(t *testing.T) {
 	_, rp, userID := newTestEnv(t)
 
 	// Rebuild the handler with a failing layout repo, reusing the real repos.
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{}, rp.quoteReroll, testRecoveryEngine())
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, failingLayoutRepo{}, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	r2 := chi.NewRouter()
 	h.Mount(r2)
@@ -351,6 +351,76 @@ func TestSummary_NoFamilyTile_NoRecoverySection(t *testing.T) {
 	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
 
 	assertKeysAbsent(t, data, "recovery", "hrv_balance", "morning_vitals", "recovery_trend", "recovery_log")
+}
+
+// TestSummary_SleepTile_GatedOnConnection pins the sleep tile's gate: the
+// section is built only for a CONNECTED Whoop connection, exactly as the
+// recovery family is. An unconnected user with `sleep` on their layout gets the
+// key with a null value (the enabled-but-no-data convention), not a section.
+func TestSummary_SleepTile_GatedOnConnection(t *testing.T) {
+	t.Run("connected", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		seedWhoopConnected(t, rp, userID)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSleep, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		if !equalStrs(layout, []string{"sleep", "streak"}) {
+			t.Errorf("layout = %v, want [sleep streak]", layout)
+		}
+		assertKeysPresent(t, data, "sleep")
+		if string(data["sleep"]) == "null" {
+			t.Error("sleep = null, want a populated section for a connected user")
+		}
+		var section SleepSection
+		if err := json.Unmarshal(data["sleep"], &section); err != nil {
+			t.Fatalf("decode sleep: %v", err)
+		}
+		if len(section.Nights) != sleepWindowDays {
+			t.Errorf("len(nights) = %d, want %d", len(section.Nights), sleepWindowDays)
+		}
+	})
+
+	t.Run("no connection", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSleep, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		if string(data["sleep"]) != "null" {
+			t.Errorf("sleep = %s, want null for a user with no whoop connection", data["sleep"])
+		}
+	})
+
+	t.Run("not on the layout", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		seedWhoopConnected(t, rp, userID)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRecovery, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		assertKeysAbsent(t, data, "sleep")
+	})
+}
+
+// TestSummary_DefaultLayoutHasNoSleepTile pins the rollout: sleep is a catalog
+// tile but NOT part of the default layout — the SOW adds it by hand.
+func TestSummary_DefaultLayoutHasNoSleepTile(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if indexOf(layout, string(TileSleep)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileSleep, layout)
+	}
+	assertKeysAbsent(t, data, "sleep")
 }
 
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family

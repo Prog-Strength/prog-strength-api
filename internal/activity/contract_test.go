@@ -40,6 +40,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/user"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // shadowboxingType is the fake base-only type. Not an ActivityType constant
@@ -156,6 +157,7 @@ func newContractEnv(t *testing.T) *contractEnv {
 	dh := dashboard.NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps,
 		rp.nutrition, rp.bodyweight, bloodpressure.NewSQLiteRepository(db), rp.user,
 		whoopconn.NewSQLiteRepository(db), whooprecovery.NewSQLiteRepository(db),
+		whoopsleep.NewSQLiteRepository(db),
 		dashboard.NewSQLiteLayoutRepository(db),
 		dashboard.NewSQLiteQuoteRerollRepository(db),
 		recoverytrend.New(recoverytrend.Config{

@@ -23,6 +23,10 @@ type Summary struct {
 	// Recovery is the Whoop recovery tile. Present (non-nil) only when the user
 	// has a connected Whoop connection; nil otherwise so the card stays hidden.
 	Recovery *RecoverySection `json:"recovery,omitempty"`
+	// Sleep is the Whoop sleep tile. Present (non-nil) only when the user has a
+	// connected Whoop connection; nil otherwise so the card stays hidden —
+	// declared with omitempty exactly like Recovery.
+	Sleep *SleepSection `json:"sleep,omitempty"`
 	// BloodPressure is the blood-pressure tile. Present (non-nil) only when the
 	// user has logged at least one reading; nil otherwise so the card stays
 	// hidden — mirrors how Recovery is declared with omitempty.
@@ -56,6 +60,49 @@ type QuoteSection struct {
 	// the client from having to track the count it asked for against the one
 	// it got.
 	Offset int `json:"offset"`
+}
+
+// SleepSection is the sleep tile. nil at the Summary level unless a connected
+// Whoop connection exists — the same gate the recovery family uses.
+type SleepSection struct {
+	// LastNight is today's main sleep: nil when there is no non-nap record for
+	// today. Deliberately not "the most recent night whenever it was" —
+	// promoting a two-day-old night into today's slot is the bug the recovery
+	// tile's no-reading branch exists to avoid.
+	LastNight *SleepNight `json:"last_night"`
+	// Nights is the date-aligned trailing window, oldest→newest: every date in
+	// the window present, missing nights carrying null metrics. A night with no
+	// data and a night of zero sleep are different facts.
+	Nights []SleepNight `json:"nights"`
+}
+
+// SleepNight is one local date's main sleep. Date is always populated; every
+// other field is nullable, because a date in the window with no record — or a
+// record WHOOP has not scored — is represented, not omitted. Durations are
+// milliseconds exactly as WHOOP sent them: the tile formats, the server does not
+// convert. Field names match GET /whoop/sleep's sleepDTO so a client learns one
+// vocabulary for both surfaces.
+type SleepNight struct {
+	Date string `json:"date"`
+
+	InBedMilli         *int64 `json:"in_bed_milli"`
+	AwakeMilli         *int64 `json:"awake_milli"`
+	LightSleepMilli    *int64 `json:"light_sleep_milli"`
+	SlowWaveSleepMilli *int64 `json:"slow_wave_sleep_milli"`
+	RemSleepMilli      *int64 `json:"rem_sleep_milli"`
+	NoDataMilli        *int64 `json:"no_data_milli"`
+	SleepCycleCount    *int64 `json:"sleep_cycle_count"`
+	DisturbanceCount   *int64 `json:"disturbance_count"`
+
+	NeedBaselineMilli      *int64 `json:"need_baseline_milli"`
+	NeedFromSleepDebtMilli *int64 `json:"need_from_sleep_debt_milli"`
+	NeedFromStrainMilli    *int64 `json:"need_from_strain_milli"`
+	NeedFromNapMilli       *int64 `json:"need_from_nap_milli"`
+
+	RespiratoryRate *float64 `json:"respiratory_rate"`
+	PerformancePct  *float64 `json:"performance_pct"`
+	ConsistencyPct  *float64 `json:"consistency_pct"`
+	EfficiencyPct   *float64 `json:"efficiency_pct"`
 }
 
 // RecoverySection is the Whoop recovery tile. nil at the Summary level unless a

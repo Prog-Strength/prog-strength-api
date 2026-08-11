@@ -7,7 +7,7 @@ func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 		TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
-		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
+		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
 		TileStreak, TileQuote, TileWeather,
 	}
 	if len(Catalog) != len(all) {
@@ -29,7 +29,7 @@ func TestCatalog_Order(t *testing.T) {
 		TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
-		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
+		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
 		TileStreak, TileQuote, TileWeather,
 	}
 	for i := range want {
@@ -69,5 +69,32 @@ func TestValidTileID(t *testing.T) {
 	}
 	if !ValidTileID("weather") {
 		t.Error("weather should be valid")
+	}
+	// Retired: folded into hrv_balance, so no client may place it any more.
+	if ValidTileID("recovery_trend") {
+		t.Error("recovery_trend is retired and must not validate")
+	}
+}
+
+func TestResolveTileID_RetiredTileBecomesItsReplacement(t *testing.T) {
+	if got := ResolveTileID(TileRecoveryTrend); got != TileHRVBalance {
+		t.Errorf("ResolveTileID(recovery_trend) = %q, want hrv_balance", got)
+	}
+	if got := ResolveTileID(TileSteps); got != TileSteps {
+		t.Errorf("ResolveTileID(steps) = %q, want steps unchanged", got)
+	}
+	// An unknown id is not this function's problem — callers still reject it.
+	if got := ResolveTileID("no_such_tile"); got != "no_such_tile" {
+		t.Errorf("ResolveTileID(no_such_tile) = %q, want it unchanged", got)
+	}
+	// Every replacement must itself be a live tile, or a layout would be
+	// migrated onto an id that Normalize then drops.
+	for retired, replacement := range RetiredTiles {
+		if ValidTileID(retired) {
+			t.Errorf("retired tile %q is still in the catalog", retired)
+		}
+		if !ValidTileID(replacement) {
+			t.Errorf("tile %q is retired into %q, which is not in the catalog", retired, replacement)
+		}
 	}
 }

@@ -64,6 +64,8 @@ func (l Layout) TileIDs() []TileID {
 //
 // The repairs, in order:
 //
+//   - RETIRED tile ids become the tile that absorbed them (see RetiredTiles),
+//     so a merged tile keeps its slot instead of vanishing from the layout;
 //   - unknown tile ids are dropped (the catalog is the source of truth);
 //   - a tile appearing more than once anywhere in the layout is kept at its
 //     first occurrence only — rendering it twice would desync on remove;
@@ -77,7 +79,7 @@ func Normalize(sections []Section) Layout {
 	seenID := make(map[string]bool)
 	out := make([]Section, 0, len(sections))
 
-	for i, s := range sections {
+	for i, s := range resolveSectionTiles(sections) {
 		if len(out) >= MaxSections {
 			break
 		}

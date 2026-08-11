@@ -23,9 +23,14 @@ const (
 	TileRecovery        TileID = "recovery"
 	TileHRVBalance      TileID = "hrv_balance"
 	TileMorningVitals   TileID = "morning_vitals"
-	TileRecoveryTrend   TileID = "recovery_trend"
-	TileRecoveryLog     TileID = "recovery_log"
-	TileStreak          TileID = "streak"
+	// TileRecoveryTrend is RETIRED: the web tile it named was folded into
+	// hrv_balance, which is now a two-view card (balance, then the trend rail).
+	// It is deliberately absent from Catalog — no client may add it — and kept
+	// as a constant only so RetiredTiles can name it. Layouts that still hold it
+	// are migrated, not truncated; see RetiredTiles.
+	TileRecoveryTrend TileID = "recovery_trend"
+	TileRecoveryLog   TileID = "recovery_log"
+	TileStreak        TileID = "streak"
 	// TileQuote is the one tile with no user data behind it: its content is a
 	// static corpus compiled into the binary (internal/quotes), so it has no
 	// repository, no window, and no empty state.
@@ -44,8 +49,64 @@ var Catalog = []TileID{
 	TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
-	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryTrend, TileRecoveryLog,
+	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
 	TileStreak, TileQuote, TileWeather,
+}
+
+// RetiredTiles maps a tile that no longer exists to the tile that absorbed it.
+//
+// A retired id is NOT merely unknown. Normalize drops unknown ids, which is
+// right for a typo or a tile that was deleted outright, but wrong for a tile
+// that was merged into another one: the user placed something on their
+// dashboard and it still exists, under a different id. Resolving instead of
+// dropping keeps it in the slot they put it in.
+//
+// The write path resolves too, so a browser tab left open across the deploy
+// saves successfully instead of 422-ing on an id it was served last week.
+var RetiredTiles = map[TileID]TileID{
+	TileRecoveryTrend: TileHRVBalance,
+}
+
+// ResolveTileID maps a retired id to its replacement and returns every other id
+// unchanged (including unknown ones, which remain the caller's to reject).
+func ResolveTileID(id TileID) TileID {
+	if replacement, ok := RetiredTiles[id]; ok {
+		return replacement
+	}
+	return id
+}
+
+// resolveSectionTiles applies ResolveTileID across a layout, dropping a tile
+// that RESOLVING has turned into a duplicate of one already kept — a user who
+// had both hrv_balance and recovery_trend on their dashboard ends up with one
+// hrv_balance, in the earlier of the two slots.
+//
+// Only a collision that a retirement caused is absorbed, in either direction
+// (the retired id may come first or second). A client sending the same LIVE id
+// twice is untouched, so the write path still reports it as the client error it
+// is rather than having it quietly repaired here.
+func resolveSectionTiles(sections []Section) []Section {
+	out := make([]Section, len(sections))
+	seen := make(map[TileID]bool)
+	fromRetired := make(map[TileID]bool)
+	for i, s := range sections {
+		tiles := make([]TileID, 0, len(s.TileIDs))
+		for _, id := range s.TileIDs {
+			resolved := ResolveTileID(id)
+			retired := resolved != id
+			if seen[resolved] && (retired || fromRetired[resolved]) {
+				continue
+			}
+			seen[resolved] = true
+			if retired {
+				fromRetired[resolved] = true
+			}
+			tiles = append(tiles, resolved)
+		}
+		out[i] = s
+		out[i].TileIDs = tiles
+	}
+	return out
 }
 
 var catalogSet = func() map[TileID]bool {

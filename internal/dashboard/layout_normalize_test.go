@@ -70,6 +70,33 @@ func TestNormalize(t *testing.T) {
 			},
 		},
 		{
+			name: "a retired tile becomes its replacement, in its own slot",
+			in:   []Section{{ID: "a", TileIDs: []TileID{TileSteps, TileRecoveryTrend, TileLifting}}},
+			want: []Section{{ID: "a", TileIDs: []TileID{TileSteps, TileHRVBalance, TileLifting}}},
+		},
+		{
+			name: "a layout holding both the retired tile and its replacement keeps one",
+			in: []Section{
+				{ID: "a", TileIDs: []TileID{TileRecoveryTrend}},
+				{ID: "b", TileIDs: []TileID{TileHRVBalance, TileSteps}},
+			},
+			want: []Section{
+				{ID: "a", TileIDs: []TileID{TileHRVBalance}},
+				{ID: "b", TileIDs: []TileID{TileSteps}},
+			},
+		},
+		{
+			name: "the same pair the other way round also keeps one",
+			in: []Section{
+				{ID: "a", TileIDs: []TileID{TileHRVBalance}},
+				{ID: "b", TileIDs: []TileID{TileRecoveryTrend, TileSteps}},
+			},
+			want: []Section{
+				{ID: "a", TileIDs: []TileID{TileHRVBalance}},
+				{ID: "b", TileIDs: []TileID{TileSteps}},
+			},
+		},
+		{
 			name: "a section emptied by filtering survives as an empty section",
 			in:   []Section{{ID: "a", Title: "Gone", TileIDs: []TileID{"retired_tile"}}},
 			want: []Section{{ID: "a", Title: "Gone", TileIDs: []TileID{}}},

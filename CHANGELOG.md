@@ -1,3 +1,10 @@
+# [0.113.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.112.0...v0.113.0) (2026-08-11)
+
+
+### Features
+
+* **weather:** serve the week and the full hourly strip from the same calls ([#131](https://github.com/Prog-Strength/prog-strength-api/issues/131)) ([9a7ad5b](https://github.com/Prog-Strength/prog-strength-api/commit/9a7ad5b128d663001784d32040645e79902dce2d))
+
 # [0.112.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.111.0...v0.112.0) (2026-08-11)
 
 

@@ -46,6 +46,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopadmin"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopsync"
 )
 
@@ -545,7 +546,7 @@ func New(cfg config.Config) (*Server, error) {
 	}
 
 	// Whoop integration: the WHOOP OAuth connect/callback flow, connection-status
-	// endpoints, recovery reads, and the HMAC-verified recovery webhook. Mirrors
+	// endpoints, recovery and sleep reads, and the HMAC-verified webhook. Mirrors
 	// calendar-sync: it stays DORMANT unless ALL of the client id/secret, the
 	// public redirect URL, AND a valid token-encryption key (WHOOP_TOKEN_ENC_KEY)
 	// are configured. An empty or invalid key logs and skips the mount rather than
@@ -575,8 +576,12 @@ func New(cfg config.Config) (*Server, error) {
 			whoopHTTP := &http.Client{Timeout: 8 * time.Second}
 			oauthCfg := whoopsync.NewOAuthConfig(cfg.WhoopClientID, cfg.WhoopClientSecret, cfg.WhoopRedirectURL)
 			whoopClient := whoopsync.NewClient(whoopHTTP)
-			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
-			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
+			// Sleep repo is constructed here rather than beside the connection
+			// and recovery repos above: nothing outside the WHOOP wiring reads
+			// it yet.
+			whoopSleepRepo := whoopsleep.NewSQLiteRepository(database)
+			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
+			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
 			whoopAdminHandler = whoopadmin.NewHandler(whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
 			// Publish the connection-health gauge every 5 minutes; gates the
 			// dead-ingestion alert and drives the dashboard connection panel.
@@ -584,11 +589,12 @@ func New(cfg config.Config) (*Server, error) {
 			// Public callback — WHOOP redirects here; the user id rides in the
 			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
 			whoopHandler.MountPublic(r)
-			// Public webhook — WHOOP posts recovery events here; authenticity is
-			// the HMAC signature (client secret is the key), not our JWT.
-			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
+			// Public webhook — WHOOP posts recovery and sleep events here;
+			// authenticity is the HMAC signature (client secret is the key),
+			// not our JWT.
+			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, whoopSvc, nil)
 			whoopWebhook.Mount(r)
-			log.Println("whoop: enabled (oauth + connection + webhook + recovery reads)")
+			log.Println("whoop: enabled (oauth + connection + webhook + recovery and sleep reads)")
 		}
 	} else {
 		log.Println("whoop: disabled (WHOOP_CLIENT_ID / WHOOP_CLIENT_SECRET / WHOOP_REDIRECT_URL / WHOOP_TOKEN_ENC_KEY not configured)")
@@ -836,7 +842,7 @@ func New(cfg config.Config) (*Server, error) {
 		// Dashboard "command center" — the read-only aggregate that composes
 		// every domain's tile into one GET /dashboard/summary. Shares the
 		// JWT-gated group; reads from every domain repo, owns no writes.
-		dashboardHandler := dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, dashboard.NewSQLiteLayoutRepository(database), dashboard.NewSQLiteQuoteRerollRepository(database), recoveryEngine)
+		dashboardHandler := dashboard.NewHandler(activityRepo, workoutRepo, exerciseRepo, stepsRepo, nutritionRepo, bodyweightRepo, bloodPressureRepo, userRepo, whoopConnRepo, whoopRecoveryRepo, whoopsleep.NewSQLiteRepository(database), dashboard.NewSQLiteLayoutRepository(database), dashboard.NewSQLiteQuoteRerollRepository(database), recoveryEngine)
 		// Same engine and window as the activity handler: the Run Effort tile
 		// classifies week runs against the same max-HR reference the run
 		// detail page uses, so the two surfaces can never disagree.

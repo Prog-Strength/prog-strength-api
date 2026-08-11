@@ -18,6 +18,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // --- handler harness --------------------------------------------------------
@@ -40,6 +41,7 @@ func handlerCipher(t *testing.T) *tokencrypt.Cipher {
 type handlerDeps struct {
 	conns  whoopconn.Repository
 	rec    whooprecovery.Repository
+	sleep  whoopsleep.Repository
 	cipher *tokencrypt.Cipher
 }
 
@@ -49,6 +51,7 @@ func newHandlerDeps(t *testing.T) handlerDeps {
 	return handlerDeps{
 		conns:  whoopconn.NewSQLiteRepository(database),
 		rec:    whooprecovery.NewSQLiteRepository(database),
+		sleep:  whoopsleep.NewSQLiteRepository(database),
 		cipher: handlerCipher(t),
 	}
 }
@@ -64,9 +67,9 @@ func newTestHandler(t *testing.T, d handlerDeps, tokenURL string, api whoopAPI) 
 	if api == nil {
 		api = &fakeAPI{}
 	}
-	svc := NewService(d.conns, d.rec, d.cipher, api, oauth, http.DefaultClient, nil)
+	svc := NewService(d.conns, d.rec, d.sleep, d.cipher, api, oauth, http.DefaultClient, nil)
 	client := NewClient(http.DefaultClient)
-	return NewHandler(oauth, client, d.conns, d.rec, svc, d.cipher, http.DefaultClient,
+	return NewHandler(oauth, client, d.conns, d.rec, d.sleep, svc, d.cipher, http.DefaultClient,
 		[]string{"https://app.example.com"}, testHMACKey, nil)
 }
 
@@ -120,6 +123,9 @@ func (erroringAPI) Recoveries(context.Context, string, time.Time, time.Time, int
 	return nil, errors.New("whoop api boom")
 }
 func (erroringAPI) Cycles(context.Context, string, time.Time, time.Time, int) ([]Cycle, error) {
+	return nil, errors.New("whoop api boom")
+}
+func (erroringAPI) Sleeps(context.Context, string, time.Time, time.Time, int) ([]Sleep, error) {
 	return nil, errors.New("whoop api boom")
 }
 
@@ -485,6 +491,87 @@ func TestGetConnectionConnected(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339, env.Data.ConnectedAt); err != nil {
 		t.Errorf("connected_at %q not RFC3339: %v", env.Data.ConnectedAt, err)
+	}
+}
+
+// TestGetConnectionReportsMissingScopes pins the under-scoped read surface: a
+// connection whose grant predates read:sleep is still connected, and the only
+// way the client can offer a reconnect is for the payload to name what is
+// absent.
+func TestGetConnectionReportsMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	bundle := whoopconn.TokenBundle{
+		AccessTokenEnc: []byte("e"), AccessTokenNonce: []byte("n"),
+		RefreshTokenEnc: []byte("e"), RefreshTokenNonce: []byte("n"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	granted := "read:recovery read:cycles read:profile offline"
+	if err := d.conns.Upsert(context.Background(), "user-1", 42, bundle, granted, now); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var env struct {
+		Data struct {
+			Status        string   `json:"status"`
+			MissingScopes []string `json:"missing_scopes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, rec.Body.String())
+	}
+	if env.Data.Status != "connected" {
+		t.Errorf("status = %q, want connected (under-scoped is not a status)", env.Data.Status)
+	}
+	if len(env.Data.MissingScopes) != 1 || env.Data.MissingScopes[0] != "read:sleep" {
+		t.Errorf("missing_scopes = %v, want [read:sleep]", env.Data.MissingScopes)
+	}
+}
+
+// TestGetConnectionFullyScopedEmitsEmptyMissingScopes pins the key's presence,
+// not just its value: the client branches on length, so an omitted key on a
+// fully-scoped connection would be indistinguishable from an older payload and
+// would hide the reconnect affordance.
+func TestGetConnectionFullyScopedEmitsEmptyMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	bundle := whoopconn.TokenBundle{
+		AccessTokenEnc: []byte("e"), AccessTokenNonce: []byte("n"),
+		RefreshTokenEnc: []byte("e"), RefreshTokenNonce: []byte("n"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := d.conns.Upsert(context.Background(), "user-1", 42, bundle, ScopeString, now); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"missing_scopes":[]`) {
+		t.Errorf("body = %s, want missing_scopes to serialize as []", rec.Body.String())
+	}
+}
+
+// TestGetConnectionAbsentOmitsMissingScopes pins the other side of the
+// omitempty: with no row there is no connection to be under-scoped, and
+// missing_scopes:[] would read as "connected and fine".
+func TestGetConnectionAbsentOmitsMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "missing_scopes") {
+		t.Errorf("body = %s, want no missing_scopes key for the absent case", rec.Body.String())
 	}
 }
 

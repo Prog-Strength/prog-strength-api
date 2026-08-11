@@ -78,16 +78,20 @@ const (
 // connectionView is the API contract for a single connection. JSON tags are the
 // contract; latest_recovery_date is null when the user has no recovery rows.
 type connectionView struct {
-	UserID             string  `json:"user_id"`
-	WhoopUserID        int64   `json:"whoop_user_id"`
-	Status             string  `json:"status"`
-	Scopes             string  `json:"scopes"`
-	TokenExpiresAt     string  `json:"token_expires_at"`
-	TokenExpired       bool    `json:"token_expired"`
-	ConnectedAt        string  `json:"connected_at"`
-	UpdatedAt          string  `json:"updated_at"`
-	LatestRecoveryDate *string `json:"latest_recovery_date"` // null when no rows
-	RecoveryRowCount   int     `json:"recovery_row_count"`
+	UserID      string `json:"user_id"`
+	WhoopUserID int64  `json:"whoop_user_id"`
+	Status      string `json:"status"`
+	Scopes      string `json:"scopes"`
+	// MissingScopes names the RequiredScopes this connection never consented
+	// to, so an operator can spot a connection that predates a scope addition
+	// without decrypting anything. Never null; [] when fully scoped.
+	MissingScopes      []string `json:"missing_scopes"`
+	TokenExpiresAt     string   `json:"token_expires_at"`
+	TokenExpired       bool     `json:"token_expired"`
+	ConnectedAt        string   `json:"connected_at"`
+	UpdatedAt          string   `json:"updated_at"`
+	LatestRecoveryDate *string  `json:"latest_recovery_date"` // null when no rows
+	RecoveryRowCount   int      `json:"recovery_row_count"`
 }
 
 type listResponse struct {
@@ -100,10 +104,24 @@ type resyncRequest struct {
 }
 
 type resyncOutcome struct {
-	Upserted        int `json:"upserted"`
-	SkippedUnscored int `json:"skipped_unscored"`
-	SkippedNoCycle  int `json:"skipped_no_cycle"`
-	SkippedBadDate  int `json:"skipped_bad_date"`
+	Upserted        int                `json:"upserted"`
+	SkippedUnscored int                `json:"skipped_unscored"`
+	SkippedNoCycle  int                `json:"skipped_no_cycle"`
+	SkippedBadDate  int                `json:"skipped_bad_date"`
+	Sleep           sleepResyncOutcome `json:"sleep"`
+}
+
+// sleepResyncOutcome is nested rather than flattened so an operator reading the
+// response can tell which domain a count belongs to. There is no
+// skipped_no_cycle: the sleep path joins no cycle. skipped_no_scope true means
+// the user has not reconnected since read:sleep was requested, and error
+// carries a sleep-side failure that deliberately did not fail the resync.
+type sleepResyncOutcome struct {
+	Upserted        int    `json:"upserted"`
+	SkippedUnscored int    `json:"skipped_unscored"`
+	SkippedBadDate  int    `json:"skipped_bad_date"`
+	SkippedNoScope  bool   `json:"skipped_no_scope"`
+	Error           string `json:"error,omitempty"`
 }
 
 // buildView renders a connection plus its recovery summary. Real repository
@@ -115,6 +133,7 @@ func (h *Handler) buildView(ctx context.Context, conn whoopconn.Connection) (con
 		WhoopUserID:    conn.WhoopUserID,
 		Status:         string(conn.Status),
 		Scopes:         conn.Scopes,
+		MissingScopes:  whoopsync.MissingScopes(conn.Scopes),
 		TokenExpiresAt: conn.TokenExpiresAt.UTC().Format(time.RFC3339),
 		TokenExpired:   h.now().After(conn.TokenExpiresAt),
 		ConnectedAt:    conn.ConnectedAt.UTC().Format(time.RFC3339),
@@ -233,10 +252,20 @@ func (h *Handler) resync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sleep := sleepResyncOutcome{
+		Upserted:        res.Sleep.Upserted,
+		SkippedUnscored: res.Sleep.SkippedUnscored,
+		SkippedBadDate:  res.Sleep.SkippedBadDate,
+		SkippedNoScope:  res.Sleep.SkippedNoScope,
+	}
+	if res.Sleep.Err != nil {
+		sleep.Error = res.Sleep.Err.Error()
+	}
 	httpresp.OK(w, "resynced whoop recovery", resyncOutcome{
 		Upserted:        res.Upserted,
 		SkippedUnscored: res.SkippedUnscored,
 		SkippedNoCycle:  res.SkippedNoCycle,
 		SkippedBadDate:  res.SkippedBadDate,
+		Sleep:           sleep,
 	})
 }

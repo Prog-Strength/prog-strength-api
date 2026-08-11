@@ -26,6 +26,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/user"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // --- harness ----------------------------------------------------------
@@ -52,6 +53,7 @@ type repos struct {
 	user          *user.SQLiteRepository
 	whoopConn     *whoopconn.SQLiteRepository
 	whoopRec      *whooprecovery.SQLiteRepository
+	whoopSleep    *whoopsleep.SQLiteRepository
 	layout        *SQLiteRepository
 	quoteReroll   *SQLiteQuoteRerollRepository
 }
@@ -72,6 +74,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 		user:        user.NewSQLiteRepository(db),
 		whoopConn:   whoopconn.NewSQLiteRepository(db),
 		whoopRec:    whooprecovery.NewSQLiteRepository(db),
+		whoopSleep:  whoopsleep.NewSQLiteRepository(db),
 		layout:      NewSQLiteLayoutRepository(db),
 		quoteReroll: NewSQLiteQuoteRerollRepository(db),
 	}
@@ -91,7 +94,7 @@ func newTestEnv(t *testing.T) (*chi.Mux, *repos, string) {
 	}
 
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, rp.quoteReroll, testRecoveryEngine())
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, rp.layout, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
 	h.Mount(r)
@@ -411,7 +414,7 @@ func TestSummary_DomainReadError_DegradesToNilSection(t *testing.T) {
 
 	// Wire the handler with the failing bodyweight repo; all others are real.
 	r := chi.NewRouter()
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, rp.quoteReroll, testRecoveryEngine())
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, errBodyweightRepo{rp.bodyweight}, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, rp.layout, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	h.Mount(r)
 
@@ -730,7 +733,7 @@ func TestSummary_HeartRateZones_ReferenceReadFailure_DegradesToNil(t *testing.T)
 		t.Fatalf("layout upsert: %v", err)
 	}
 
-	h := NewHandler(errHRStatsRepo{rp.activity}, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.layout, rp.quoteReroll, testRecoveryEngine())
+	h := NewHandler(errHRStatsRepo{rp.activity}, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, rp.layout, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	h.SetHRZonesEngine(testHRZonesEngine(), 90*24*time.Hour)
 	r2 := chi.NewRouter()

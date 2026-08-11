@@ -35,7 +35,15 @@ const (
 	// Scopes are granted at consent: adding one here requires connected users
 	// to reconnect before it takes effect, and the WHOOP app's dashboard
 	// config must have the scope enabled or consent fails.
-	ScopeString = "read:recovery read:cycles read:profile offline"
+	//
+	// read:sleep was added after launch. RefreshToken re-sends this string on
+	// every refresh, but a refresh cannot WIDEN an existing grant — only the
+	// authorization-code flow can, so connections made before the addition
+	// stay under-scoped until the user re-consents. RequiredScopes and
+	// MissingScopes (scopes.go) are what make that state visible rather than
+	// silent: a connection missing a scope is still connected, and the paths
+	// needing the absent scope skip instead of 403ing on every sync.
+	ScopeString = "read:recovery read:cycles read:sleep read:profile offline"
 )
 
 // whoopRevokeURL is WHOOP's access-revocation endpoint. It is a package var

@@ -17,6 +17,7 @@ import (
 
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // Header names WHOOP sets on every webhook delivery. The signature is the
@@ -50,20 +51,21 @@ type webhookSyncer interface {
 // Compile-time check that the production *Service satisfies webhookSyncer.
 var _ webhookSyncer = (*Service)(nil)
 
-// WebhookHandler serves WHOOP's public recovery webhook. It is mounted OUTSIDE
-// the JWT-gated group (WHOOP calls it directly), so the only authentication is
-// the HMAC signature verified against the app's client secret.
+// WebhookHandler serves WHOOP's public recovery and sleep webhook. It is
+// mounted OUTSIDE the JWT-gated group (WHOOP calls it directly), so the only
+// authentication is the HMAC signature verified against the app's client secret.
 type WebhookHandler struct {
 	secret []byte // WHOOP client secret — the HMAC key
 	conns  whoopconn.Repository
 	rec    whooprecovery.Repository
+	sleep  whoopsleep.Repository
 	svc    webhookSyncer
 	now    func() time.Time
 }
 
 // NewWebhookHandler wires the webhook handler. secret is the WHOOP client
 // secret used as the HMAC key. now defaults to time.Now when nil.
-func NewWebhookHandler(secret []byte, conns whoopconn.Repository, rec whooprecovery.Repository, svc webhookSyncer, now func() time.Time) *WebhookHandler {
+func NewWebhookHandler(secret []byte, conns whoopconn.Repository, rec whooprecovery.Repository, sleep whoopsleep.Repository, svc webhookSyncer, now func() time.Time) *WebhookHandler {
 	if now == nil {
 		now = time.Now
 	}
@@ -71,6 +73,7 @@ func NewWebhookHandler(secret []byte, conns whoopconn.Repository, rec whooprecov
 		secret: secret,
 		conns:  conns,
 		rec:    rec,
+		sleep:  sleep,
 		svc:    svc,
 		now:    now,
 	}
@@ -172,6 +175,39 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.InfoContext(ctx, "whoop webhook: handled",
 			"type", event.Type, "user_id", conn.UserID, "sleep_id", event.ID)
+		webhooksTotal.WithLabelValues(event.Type, "deleted").Inc()
+	case "sleep.updated":
+		// Poke, not payload — re-sync the recent window, same as
+		// recovery.updated. Idempotent upserts make redelivery, duplicates, and
+		// out-of-order arrival safe. Note this is the SAME SyncWindow call the
+		// recovery case makes: one sync covers both domains, which is why sleep
+		// gets no liveness stamp of its own. The cost: WHOOP delivers both
+		// recovery.updated and sleep.updated for one night, so a night now runs
+		// SyncWindow twice — 6 upstream calls (recoveries + cycles + sleeps,
+		// doubled) where it was 3. Deliberate for now; if rate limiting ever
+		// bites, coalescing the two deliveries is the first thing to try.
+		if err := h.svc.SyncWindow(ctx, conn.UserID, webhookSyncLimit); err != nil {
+			slog.ErrorContext(ctx, "whoop webhook: sync window", "user_id", conn.UserID, "error", err)
+			webhooksTotal.WithLabelValues(event.Type, "sync_error").Inc()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		slog.InfoContext(ctx, "whoop webhook: handled",
+			"type", event.Type, "user_id", conn.UserID)
+		webhooksTotal.WithLabelValues(event.Type, "synced").Inc()
+	case "sleep.deleted":
+		// The event id IS the sleep UUID — the first webhook where that id maps
+		// to a record we actually own. A WHOOP-initiated delete is a data
+		// correction, so the row goes; a user disconnect is an account action
+		// and leaves ingested rows alone.
+		if err := h.sleep.DeleteByWhoopSleepID(ctx, conn.UserID, event.ID); err != nil {
+			slog.ErrorContext(ctx, "whoop webhook: delete sleep", "user_id", conn.UserID, "whoop_sleep_id", event.ID, "error", err)
+			webhooksTotal.WithLabelValues(event.Type, "delete_error").Inc()
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		slog.InfoContext(ctx, "whoop webhook: handled",
+			"type", event.Type, "user_id", conn.UserID, "whoop_sleep_id", event.ID)
 		webhooksTotal.WithLabelValues(event.Type, "deleted").Inc()
 	default:
 		// Event type we don't handle — accept and drop. Debug (not info): a

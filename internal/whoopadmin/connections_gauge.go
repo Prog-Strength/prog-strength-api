@@ -8,6 +8,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsync"
 )
 
 // api_whoop_connections gauges connection health by status, refreshed every
@@ -53,7 +54,23 @@ var lastWindowSyncGauge = prometheus.NewGauge(
 	},
 )
 
-func init() { prometheus.MustRegister(connectionsGauge, lastWindowSyncGauge) }
+// api_whoop_connections_missing_scope counts CONNECTED connections that did
+// not consent to every scope ingestion needs. This is what turns "users are
+// silently not getting sleep" from an invisible state into a dashboard number,
+// and it generalizes to every future scope addition: widen RequiredScopes and
+// this gauge starts reporting the backlog without further work.
+//
+// Only CONNECTED rows count — a revoked connection is not ingesting anything,
+// so counting it would report a reconnect backlog that does not exist. Same
+// reasoning as lastWindowSyncGauge above.
+var missingScopeGauge = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "api_whoop_connections_missing_scope",
+		Help: "Current count of connected WHOOP connections missing at least one required scope.",
+	},
+)
+
+func init() { prometheus.MustRegister(connectionsGauge, lastWindowSyncGauge, missingScopeGauge) }
 
 const refreshInterval = 5 * time.Minute
 
@@ -101,12 +118,19 @@ func (e *ConnectionsExporter) refresh(ctx context.Context) error {
 	}
 	counts := map[whoopconn.Status]int{}
 	var newestSync time.Time
+	var underScoped int
 	for _, c := range conns {
 		counts[c.Status]++
 		// Only connected rows count: a revoked/errored connection is not
 		// ingesting, so letting its stale stamp hold the gauge up would report
 		// liveness for a feed that is definitionally dead.
-		if c.Status != whoopconn.StatusConnected || c.LastWindowSyncAt == nil {
+		if c.Status != whoopconn.StatusConnected {
+			continue
+		}
+		if len(whoopsync.MissingScopes(c.Scopes)) > 0 {
+			underScoped++
+		}
+		if c.LastWindowSyncAt == nil {
 			continue
 		}
 		if c.LastWindowSyncAt.After(newestSync) {
@@ -116,6 +140,7 @@ func (e *ConnectionsExporter) refresh(ctx context.Context) error {
 	for _, s := range allStatuses {
 		connectionsGauge.WithLabelValues(string(s)).Set(float64(counts[s]))
 	}
+	missingScopeGauge.Set(float64(underScoped))
 	if newestSync.IsZero() {
 		lastWindowSyncGauge.Set(0)
 	} else {

@@ -80,6 +80,7 @@ func TestNew_MountsWhoopRoutesWhenConfigured(t *testing.T) {
 		"GET /auth/whoop/connect",  // authed
 		"GET /me/whoop/connection", // authed
 		"GET /whoop/recovery",      // authed
+		"GET /whoop/sleep",         // authed
 	}
 	for _, r := range want {
 		if !routes[r] {

@@ -203,6 +203,52 @@ func TestListConnections(t *testing.T) {
 	}
 }
 
+// TestListConnections_ReportsMissingScopes pins the operator-facing half of the
+// under-scoped signal: an operator must be able to see which connections
+// predate a scope addition without decrypting anything. userA is under-scoped;
+// userB is fully scoped and must render [] rather than null.
+func TestListConnections_ReportsMissingScopes(t *testing.T) {
+	now := fixedNow("2026-07-31T12:00:00Z")
+	conns := &fakeConns{
+		list: []whoopconn.Connection{
+			{UserID: "userA", Scopes: "read:recovery read:cycles read:profile", Status: whoopconn.StatusConnected},
+			{UserID: "userB", Scopes: "read:recovery read:cycles read:sleep read:profile", Status: whoopconn.StatusConnected},
+		},
+	}
+	h := whoopadmin.NewHandler(conns, &fakeRecovery{}, &fakeResyncer{}, now)
+	srv := newRouter(h)
+
+	resp := httptest.NewRecorder()
+	srv.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/admin/whoop/connections", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+
+	env := decodeEnvelope(t, resp.Body.Bytes())
+	var data struct {
+		Connections []struct {
+			UserID        string   `json:"user_id"`
+			MissingScopes []string `json:"missing_scopes"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if len(data.Connections) != 2 {
+		t.Fatalf("connections len = %d, want 2", len(data.Connections))
+	}
+	if got := data.Connections[0].MissingScopes; len(got) != 1 || got[0] != "read:sleep" {
+		t.Errorf("userA missing_scopes = %v, want [read:sleep]", got)
+	}
+	if got := data.Connections[1].MissingScopes; len(got) != 0 {
+		t.Errorf("userB missing_scopes = %v, want empty", got)
+	}
+	// Non-nil, so a fully-scoped connection renders [] rather than null.
+	if !bytes.Contains(resp.Body.Bytes(), []byte(`"missing_scopes":[]`)) {
+		t.Errorf("body = %s, want a fully-scoped connection to render missing_scopes as []", resp.Body.String())
+	}
+}
+
 func TestListConnections_EmptyIsArrayNotNull(t *testing.T) {
 	h := whoopadmin.NewHandler(&fakeConns{}, &fakeRecovery{}, &fakeResyncer{}, fixedNow("2026-07-31T12:00:00Z"))
 	srv := newRouter(h)
@@ -294,8 +340,27 @@ func postResync(t *testing.T, srv http.Handler, body any) *httptest.ResponseReco
 	return resp
 }
 
+// resyncOutcomeJSON is the wire shape of a resync response, declared here so
+// the test reads the contract rather than the handler's struct.
+type resyncOutcomeJSON struct {
+	Upserted        int `json:"upserted"`
+	SkippedUnscored int `json:"skipped_unscored"`
+	SkippedNoCycle  int `json:"skipped_no_cycle"`
+	SkippedBadDate  int `json:"skipped_bad_date"`
+	Sleep           struct {
+		Upserted        int    `json:"upserted"`
+		SkippedUnscored int    `json:"skipped_unscored"`
+		SkippedBadDate  int    `json:"skipped_bad_date"`
+		SkippedNoScope  bool   `json:"skipped_no_scope"`
+		Error           string `json:"error"`
+	} `json:"sleep"`
+}
+
 func TestResync_HappyPath(t *testing.T) {
-	want := whoopsync.SyncResult{Upserted: 4, SkippedUnscored: 1, SkippedNoCycle: 2, SkippedBadDate: 3}
+	want := whoopsync.SyncResult{
+		Upserted: 4, SkippedUnscored: 1, SkippedNoCycle: 2, SkippedBadDate: 3,
+		Sleep: whoopsync.SleepSyncResult{Upserted: 7, SkippedUnscored: 2, SkippedBadDate: 1},
+	}
 	h, svc := resyncFixture(want, nil)
 	srv := newRouter(h)
 
@@ -304,17 +369,18 @@ func TestResync_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
 	}
 	env := decodeEnvelope(t, resp.Body.Bytes())
-	var out struct {
-		Upserted        int `json:"upserted"`
-		SkippedUnscored int `json:"skipped_unscored"`
-		SkippedNoCycle  int `json:"skipped_no_cycle"`
-		SkippedBadDate  int `json:"skipped_bad_date"`
-	}
+	var out resyncOutcomeJSON
 	if err := json.Unmarshal(env.Data, &out); err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
 	if out.Upserted != 4 || out.SkippedUnscored != 1 || out.SkippedNoCycle != 2 || out.SkippedBadDate != 3 {
 		t.Errorf("outcome = %+v, want mapped counts", out)
+	}
+	if out.Sleep.Upserted != 7 || out.Sleep.SkippedUnscored != 2 || out.Sleep.SkippedBadDate != 1 {
+		t.Errorf("sleep outcome = %+v, want mapped sleep counts", out.Sleep)
+	}
+	if out.Sleep.SkippedNoScope || out.Sleep.Error != "" {
+		t.Errorf("sleep outcome = %+v, want no scope skip and no error", out.Sleep)
 	}
 	if svc.gotUserID != "userA" {
 		t.Errorf("SyncSince userID = %q, want userA", svc.gotUserID)
@@ -324,6 +390,44 @@ func TestResync_HappyPath(t *testing.T) {
 	}
 	if svc.gotLimit != 25 {
 		t.Errorf("limit = %d, want 25", svc.gotLimit)
+	}
+}
+
+// TestResync_ReportsSleepFailureWithoutFailingTheResync pins the operator-facing
+// half of the isolation rule: a sleep failure (or an under-scoped connection)
+// still answers 200 with the recovery counts, and says what happened to sleep in
+// its own object rather than being invisible.
+func TestResync_ReportsSleepFailureWithoutFailingTheResync(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		sleep          whoopsync.SleepSyncResult
+		wantNoScope    bool
+		wantErrMessage string
+	}{
+		{"sleep fetch failed", whoopsync.SleepSyncResult{Err: errors.New("whoopsync: whoop api error: fetch sleeps: status 403")}, false,
+			"whoopsync: whoop api error: fetch sleeps: status 403"},
+		{"under-scoped connection", whoopsync.SleepSyncResult{SkippedNoScope: true}, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := resyncFixture(whoopsync.SyncResult{Upserted: 4, Sleep: tc.sleep}, nil)
+			resp := postResync(t, newRouter(h), map[string]any{"user_id": "userA"})
+			if resp.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+			}
+			var out resyncOutcomeJSON
+			if err := json.Unmarshal(decodeEnvelope(t, resp.Body.Bytes()).Data, &out); err != nil {
+				t.Fatalf("decode data: %v", err)
+			}
+			if out.Upserted != 4 {
+				t.Errorf("upserted = %d, want 4: recovery counts survive a sleep failure", out.Upserted)
+			}
+			if out.Sleep.SkippedNoScope != tc.wantNoScope {
+				t.Errorf("sleep.skipped_no_scope = %v, want %v", out.Sleep.SkippedNoScope, tc.wantNoScope)
+			}
+			if out.Sleep.Error != tc.wantErrMessage {
+				t.Errorf("sleep.error = %q, want %q", out.Sleep.Error, tc.wantErrMessage)
+			}
+		})
 	}
 }
 

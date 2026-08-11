@@ -15,6 +15,7 @@ import (
 
 	"github.com/Prog-Strength/prog-strength-api/internal/steps"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // dataEnvelope drives the summary endpoint and returns the response's sections
@@ -222,7 +223,7 @@ func TestSummary_LayoutReadFailure_FallsBackToDefault(t *testing.T) {
 	_, rp, userID := newTestEnv(t)
 
 	// Rebuild the handler with a failing layout repo, reusing the real repos.
-	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, failingLayoutRepo{}, rp.quoteReroll, testRecoveryEngine())
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, failingLayoutRepo{}, rp.quoteReroll, testRecoveryEngine())
 	h.now = func() time.Time { return testNow }
 	r2 := chi.NewRouter()
 	h.Mount(r2)
@@ -351,6 +352,174 @@ func TestSummary_NoFamilyTile_NoRecoverySection(t *testing.T) {
 	_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
 
 	assertKeysAbsent(t, data, "recovery", "hrv_balance", "morning_vitals", "recovery_trend", "recovery_log")
+}
+
+// TestSummary_SleepTile_GatedOnConnection pins the sleep tile's gate: the
+// section is built only for a CONNECTED Whoop connection, exactly as the
+// recovery family is. An unconnected user with `sleep` on their layout gets the
+// key with a null value (the enabled-but-no-data convention), not a section.
+func TestSummary_SleepTile_GatedOnConnection(t *testing.T) {
+	t.Run("connected", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		seedWhoopConnected(t, rp, userID)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSleep, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		if !equalStrs(layout, []string{"sleep", "streak"}) {
+			t.Errorf("layout = %v, want [sleep streak]", layout)
+		}
+		assertKeysPresent(t, data, "sleep")
+		if string(data["sleep"]) == "null" {
+			t.Error("sleep = null, want a populated section for a connected user")
+		}
+		var section SleepSection
+		if err := json.Unmarshal(data["sleep"], &section); err != nil {
+			t.Fatalf("decode sleep: %v", err)
+		}
+		if len(section.Nights) != sleepWindowDays {
+			t.Errorf("len(nights) = %d, want %d", len(section.Nights), sleepWindowDays)
+		}
+	})
+
+	t.Run("no connection", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSleep, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		if string(data["sleep"]) != "null" {
+			t.Errorf("sleep = %s, want null for a user with no whoop connection", data["sleep"])
+		}
+	})
+
+	t.Run("not on the layout", func(t *testing.T) {
+		r, rp, userID := newTestEnv(t)
+		seedWhoopConnected(t, rp, userID)
+		if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRecovery, TileStreak})); err != nil {
+			t.Fatalf("layout upsert: %v", err)
+		}
+
+		_, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+		assertKeysAbsent(t, data, "sleep")
+	})
+}
+
+// TestSummary_SleepWindow_SpansSpringForward exercises the sleep window in a
+// zone that actually observes DST, end to end through the handler. Every other
+// window test runs in UTC, where the handler's
+// AddDate(0, 0, -(sleepWindowDays-1)) `since` bound and the builder's
+// time.Date(y, mo, d-i, ...) day walk can never disagree. In America/Denver
+// across 2026-03-08 they could: this locks that the window is exactly
+// sleepWindowDays consecutive LOCAL calendar dates and that the handler fetches
+// from a `since` no newer than the builder's oldest date — a narrower `since`
+// would blank the oldest night rather than error.
+func TestSummary_SleepWindow_SpansSpringForward(t *testing.T) {
+	_, rp, userID := newTestEnv(t)
+	loc := mustLoad(t, "America/Denver")
+	// 02:00 local on 2026-03-20. The trailing 30 local dates reach back to
+	// 2026-02-19 and cross the spring-forward on 2026-03-08.
+	dstNow := time.Date(2026, 3, 20, 2, 0, 0, 0, loc)
+	const oldestDate, dstDate, todayDate = "2026-02-19", "2026-03-08", "2026-03-20"
+
+	seedWhoopConnected(t, rp, userID)
+	// oldestDate is the handler's `since` bound itself; outOfWindow sits one day
+	// below it and must never surface.
+	for _, d := range []string{"2026-02-18", oldestDate, dstDate, todayDate} {
+		seedSleepNight(t, rp, userID, d)
+	}
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileSleep})); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	r := chi.NewRouter()
+	h := NewHandler(rp.activity, rp.workout, rp.exercise, rp.steps, rp.nutrition, rp.bodyweight, rp.bloodPressure, rp.user, rp.whoopConn, rp.whoopRec, rp.whoopSleep, rp.layout, rp.quoteReroll, testRecoveryEngine())
+	h.now = func() time.Time { return dstNow }
+	h.Mount(r)
+
+	_, data := dataEnvelope(t, r, userID, "?timezone=America/Denver")
+	var section SleepSection
+	if err := json.Unmarshal(data["sleep"], &section); err != nil {
+		t.Fatalf("decode sleep: %v; body=%s", err, data["sleep"])
+	}
+
+	if len(section.Nights) != sleepWindowDays {
+		t.Fatalf("len(nights) = %d, want %d", len(section.Nights), sleepWindowDays)
+	}
+	if got := section.Nights[0].Date; got != oldestDate {
+		t.Errorf("oldest night = %q, want %q", got, oldestDate)
+	}
+	if got := section.Nights[len(section.Nights)-1].Date; got != todayDate {
+		t.Errorf("newest night = %q, want %q", got, todayDate)
+	}
+	// Consecutive local calendar dates: no day doubled or dropped where the
+	// clocks moved. Parsed in UTC so the check itself carries no DST arithmetic.
+	byDate := make(map[string]SleepNight, len(section.Nights))
+	prev, err := time.Parse("2006-01-02", section.Nights[0].Date)
+	if err != nil {
+		t.Fatalf("parse %q: %v", section.Nights[0].Date, err)
+	}
+	byDate[section.Nights[0].Date] = section.Nights[0]
+	for _, n := range section.Nights[1:] {
+		want := prev.AddDate(0, 0, 1).Format("2006-01-02")
+		if n.Date != want {
+			t.Fatalf("night after %s = %q, want %q", prev.Format("2006-01-02"), n.Date, want)
+		}
+		prev = prev.AddDate(0, 0, 1)
+		byDate[n.Date] = n
+	}
+
+	// The seeded rows land on their own local dates — including the one on the
+	// `since` bound, which proves the handler's bound is not a day short.
+	for _, d := range []string{oldestDate, dstDate, todayDate} {
+		if byDate[d].InBedMilli == nil {
+			t.Errorf("night %s has no metrics, want the seeded record", d)
+		}
+	}
+	if _, ok := byDate["2026-02-18"]; ok {
+		t.Error("2026-02-18 is in the window, want it excluded")
+	}
+	if section.LastNight == nil || section.LastNight.Date != todayDate {
+		t.Errorf("last_night = %+v, want the %s record", section.LastNight, todayDate)
+	}
+}
+
+// seedSleepNight stores one scored, non-nap Denver-local night on date.
+func seedSleepNight(t *testing.T, rp *repos, userID, date string) {
+	t.Helper()
+	inBed := int64(25200000)
+	e := whoopsleep.Entry{
+		UserID:         userID,
+		WhoopSleepID:   "sleep-" + date,
+		Date:           date,
+		StartedAt:      date + "T22:40:00-07:00",
+		EndedAt:        date + "T06:15:00-07:00",
+		TimezoneOffset: "-07:00",
+		ScoreState:     "SCORED",
+		InBedMilli:     &inBed,
+	}
+	if err := rp.whoopSleep.Upsert(context.Background(), e, testNow); err != nil {
+		t.Fatalf("seed sleep %s: %v", date, err)
+	}
+}
+
+// TestSummary_DefaultLayoutHasNoSleepTile pins the rollout: sleep is a catalog
+// tile but NOT part of the default layout — the SOW adds it by hand.
+func TestSummary_DefaultLayoutHasNoSleepTile(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if indexOf(layout, string(TileSleep)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileSleep, layout)
+	}
+	assertKeysAbsent(t, data, "sleep")
 }
 
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family

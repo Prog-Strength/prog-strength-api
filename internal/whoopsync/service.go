@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // ErrReconnectNeeded means the user's WHOOP connection is no longer usable
@@ -32,6 +34,35 @@ type SyncResult struct {
 	SkippedUnscored int
 	SkippedNoCycle  int
 	SkippedBadDate  int
+
+	// Sleep is the sleep domain's outcome for the same window. Separate rather
+	// than summed: the two domains fail independently, so a single set of
+	// counters could not express "recovery landed, sleep 403'd".
+	Sleep SleepSyncResult
+
+	// Fetch counts for the combined summary log line only — not part of the
+	// operator-facing resync payload.
+	recoveriesFetched int
+	cyclesFetched     int
+}
+
+// SleepSyncResult reports the sleep domain's outcome. There is deliberately no
+// SkippedNoCycle: a sleep record carries its own timezone_offset, so the sleep
+// path never joins to a cycle and that failure mode cannot occur. Err carries
+// the sleep-side failure when the sleep path failed but the overall sync did
+// not — the isolation the SOW requires.
+//
+// Upserted and SkippedUnscored overlap: an unscored record is stored AND
+// counted unscored (see syncSleepWindow), so these do not sum to the records
+// fetched the way SyncResult's four do.
+type SleepSyncResult struct {
+	Upserted        int
+	SkippedUnscored int
+	SkippedBadDate  int
+	SkippedNoScope  bool
+	Err             error
+
+	fetched int // for the combined summary log line only
 }
 
 // refreshSkew is how far ahead of the recorded expiry we proactively refresh.
@@ -62,11 +93,19 @@ const (
 	kindAdminResync = "admin_resync"
 )
 
+// Sync domains. These label syncsTotal so the two independently-failing paths
+// are readable apart on one series.
+const (
+	domainRecovery = "recovery"
+	domainSleep    = "sleep"
+)
+
 // whoopAPI is the subset of the WHOOP REST client the service needs. Defining
 // it here (rather than depending on *Client) lets tests inject a fake.
 type whoopAPI interface {
 	Recoveries(ctx context.Context, accessToken string, start, end time.Time, limit int) ([]Recovery, error)
 	Cycles(ctx context.Context, accessToken string, start, end time.Time, limit int) ([]Cycle, error)
+	Sleeps(ctx context.Context, accessToken string, start, end time.Time, limit int) ([]Sleep, error)
 }
 
 // tokenRefresher is the subset of OAuthConfig the service needs (only the
@@ -89,6 +128,7 @@ var (
 type Service struct {
 	conns      whoopconn.Repository
 	rec        whooprecovery.Repository
+	sleep      whoopsleep.Repository
 	cipher     *tokencrypt.Cipher
 	api        whoopAPI
 	oauth      tokenRefresher
@@ -101,6 +141,7 @@ type Service struct {
 func NewService(
 	conns whoopconn.Repository,
 	rec whooprecovery.Repository,
+	sleep whoopsleep.Repository,
 	cipher *tokencrypt.Cipher,
 	api whoopAPI,
 	oauth tokenRefresher,
@@ -113,6 +154,7 @@ func NewService(
 	return &Service{
 		conns:      conns,
 		rec:        rec,
+		sleep:      sleep,
 		cipher:     cipher,
 		api:        api,
 		oauth:      oauth,
@@ -127,7 +169,7 @@ func NewService(
 // small value covering the handful of recoveries it announced).
 func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) error {
 	now := s.now()
-	_, err := s.syncWindow(ctx, kindWindow, userID, now.Add(-recentWindow), now, limit)
+	_, err := s.sync(ctx, kindWindow, userID, now.Add(-recentWindow), now, limit)
 	return err
 }
 
@@ -135,18 +177,73 @@ func (s *Service) SyncWindow(ctx context.Context, userID string, limit int) erro
 // shot, used when a connection is first established.
 func (s *Service) Backfill(ctx context.Context, userID string) error {
 	now := s.now()
-	_, err := s.syncWindow(ctx, kindBackfill, userID, now.Add(-backfillWindow), now, backfillLimit)
+	_, err := s.sync(ctx, kindBackfill, userID, now.Add(-backfillWindow), now, backfillLimit)
 	return err
 }
 
 // SyncSince runs an operator-triggered resync over [now-window, now]. Thin
-// wrapper over syncWindow with kindAdminResync — a deliberate label so an
+// wrapper over sync with kindAdminResync — a deliberate label so an
 // operator investigating an outage neither increments the window-sync metric
 // nor advances the durable liveness stamp the dead-ingestion alert reads.
 // Resyncing to diagnose an outage must not silence the alert reporting it.
 func (s *Service) SyncSince(ctx context.Context, userID string, window time.Duration, limit int) (SyncResult, error) {
 	now := s.now()
-	return s.syncWindow(ctx, kindAdminResync, userID, now.Add(-window), now, limit)
+	return s.sync(ctx, kindAdminResync, userID, now.Add(-window), now, limit)
+}
+
+// sync runs both domain paths over the same window and joins their outcomes.
+//
+// A recovery failure short-circuits and is returned exactly as it always was:
+// nothing landed, and the caller (webhook included) should retry.
+//
+// A sleep failure is logged, counted, and returned in the SyncResult, but does
+// NOT fail the overall sync when recovery succeeded. The webhook consequently
+// does not return 500 for a sleep-only failure: a 500 makes WHOOP redeliver
+// recovery data we already stored successfully — the same reasoning already
+// recorded for MarkWindowSync in syncWindow.
+//
+// The join lives here rather than being repeated in each of the three public
+// entry points so there is exactly one place the isolation rule is expressed.
+func (s *Service) sync(ctx context.Context, kind, userID string, start, end time.Time, limit int) (SyncResult, error) {
+	res, err := s.syncWindow(ctx, kind, userID, start, end, limit)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	res.Sleep = s.syncSleepWindow(ctx, kind, userID, start, end, limit)
+	if res.Sleep.Err != nil {
+		// Warn, not error: recovery landed, so this is a degraded sync rather
+		// than a failed one, and the caller is about to report success.
+		slog.WarnContext(ctx, "whoopsync: sleep sync failed; recovery sync unaffected",
+			"kind", kind, "user_id", userID, "error", res.Sleep.Err)
+	}
+
+	// The one-line answer to "did this user's data actually land, and when?" —
+	// upserted=0 on a healthy-looking sync is the first thing to look for when
+	// a dashboard is unexpectedly empty. It covers both domains because one
+	// webhook nudge drives both, so a per-domain line would only ever be read
+	// in pairs.
+	attrs := []any{
+		"kind", kind,
+		"user_id", userID,
+		"window_start", start.UTC().Format(time.RFC3339),
+		"window_end", end.UTC().Format(time.RFC3339),
+		"recoveries_fetched", res.recoveriesFetched,
+		"cycles_fetched", res.cyclesFetched,
+		"upserted", res.Upserted,
+		"skipped_unscored", res.SkippedUnscored,
+		"skipped_no_cycle", res.SkippedNoCycle,
+		"skipped_bad_date", res.SkippedBadDate,
+		"sleeps_fetched", res.Sleep.fetched,
+		"sleep_upserted", res.Sleep.Upserted,
+		"sleep_skipped_unscored", res.Sleep.SkippedUnscored,
+		"sleep_skipped_bad_date", res.Sleep.SkippedBadDate,
+		"sleep_skipped_no_scope", res.Sleep.SkippedNoScope,
+	}
+	if res.Sleep.Err != nil {
+		attrs = append(attrs, "sleep_error", res.Sleep.Err)
+	}
+	slog.InfoContext(ctx, "whoopsync: sync complete", attrs...)
+	return res, nil
 }
 
 // syncWindow is the shared core: obtain a valid token, fetch recoveries + cycles
@@ -156,7 +253,7 @@ func (s *Service) SyncSince(ctx context.Context, userID string, window time.Dura
 // (backfill / window) in the summary log and metrics.
 func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, end time.Time, limit int) (SyncResult, error) {
 	result := "error"
-	defer func() { syncsTotal.WithLabelValues(kind, result).Inc() }()
+	defer func() { syncsTotal.WithLabelValues(domainRecovery, kind, result).Inc() }()
 
 	accessToken, err := s.validToken(ctx, userID)
 	if err != nil {
@@ -230,21 +327,6 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 	syncRowsTotal.WithLabelValues("skipped_no_cycle").Add(float64(skippedNoCycle))
 	syncRowsTotal.WithLabelValues("skipped_bad_date").Add(float64(skippedBadDate))
 
-	// The one-line answer to "did this user's data actually land, and when?" —
-	// upserted=0 on a healthy-looking sync is the first thing to look for when
-	// a dashboard is unexpectedly empty.
-	slog.InfoContext(ctx, "whoopsync: sync complete",
-		"kind", kind,
-		"user_id", userID,
-		"window_start", start.UTC().Format(time.RFC3339),
-		"window_end", end.UTC().Format(time.RFC3339),
-		"recoveries_fetched", len(recoveries),
-		"cycles_fetched", len(cycles),
-		"upserted", upserted,
-		"skipped_unscored", skippedUnscored,
-		"skipped_no_cycle", skippedNoCycle,
-		"skipped_bad_date", skippedBadDate,
-	)
 	// Durable liveness stamp for the dead-ingestion alert. ONLY kind="window"
 	// advances it: backfill runs at connect and admin_resync is an operator
 	// action, so neither is evidence the webhook path is alive — the same
@@ -263,7 +345,143 @@ func (s *Service) syncWindow(ctx context.Context, kind, userID string, start, en
 	}
 
 	result = "ok"
-	return SyncResult{Upserted: upserted, SkippedUnscored: skippedUnscored, SkippedNoCycle: skippedNoCycle, SkippedBadDate: skippedBadDate}, nil
+	return SyncResult{
+		Upserted:          upserted,
+		SkippedUnscored:   skippedUnscored,
+		SkippedNoCycle:    skippedNoCycle,
+		SkippedBadDate:    skippedBadDate,
+		recoveriesFetched: len(recoveries),
+		cyclesFetched:     len(cycles),
+	}, nil
+}
+
+// syncSleepWindow fetches sleep records for [start, end] and upserts one row
+// per WHOOP sleep record, dated by its END (wake time) localized by the
+// record's own timezone_offset.
+//
+// It is a SIBLING of syncWindow rather than a branch inside it because the two
+// domains must fail independently: an under-scoped or degraded sleep fetch can
+// never take recovery ingestion down with it. Both go through the same
+// validToken, so the per-user keyed mutex still serializes WHOOP's single-use
+// refresh-token rotation correctly across both.
+//
+// It reports its failure in the returned result rather than returning an error,
+// because the caller must not propagate it — see sync.
+func (s *Service) syncSleepWindow(ctx context.Context, kind, userID string, start, end time.Time, limit int) SleepSyncResult {
+	conn, err := s.conns.Get(ctx, userID)
+	if err != nil {
+		syncsTotal.WithLabelValues(domainSleep, kind, "error").Inc()
+		return SleepSyncResult{Err: fmt.Errorf("whoopsync: load connection for sleep sync: %w", err)}
+	}
+	// Skip the sleep path entirely for a connection that never consented to
+	// read:sleep. Calling anyway would 403 on every sync for every under-scoped
+	// user, burning rate limit and filling the error metric with a condition
+	// that is not an error — it is a user who has not reconnected yet. The skip
+	// is deliberately not counted in syncsTotal either: an "ok" there would
+	// make the sleep path read as alive while nothing is being fetched, which
+	// is exactly the absence-of-success blindness that hid the dead webhook
+	// registration for four months.
+	if slices.Contains(MissingScopes(conn.Scopes), "read:sleep") {
+		sleepScopeSkipsTotal.Inc()
+		return SleepSyncResult{SkippedNoScope: true}
+	}
+
+	result := "error"
+	defer func() { syncsTotal.WithLabelValues(domainSleep, kind, result).Inc() }()
+
+	accessToken, err := s.validToken(ctx, userID)
+	if err != nil {
+		return SleepSyncResult{Err: err}
+	}
+	// One endpoint, not two: a sleep record carries its own timezone_offset, so
+	// unlike recovery there is no cycle to join for it. That is also why there
+	// is no skipped_no_cycle disposition here — the failure mode cannot occur.
+	sleeps, err := s.api.Sleeps(ctx, accessToken, start, end, limit)
+	if err != nil {
+		return SleepSyncResult{Err: fmt.Errorf("%w: fetch sleeps: %w", ErrUpstream, err)}
+	}
+
+	res := SleepSyncResult{fetched: len(sleeps)}
+	now := s.now()
+	for _, r := range sleeps {
+		// Date by END (wake time) localized by the record's OWN offset. A night
+		// running 22:40 Monday to 06:15 Tuesday is Tuesday's sleep — it is what
+		// the user is recovering from when they look at the dashboard on
+		// Tuesday, and it is the day the recovery computed from that night
+		// lands on. Dating by start is the bug migration 041 exists to correct
+		// for recovery; it would additionally put two tiles reading the same
+		// night on different days. DST needs no handling: the offset is the one
+		// in force at that record's end, as WHOOP recorded it.
+		date, err := deriveDate(r.End, r.TimezoneOffset)
+		if err != nil {
+			slog.WarnContext(ctx, "whoopsync: cannot derive date for sleep; skipping",
+				"user_id", userID, "whoop_sleep_id", r.ID, "error", err)
+			res.SkippedBadDate++
+			continue
+		}
+
+		entry := whoopsleep.Entry{
+			UserID:         userID,
+			WhoopSleepID:   r.ID,
+			Date:           date,
+			IsNap:          r.Nap,
+			StartedAt:      r.Start,
+			EndedAt:        r.End,
+			TimezoneOffset: r.TimezoneOffset,
+			ScoreState:     r.ScoreState,
+		}
+		if r.ScoreState != "SCORED" {
+			// A PENDING or UNSCORABLE record is STILL stored: the row has to
+			// exist for the score to land in when WHOOP finishes scoring it.
+			// skipped_unscored therefore means "no score to store", not "no row
+			// written", and the same record increments upserted below.
+			res.SkippedUnscored++
+		}
+		if r.Score != nil {
+			applySleepScore(&entry, r.Score)
+		}
+		if err := s.sleep.Upsert(ctx, entry, now); err != nil {
+			res.Err = fmt.Errorf("whoopsync: upsert sleep %s: %w", r.ID, err)
+			break
+		}
+		res.Upserted++
+	}
+
+	sleepRowsTotal.WithLabelValues("upserted").Add(float64(res.Upserted))
+	sleepRowsTotal.WithLabelValues("skipped_unscored").Add(float64(res.SkippedUnscored))
+	sleepRowsTotal.WithLabelValues("skipped_bad_date").Add(float64(res.SkippedBadDate))
+
+	if res.Err != nil {
+		return res
+	}
+	result = "ok"
+	return res
+}
+
+// applySleepScore copies WHOOP's scored fields onto the entry. Durations stay
+// in the milliseconds WHOOP sent: storing the wire value keeps ingest dumb and
+// reversible, and presentation rounding is the tile's job.
+func applySleepScore(e *whoopsleep.Entry, score *SleepScore) {
+	if st := score.StageSummary; st != nil {
+		e.InBedMilli = st.TotalInBedTimeMilli
+		e.AwakeMilli = st.TotalAwakeTimeMilli
+		e.NoDataMilli = st.TotalNoDataTimeMilli
+		e.LightSleepMilli = st.TotalLightSleepTimeMilli
+		e.SlowWaveSleepMilli = st.TotalSlowWaveSleepTimeMilli
+		e.REMSleepMilli = st.TotalRemSleepTimeMilli
+		e.SleepCycleCount = st.SleepCycleCount
+		e.DisturbanceCount = st.DisturbanceCount
+	}
+	if n := score.SleepNeeded; n != nil {
+		e.NeedBaselineMilli = n.BaselineMilli
+		e.NeedFromSleepDebtMilli = n.NeedFromSleepDebtMilli
+		e.NeedFromStrainMilli = n.NeedFromRecentStrainMilli
+		e.NeedFromNapMilli = n.NeedFromRecentNapMilli
+	}
+	e.RespiratoryRate = score.RespiratoryRate
+	e.PerformancePct = score.SleepPerformancePercentage
+	e.ConsistencyPct = score.SleepConsistencyPercentage
+	e.EfficiencyPct = score.SleepEfficiencyPercentage
 }
 
 // validToken returns a usable access token for the user, refreshing it first if

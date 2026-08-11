@@ -25,6 +25,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/user"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // sparkLookbackWeeks is how far back the running/lifting reads pull. The
@@ -49,6 +50,7 @@ type Handler struct {
 	userRepo          user.Repository
 	whoopConns        whoopconn.Repository
 	whoopRecovery     whooprecovery.Repository
+	whoopSleep        whoopsleep.Repository
 	layoutRepo        Repository
 	quoteRerollRepo   QuoteRerollRepository
 
@@ -84,6 +86,7 @@ func NewHandler(
 	userRepo user.Repository,
 	whoopConns whoopconn.Repository,
 	whoopRecovery whooprecovery.Repository,
+	whoopSleep whoopsleep.Repository,
 	layoutRepo Repository,
 	quoteRerollRepo QuoteRerollRepository,
 	recoveryEngine *recoverytrend.Engine,
@@ -99,6 +102,7 @@ func NewHandler(
 		userRepo:          userRepo,
 		whoopConns:        whoopConns,
 		whoopRecovery:     whoopRecovery,
+		whoopSleep:        whoopSleep,
 		layoutRepo:        layoutRepo,
 		quoteRerollRepo:   quoteRerollRepo,
 		recovery:          recoveryEngine,
@@ -283,6 +287,11 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// Sleep is its own section rather than a member of the recovery family: one
+	// tile reading one section, so it needs no fan-out.
+	if enabled[TileSleep] {
+		out[string(TileSleep)] = h.buildSleepSection(ctx, r, userID, now, loc)
+	}
 	if enabled[TileStreak] {
 		out[string(TileStreak)] = buildStreak(streakDates(endurance, workouts, stepEntries, stepGoal.Goal, loc), now, loc)
 	}
@@ -449,6 +458,36 @@ func (h *Handler) buildRecoverySection(ctx context.Context, r *http.Request, use
 		return h.whoopRecovery.ListRange(ctx, userID, sinceStr, untilStr)
 	})
 	return buildWhoop(entries, h.recovery, now, loc)
+}
+
+// buildSleepSection assembles the sleep tile. Like the recovery tile it is
+// present only when the user has a CONNECTED Whoop connection: an
+// absent/revoked/errored connection (or a failed connection read) yields a nil
+// section so the card stays hidden. When connected it fetches the trailing
+// sleepWindowDays of local dates and hands them to the pure builder. A failed
+// sleep read degrades to a null-metric window (never a 500), like the other
+// section reads.
+func (h *Handler) buildSleepSection(ctx context.Context, r *http.Request, userID string, now time.Time, loc *time.Location) *SleepSection {
+	conn, err := h.whoopConns.Get(ctx, userID)
+	if err != nil {
+		if !errors.Is(err, whoopconn.ErrNotFound) {
+			log.Printf("dashboard: whoop connection for %s: %v", requestid.FromContext(r.Context()), err)
+		}
+		return nil
+	}
+	if conn.Status != whoopconn.StatusConnected {
+		return nil
+	}
+
+	// Inclusive local-date bounds: the window is sleepWindowDays dates ending
+	// today, and sleep rows are keyed by local wake date, so no UTC bounds are
+	// constructed here either.
+	sinceStr := now.In(loc).AddDate(0, 0, -(sleepWindowDays - 1)).Format("2006-01-02")
+	untilStr := now.In(loc).Format("2006-01-02")
+	entries := defer1(ctx, r, "whoop sleep", func() ([]whoopsleep.Entry, error) {
+		return h.whoopSleep.ListRange(ctx, userID, sinceStr, untilStr)
+	})
+	return buildSleep(entries, now, loc)
 }
 
 // thisWeekWorkoutIDs returns the IDs of workouts performed in the current local

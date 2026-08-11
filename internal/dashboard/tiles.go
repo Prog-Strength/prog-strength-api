@@ -30,7 +30,13 @@ const (
 	// are migrated, not truncated; see RetiredTiles.
 	TileRecoveryTrend TileID = "recovery_trend"
 	TileRecoveryLog   TileID = "recovery_log"
-	TileStreak        TileID = "streak"
+	// TileSleep is the sleep tile. It is its own section rather than a member
+	// of the recovery family's one-section-many-tiles arrangement because it is
+	// a single tile reading a single section. The key is `sleep` (not
+	// `sleep_tile`) so a later sleep tile SPREAD can expand into this section
+	// with no retirement mapping.
+	TileSleep  TileID = "sleep"
+	TileStreak TileID = "streak"
 	// TileQuote is the one tile with no user data behind it: its content is a
 	// static corpus compiled into the binary (internal/quotes), so it has no
 	// repository, no window, and no empty state.
@@ -50,7 +56,7 @@ var Catalog = []TileID{
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
-	TileStreak, TileQuote, TileWeather,
+	TileSleep, TileStreak, TileQuote, TileWeather,
 }
 
 // RetiredTiles maps a tile that no longer exists to the tile that absorbed it.

@@ -203,6 +203,52 @@ func TestListConnections(t *testing.T) {
 	}
 }
 
+// TestListConnections_ReportsMissingScopes pins the operator-facing half of the
+// under-scoped signal: an operator must be able to see which connections
+// predate a scope addition without decrypting anything. userA is under-scoped;
+// userB is fully scoped and must render [] rather than null.
+func TestListConnections_ReportsMissingScopes(t *testing.T) {
+	now := fixedNow("2026-07-31T12:00:00Z")
+	conns := &fakeConns{
+		list: []whoopconn.Connection{
+			{UserID: "userA", Scopes: "read:recovery read:cycles read:profile", Status: whoopconn.StatusConnected},
+			{UserID: "userB", Scopes: "read:recovery read:cycles read:sleep read:profile", Status: whoopconn.StatusConnected},
+		},
+	}
+	h := whoopadmin.NewHandler(conns, &fakeRecovery{}, &fakeResyncer{}, now)
+	srv := newRouter(h)
+
+	resp := httptest.NewRecorder()
+	srv.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/admin/whoop/connections", nil))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+	}
+
+	env := decodeEnvelope(t, resp.Body.Bytes())
+	var data struct {
+		Connections []struct {
+			UserID        string   `json:"user_id"`
+			MissingScopes []string `json:"missing_scopes"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		t.Fatalf("decode data: %v", err)
+	}
+	if len(data.Connections) != 2 {
+		t.Fatalf("connections len = %d, want 2", len(data.Connections))
+	}
+	if got := data.Connections[0].MissingScopes; len(got) != 1 || got[0] != "read:sleep" {
+		t.Errorf("userA missing_scopes = %v, want [read:sleep]", got)
+	}
+	if got := data.Connections[1].MissingScopes; len(got) != 0 {
+		t.Errorf("userB missing_scopes = %v, want empty", got)
+	}
+	// Non-nil, so a fully-scoped connection renders [] rather than null.
+	if !bytes.Contains(resp.Body.Bytes(), []byte(`"missing_scopes":[]`)) {
+		t.Errorf("body = %s, want a fully-scoped connection to render missing_scopes as []", resp.Body.String())
+	}
+}
+
 func TestListConnections_EmptyIsArrayNotNull(t *testing.T) {
 	h := whoopadmin.NewHandler(&fakeConns{}, &fakeRecovery{}, &fakeResyncer{}, fixedNow("2026-07-31T12:00:00Z"))
 	srv := newRouter(h)

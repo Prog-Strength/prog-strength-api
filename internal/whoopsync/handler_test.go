@@ -488,6 +488,87 @@ func TestGetConnectionConnected(t *testing.T) {
 	}
 }
 
+// TestGetConnectionReportsMissingScopes pins the under-scoped read surface: a
+// connection whose grant predates read:sleep is still connected, and the only
+// way the client can offer a reconnect is for the payload to name what is
+// absent.
+func TestGetConnectionReportsMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	bundle := whoopconn.TokenBundle{
+		AccessTokenEnc: []byte("e"), AccessTokenNonce: []byte("n"),
+		RefreshTokenEnc: []byte("e"), RefreshTokenNonce: []byte("n"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	granted := "read:recovery read:cycles read:profile offline"
+	if err := d.conns.Upsert(context.Background(), "user-1", 42, bundle, granted, now); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var env struct {
+		Data struct {
+			Status        string   `json:"status"`
+			MissingScopes []string `json:"missing_scopes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, rec.Body.String())
+	}
+	if env.Data.Status != "connected" {
+		t.Errorf("status = %q, want connected (under-scoped is not a status)", env.Data.Status)
+	}
+	if len(env.Data.MissingScopes) != 1 || env.Data.MissingScopes[0] != "read:sleep" {
+		t.Errorf("missing_scopes = %v, want [read:sleep]", env.Data.MissingScopes)
+	}
+}
+
+// TestGetConnectionFullyScopedEmitsEmptyMissingScopes pins the key's presence,
+// not just its value: the client branches on length, so an omitted key on a
+// fully-scoped connection would be indistinguishable from an older payload and
+// would hide the reconnect affordance.
+func TestGetConnectionFullyScopedEmitsEmptyMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
+	bundle := whoopconn.TokenBundle{
+		AccessTokenEnc: []byte("e"), AccessTokenNonce: []byte("n"),
+		RefreshTokenEnc: []byte("e"), RefreshTokenNonce: []byte("n"),
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := d.conns.Upsert(context.Background(), "user-1", 42, bundle, ScopeString, now); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"missing_scopes":[]`) {
+		t.Errorf("body = %s, want missing_scopes to serialize as []", rec.Body.String())
+	}
+}
+
+// TestGetConnectionAbsentOmitsMissingScopes pins the other side of the
+// omitempty: with no row there is no connection to be under-scoped, and
+// missing_scopes:[] would read as "connected and fine".
+func TestGetConnectionAbsentOmitsMissingScopes(t *testing.T) {
+	d := newHandlerDeps(t)
+	h := newTestHandler(t, d, "", nil)
+
+	rec := hDoGet(hAuthedRouter(h, "user-1"), "/me/whoop/connection")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "missing_scopes") {
+		t.Errorf("body = %s, want no missing_scopes key for the absent case", rec.Body.String())
+	}
+}
+
 // --- deleteConnection -------------------------------------------------------
 
 func TestDeleteConnectionRevokesAndWipes(t *testing.T) {

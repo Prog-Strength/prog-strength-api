@@ -78,16 +78,20 @@ const (
 // connectionView is the API contract for a single connection. JSON tags are the
 // contract; latest_recovery_date is null when the user has no recovery rows.
 type connectionView struct {
-	UserID             string  `json:"user_id"`
-	WhoopUserID        int64   `json:"whoop_user_id"`
-	Status             string  `json:"status"`
-	Scopes             string  `json:"scopes"`
-	TokenExpiresAt     string  `json:"token_expires_at"`
-	TokenExpired       bool    `json:"token_expired"`
-	ConnectedAt        string  `json:"connected_at"`
-	UpdatedAt          string  `json:"updated_at"`
-	LatestRecoveryDate *string `json:"latest_recovery_date"` // null when no rows
-	RecoveryRowCount   int     `json:"recovery_row_count"`
+	UserID      string `json:"user_id"`
+	WhoopUserID int64  `json:"whoop_user_id"`
+	Status      string `json:"status"`
+	Scopes      string `json:"scopes"`
+	// MissingScopes names the RequiredScopes this connection never consented
+	// to, so an operator can spot a connection that predates a scope addition
+	// without decrypting anything. Never null; [] when fully scoped.
+	MissingScopes      []string `json:"missing_scopes"`
+	TokenExpiresAt     string   `json:"token_expires_at"`
+	TokenExpired       bool     `json:"token_expired"`
+	ConnectedAt        string   `json:"connected_at"`
+	UpdatedAt          string   `json:"updated_at"`
+	LatestRecoveryDate *string  `json:"latest_recovery_date"` // null when no rows
+	RecoveryRowCount   int      `json:"recovery_row_count"`
 }
 
 type listResponse struct {
@@ -110,11 +114,18 @@ type resyncOutcome struct {
 // errors are propagated so callers can answer with a 500; an absent latest
 // recovery (nil, nil) is an expected empty state, not an error.
 func (h *Handler) buildView(ctx context.Context, conn whoopconn.Connection) (connectionView, error) {
+	// MissingScopes returns nil when nothing is missing; normalize so the JSON
+	// is [] rather than null.
+	missing := whoopsync.MissingScopes(conn.Scopes)
+	if missing == nil {
+		missing = []string{}
+	}
 	view := connectionView{
 		UserID:         conn.UserID,
 		WhoopUserID:    conn.WhoopUserID,
 		Status:         string(conn.Status),
 		Scopes:         conn.Scopes,
+		MissingScopes:  missing,
 		TokenExpiresAt: conn.TokenExpiresAt.UTC().Format(time.RFC3339),
 		TokenExpired:   h.now().After(conn.TokenExpiresAt),
 		ConnectedAt:    conn.ConnectedAt.UTC().Format(time.RFC3339),

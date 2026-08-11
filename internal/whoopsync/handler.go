@@ -235,17 +235,43 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.OK(w, "whoop connected", connectionResponse{
-		Status: string(whoopconn.StatusConnected),
-		Scopes: tokens.Scopes,
+		Status:        string(whoopconn.StatusConnected),
+		Scopes:        tokens.Scopes,
+		MissingScopes: nonNilScopes(MissingScopes(tokens.Scopes)),
 	})
 }
 
-// connectionResponse is the GET /me/whoop/connection payload. Fields beyond
-// Status are omitempty so the `absent` case returns just {"status":"absent"}.
+// connectionResponse is the GET /me/whoop/connection payload for a connection
+// that exists. The `absent` case has its own type below.
 type connectionResponse struct {
-	Status      string     `json:"status"`
-	Scopes      string     `json:"scopes,omitempty"`
-	ConnectedAt *time.Time `json:"connected_at,omitempty"`
+	Status string `json:"status"`
+	Scopes string `json:"scopes,omitempty"`
+	// MissingScopes are the RequiredScopes this connection did not consent to.
+	// Deliberately NOT omitempty and always non-nil, so it serializes as [] on
+	// a fully-scoped connection: the client branches on length, and an omitted
+	// key is indistinguishable from "nothing missing" — it would silently hide
+	// the reconnect affordance.
+	MissingScopes []string   `json:"missing_scopes"`
+	ConnectedAt   *time.Time `json:"connected_at,omitempty"`
+}
+
+// absentResponse is the no-row payload, {"status":"absent"} and nothing else.
+// It is its own type rather than a mostly-empty connectionResponse because
+// missing_scopes cannot be omitempty (encoding/json omits an EMPTY slice, not
+// just a nil one, which would drop the key exactly where the client needs it)
+// and "missing_scopes":null on a connection that does not exist would be a
+// claim about nothing.
+type absentResponse struct {
+	Status string `json:"status"`
+}
+
+// nonNilScopes normalizes MissingScopes' nil-when-complete return so a
+// fully-scoped connection serializes "missing_scopes":[] rather than null.
+func nonNilScopes(missing []string) []string {
+	if missing == nil {
+		return []string{}
+	}
+	return missing
 }
 
 // getConnection (authed) reports the caller's WHOOP connection status:
@@ -259,7 +285,7 @@ func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := h.conns.Get(r.Context(), userID)
 	if errors.Is(err, whoopconn.ErrNotFound) {
-		httpresp.OK(w, "whoop connection status", connectionResponse{Status: statusAbsent})
+		httpresp.OK(w, "whoop connection status", absentResponse{Status: statusAbsent})
 		return
 	}
 	if err != nil {
@@ -269,9 +295,10 @@ func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
 
 	connectedAt := conn.ConnectedAt
 	httpresp.OK(w, "whoop connection status", connectionResponse{
-		Status:      string(conn.Status),
-		Scopes:      conn.Scopes,
-		ConnectedAt: &connectedAt,
+		Status:        string(conn.Status),
+		Scopes:        conn.Scopes,
+		MissingScopes: nonNilScopes(MissingScopes(conn.Scopes)),
+		ConnectedAt:   &connectedAt,
 	})
 }
 

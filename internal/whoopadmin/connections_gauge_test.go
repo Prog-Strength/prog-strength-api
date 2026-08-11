@@ -145,6 +145,52 @@ func TestConnectionsExporter_NoConnectedSyncsPublishesZero(t *testing.T) {
 	}
 }
 
+// TestConnectionsExporter_CountsUnderScopedConnected pins the under-scoped
+// backlog gauge. Only CONNECTED rows count: a revoked connection is not
+// ingesting anything, so counting it would report a reconnect backlog that does
+// not exist — the same reasoning as the liveness gauge above.
+func TestConnectionsExporter_CountsUnderScopedConnected(t *testing.T) {
+	fullyScoped := "read:recovery read:cycles read:sleep read:profile offline"
+	underScoped := "read:recovery read:cycles read:profile offline"
+	fake := &fakeLister{conns: []whoopconn.Connection{
+		{Status: whoopconn.StatusConnected, Scopes: fullyScoped},
+		{Status: whoopconn.StatusConnected, Scopes: underScoped},
+		{Status: whoopconn.StatusRevoked, Scopes: underScoped},
+	}}
+	exp := NewConnectionsExporter(fake)
+
+	if err := exp.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if got := testutil.ToFloat64(missingScopeGauge); got != 1 {
+		t.Errorf("missing scope gauge = %v, want 1 (revoked rows must not count)", got)
+	}
+}
+
+// TestConnectionsExporter_MissingScopeGaugeRecomputesDownward pins that a
+// reconnect clears the backlog: the gauge is re-set each pass, not incremented.
+func TestConnectionsExporter_MissingScopeGaugeRecomputesDownward(t *testing.T) {
+	fake := &fakeLister{conns: []whoopconn.Connection{
+		{Status: whoopconn.StatusConnected, Scopes: "read:recovery"},
+	}}
+	exp := NewConnectionsExporter(fake)
+
+	if err := exp.refresh(context.Background()); err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	fake.conns = []whoopconn.Connection{
+		{Status: whoopconn.StatusConnected, Scopes: "read:recovery read:cycles read:sleep read:profile offline"},
+	}
+	if err := exp.refresh(context.Background()); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+
+	if got := testutil.ToFloat64(missingScopeGauge); got != 0 {
+		t.Errorf("missing scope gauge = %v, want 0", got)
+	}
+}
+
 func TestConnectionsExporter_RefreshReturnsListError(t *testing.T) {
 	wantErr := errors.New("boom")
 	exp := NewConnectionsExporter(&fakeLister{err: wantErr})

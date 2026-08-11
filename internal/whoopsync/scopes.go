@@ -18,14 +18,15 @@ var RequiredScopes = []string{"read:recovery", "read:cycles", "read:sleep", "rea
 // scope string, in RequiredScopes order. granted is WHOOP's echoed-back
 // space-separated scope string as persisted on the connection row, so this is
 // a pure function over data we already hold — no WHOOP call, no migration.
-// The returned slice is nil (not empty) when nothing is missing, so callers
-// can test it with len() or against nil interchangeably.
+// The returned slice is always non-nil, empty when nothing is missing: both
+// JSON surfaces that serialize it need [] rather than null, and every other
+// caller tests it with len() or slices.Contains, which do not care.
 func MissingScopes(granted string) []string {
 	have := make(map[string]bool, len(RequiredScopes))
 	for _, s := range strings.Fields(granted) {
 		have[s] = true
 	}
-	var missing []string
+	missing := []string{}
 	for _, s := range RequiredScopes {
 		if !have[s] {
 			missing = append(missing, s)

@@ -53,7 +53,7 @@ func buildSleep(entries []whoopsleep.Entry, now time.Time, loc *time.Location) *
 // pickNight returns THE night for a local date: the non-nap record, or — when
 // more than one non-nap record shares a date (a fragmented night WHOOP split,
 // or travel across a date line) — the one with the longest in-bed duration,
-// tie-broken by latest ended_at.
+// tie-broken by latest ended_at and then by whoop_sleep_id.
 //
 // It lives in one function with its own test rather than open-coded at call
 // sites precisely because the tie-break is the part a second implementation
@@ -77,6 +77,11 @@ func pickNight(records []whoopsleep.Entry) *whoopsleep.Entry {
 // tie-break rather than comparing equal-at-zero. EndedAt is compared as text:
 // records sharing a local date share an offset, and RFC3339 in a fixed zone
 // orders lexicographically.
+//
+// WhoopSleepID is the final tie-break so the rule is a total order rather than
+// one that falls through to list order. Two records with the same in-bed
+// duration AND the same ended_at should not exist, but if they did, list order
+// is whatever SQLite returned, and the SOW requires a deterministic pick.
 func beatsNight(candidate, best whoopsleep.Entry) bool {
 	switch {
 	case candidate.InBedMilli != nil && best.InBedMilli == nil:
@@ -85,8 +90,10 @@ func beatsNight(candidate, best whoopsleep.Entry) bool {
 		return false
 	case candidate.InBedMilli != nil && *candidate.InBedMilli != *best.InBedMilli:
 		return *candidate.InBedMilli > *best.InBedMilli
-	default:
+	case candidate.EndedAt != best.EndedAt:
 		return candidate.EndedAt > best.EndedAt
+	default:
+		return candidate.WhoopSleepID > best.WhoopSleepID
 	}
 }
 

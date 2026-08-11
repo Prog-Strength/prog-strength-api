@@ -181,7 +181,11 @@ func (h *WebhookHandler) handle(w http.ResponseWriter, r *http.Request) {
 		// recovery.updated. Idempotent upserts make redelivery, duplicates, and
 		// out-of-order arrival safe. Note this is the SAME SyncWindow call the
 		// recovery case makes: one sync covers both domains, which is why sleep
-		// gets no liveness stamp of its own.
+		// gets no liveness stamp of its own. The cost: WHOOP delivers both
+		// recovery.updated and sleep.updated for one night, so a night now runs
+		// SyncWindow twice — 6 upstream calls (recoveries + cycles + sleeps,
+		// doubled) where it was 3. Deliberate for now; if rate limiting ever
+		// bites, coalescing the two deliveries is the first thing to try.
 		if err := h.svc.SyncWindow(ctx, conn.UserID, webhookSyncLimit); err != nil {
 			slog.ErrorContext(ctx, "whoop webhook: sync window", "user_id", conn.UserID, "error", err)
 			webhooksTotal.WithLabelValues(event.Type, "sync_error").Inc()

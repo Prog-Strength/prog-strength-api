@@ -241,7 +241,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "whoop connected", connectionResponse{
 		Status:        string(whoopconn.StatusConnected),
 		Scopes:        tokens.Scopes,
-		MissingScopes: nonNilScopes(MissingScopes(tokens.Scopes)),
+		MissingScopes: MissingScopes(tokens.Scopes),
 	})
 }
 
@@ -269,15 +269,6 @@ type absentResponse struct {
 	Status string `json:"status"`
 }
 
-// nonNilScopes normalizes MissingScopes' nil-when-complete return so a
-// fully-scoped connection serializes "missing_scopes":[] rather than null.
-func nonNilScopes(missing []string) []string {
-	if missing == nil {
-		return []string{}
-	}
-	return missing
-}
-
 // getConnection (authed) reports the caller's WHOOP connection status:
 // connected / revoked / error (from the stored row) or absent (no row).
 func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
@@ -301,7 +292,7 @@ func (h *Handler) getConnection(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "whoop connection status", connectionResponse{
 		Status:        string(conn.Status),
 		Scopes:        conn.Scopes,
-		MissingScopes: nonNilScopes(MissingScopes(conn.Scopes)),
+		MissingScopes: MissingScopes(conn.Scopes),
 		ConnectedAt:   &connectedAt,
 	})
 }

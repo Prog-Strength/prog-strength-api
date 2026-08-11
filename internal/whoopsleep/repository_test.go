@@ -231,13 +231,14 @@ func TestUpsert_ScoredRoundTripsEveryField(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 
-	got, err := repo.Latest(ctx, "u1")
+	rows, err := repo.ListRange(ctx, "u1", "", "")
 	if err != nil {
-		t.Fatalf("latest: %v", err)
+		t.Fatalf("list: %v", err)
 	}
-	if got == nil {
-		t.Fatal("expected a row")
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(rows))
 	}
+	got := rows[0]
 	if got.WhoopSleepID != want.WhoopSleepID || got.Date != want.Date ||
 		got.IsNap != want.IsNap || got.StartedAt != want.StartedAt ||
 		got.EndedAt != want.EndedAt || got.TimezoneOffset != want.TimezoneOffset ||
@@ -386,6 +387,41 @@ func TestListRange_OrdersByEndedAtWithinADate(t *testing.T) {
 	}
 }
 
+// TestListRange_OrdersByWhoopSleepIDWhenDateAndEndedAtTie pins the last
+// tie-breaker. date + ended_at is still not a total order, and SQLite is free to
+// return equal-keyed rows in either order between queries; whoop_sleep_id is
+// unique per user, so appending it makes the sort reproducible. Consumers that
+// resolve a night from a same-date group depend on that.
+func TestListRange_OrdersByWhoopSleepIDWhenDateAndEndedAtTie(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t, "u1")
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	a := night("u1", "aaa", "2026-06-14")
+	a.EndedAt = "2026-06-14T06:15:00-06:00"
+	b := night("u1", "bbb", "2026-06-14")
+	b.EndedAt = a.EndedAt
+	// Seeded in an order SQLite demonstrably does not reproduce for this pair
+	// without the whoop_sleep_id term, so the assertion below fails if it is
+	// dropped rather than passing on whatever the planner happened to emit.
+	for _, e := range []Entry{b, a} {
+		if err := repo.Upsert(ctx, e, now); err != nil {
+			t.Fatalf("seed %s: %v", e.WhoopSleepID, err)
+		}
+	}
+
+	got, err := repo.ListRange(ctx, "u1", "", "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(got))
+	}
+	if got[0].WhoopSleepID != "bbb" || got[1].WhoopSleepID != "aaa" {
+		t.Errorf("order = %s, %s; want bbb, aaa", got[0].WhoopSleepID, got[1].WhoopSleepID)
+	}
+}
+
 // --- DeleteByWhoopSleepID: removes match, idempotent when absent ---------
 
 func TestDeleteByWhoopSleepID(t *testing.T) {
@@ -440,128 +476,6 @@ func TestDeleteByWhoopSleepID(t *testing.T) {
 	// Redelivery of the same event → still no error.
 	if err = repo.DeleteByWhoopSleepID(ctx, "u1", "sleep-x"); err != nil {
 		t.Errorf("idempotent delete: want nil, got %v", err)
-	}
-}
-
-// --- DeleteForUser ------------------------------------------------------
-
-func TestDeleteForUser(t *testing.T) {
-	ctx := context.Background()
-	repo := newRepo(t, "u1", "u2")
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-
-	for _, d := range []string{"2026-06-10", "2026-06-11"} {
-		if err := repo.Upsert(ctx, night("u1", "u1-"+d, d), now); err != nil {
-			t.Fatalf("seed u1: %v", err)
-		}
-	}
-	if err := repo.Upsert(ctx, night("u2", "u2-a", "2026-06-10"), now); err != nil {
-		t.Fatalf("seed u2: %v", err)
-	}
-
-	if err := repo.DeleteForUser(ctx, "u1"); err != nil {
-		t.Fatalf("delete for user: %v", err)
-	}
-
-	got, err := repo.ListRange(ctx, "u1", "", "")
-	if err != nil {
-		t.Fatalf("list u1: %v", err)
-	}
-	if len(got) != 0 {
-		t.Errorf("u1 should have no rows left, got %+v", got)
-	}
-	other, err := repo.ListRange(ctx, "u2", "", "")
-	if err != nil {
-		t.Fatalf("list u2: %v", err)
-	}
-	if len(other) != 1 {
-		t.Errorf("u2 rows = %d, want 1 (must not be touched)", len(other))
-	}
-
-	// A user with no rows is not an error.
-	if err := repo.DeleteForUser(ctx, "nobody"); err != nil {
-		t.Errorf("delete for user with no rows: want nil, got %v", err)
-	}
-}
-
-// --- Latest: newest row per user, absence is (nil, nil) ----------------
-
-func TestLatest_NewestRowAndIsolation(t *testing.T) {
-	ctx := context.Background()
-	repo := newRepo(t, "u1", "u2")
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-
-	for _, d := range []string{"2026-06-10", "2026-06-11", "2026-06-13", "2026-06-12"} {
-		if err := repo.Upsert(ctx, night("u1", "u1-"+d, d), now); err != nil {
-			t.Fatalf("seed u1/%s: %v", d, err)
-		}
-	}
-	// A more recent row for another user must not leak into u1's Latest.
-	if err := repo.Upsert(ctx, night("u2", "u2-latest", "2026-06-20"), now); err != nil {
-		t.Fatalf("seed u2: %v", err)
-	}
-
-	got, err := repo.Latest(ctx, "u1")
-	if err != nil {
-		t.Fatalf("latest: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected a row for u1, got nil")
-	}
-	if got.Date != "2026-06-13" {
-		t.Errorf("latest date = %s, want 2026-06-13", got.Date)
-	}
-	if got.UserID != "u1" {
-		t.Errorf("latest leaked another user: %+v", got)
-	}
-	if got.ID == "" || got.WhoopSleepID != "u1-2026-06-13" {
-		t.Errorf("latest fields not populated: %+v", got)
-	}
-}
-
-func TestLatest_NoRowsReturnsNil(t *testing.T) {
-	ctx := context.Background()
-	repo := newRepo(t)
-
-	got, err := repo.Latest(ctx, "nobody")
-	if err != nil {
-		t.Fatalf("latest: %v", err)
-	}
-	if got != nil {
-		t.Errorf("no rows should return nil, got %+v", got)
-	}
-}
-
-// --- CountForUser: exact count, isolated, 0 for unknown ------------------
-
-func TestCountForUser(t *testing.T) {
-	ctx := context.Background()
-	repo := newRepo(t, "u1", "u2")
-	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-
-	for _, d := range []string{"2026-06-10", "2026-06-11", "2026-06-12"} {
-		if err := repo.Upsert(ctx, night("u1", "u1-"+d, d), now); err != nil {
-			t.Fatalf("seed u1/%s: %v", d, err)
-		}
-	}
-	if err := repo.Upsert(ctx, night("u2", "u2-x", "2026-06-11"), now); err != nil {
-		t.Fatalf("seed u2: %v", err)
-	}
-
-	n, err := repo.CountForUser(ctx, "u1")
-	if err != nil {
-		t.Fatalf("count u1: %v", err)
-	}
-	if n != 3 {
-		t.Errorf("u1 count = %d, want 3 (must not count u2)", n)
-	}
-
-	n, err = repo.CountForUser(ctx, "unknown")
-	if err != nil {
-		t.Fatalf("count unknown: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("unknown user count = %d, want 0", n)
 	}
 }
 

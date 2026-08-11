@@ -128,18 +128,12 @@ type sleepResyncOutcome struct {
 // errors are propagated so callers can answer with a 500; an absent latest
 // recovery (nil, nil) is an expected empty state, not an error.
 func (h *Handler) buildView(ctx context.Context, conn whoopconn.Connection) (connectionView, error) {
-	// MissingScopes returns nil when nothing is missing; normalize so the JSON
-	// is [] rather than null.
-	missing := whoopsync.MissingScopes(conn.Scopes)
-	if missing == nil {
-		missing = []string{}
-	}
 	view := connectionView{
 		UserID:         conn.UserID,
 		WhoopUserID:    conn.WhoopUserID,
 		Status:         string(conn.Status),
 		Scopes:         conn.Scopes,
-		MissingScopes:  missing,
+		MissingScopes:  whoopsync.MissingScopes(conn.Scopes),
 		TokenExpiresAt: conn.TokenExpiresAt.UTC().Format(time.RFC3339),
 		TokenExpired:   h.now().After(conn.TokenExpiresAt),
 		ConnectedAt:    conn.ConnectedAt.UTC().Format(time.RFC3339),

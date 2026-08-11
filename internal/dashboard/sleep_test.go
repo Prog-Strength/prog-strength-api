@@ -80,6 +80,21 @@ func TestPickNight_EqualInBedBreaksOnLatestEndedAt(t *testing.T) {
 	}
 }
 
+// Two records equal on in-bed duration AND ended_at should not exist, but
+// ListRange's ordering only became a total order once whoop_sleep_id joined it,
+// so the selection rule needs the same last tie-break: without it the winner is
+// whichever row SQLite happened to return first.
+func TestPickNight_FullyEqualRecordsBreakOnWhoopSleepID(t *testing.T) {
+	a := night("2026-06-17", "aaa", 25200000, "2026-06-17T07:00:00Z")
+	b := night("2026-06-17", "bbb", 25200000, "2026-06-17T07:00:00Z")
+	if got := pickNight([]whoopsleep.Entry{a, b}); got == nil || got.WhoopSleepID != "bbb" {
+		t.Fatalf("pickNight = %+v, want bbb", got)
+	}
+	if got := pickNight([]whoopsleep.Entry{b, a}); got == nil || got.WhoopSleepID != "bbb" {
+		t.Fatalf("pickNight (reordered) = %+v, want bbb regardless of list order", got)
+	}
+}
+
 // An unscored record has no in-bed duration AT ALL — not a zero one. It loses to
 // any record that has one, and two of them fall through to the ended_at
 // tie-break rather than comparing as equal-at-zero.

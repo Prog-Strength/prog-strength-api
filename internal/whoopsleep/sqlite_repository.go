@@ -3,8 +3,6 @@ package whoopsleep
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -110,7 +108,7 @@ func (r *SQLiteRepository) ListRange(ctx context.Context, userID, since, until s
 		SELECT `+sleepColumns+`
 		FROM user_whoop_sleep
 		WHERE `+strings.Join(clauses, " AND ")+`
-		ORDER BY date DESC, ended_at DESC`, args...)
+		ORDER BY date DESC, ended_at DESC, whoop_sleep_id DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,38 +128,6 @@ func (r *SQLiteRepository) ListRange(ctx context.Context, userID, since, until s
 	return out, nil
 }
 
-// Latest returns the user's most recent row. No rows is not an error — a
-// freshly connected or under-scoped account has none — so it returns
-// (nil, nil) on sql.ErrNoRows and lets callers distinguish "not synced" from a
-// real failure.
-func (r *SQLiteRepository) Latest(ctx context.Context, userID string) (*Entry, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT `+sleepColumns+`
-		FROM user_whoop_sleep
-		WHERE user_id = ?
-		ORDER BY date DESC, ended_at DESC
-		LIMIT 1`, userID)
-	e, err := scanEntry(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("whoopsleep: latest: %w", err)
-	}
-	return &e, nil
-}
-
-// CountForUser returns how many sleep rows the user has stored.
-func (r *SQLiteRepository) CountForUser(ctx context.Context, userID string) (int, error) {
-	var n int
-	if err := r.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM user_whoop_sleep WHERE user_id = ?
-	`, userID).Scan(&n); err != nil {
-		return 0, fmt.Errorf("whoopsleep: count for user: %w", err)
-	}
-	return n, nil
-}
-
 // DeleteByWhoopSleepID hard-deletes the user's row with the matching WHOOP
 // sleep UUID. A missing row is not an error (idempotent webhook delete).
 func (r *SQLiteRepository) DeleteByWhoopSleepID(ctx context.Context, userID, whoopSleepID string) error {
@@ -169,14 +135,6 @@ func (r *SQLiteRepository) DeleteByWhoopSleepID(ctx context.Context, userID, who
 		DELETE FROM user_whoop_sleep
 		WHERE user_id = ? AND whoop_sleep_id = ?
 	`, userID, whoopSleepID)
-	return err
-}
-
-// DeleteForUser hard-deletes every sleep row belonging to the user.
-func (r *SQLiteRepository) DeleteForUser(ctx context.Context, userID string) error {
-	_, err := r.db.ExecContext(ctx, `
-		DELETE FROM user_whoop_sleep WHERE user_id = ?
-	`, userID)
 	return err
 }
 
@@ -198,13 +156,7 @@ func nullFloat(p *float64) sql.NullFloat64 {
 	return sql.NullFloat64{Float64: *p, Valid: true}
 }
 
-// scanner is satisfied by *sql.Row and *sql.Rows; lets the same scan path
-// service both single-row reads and multi-row List loops.
-type scanner interface {
-	Scan(dest ...any) error
-}
-
-func scanEntry(s scanner) (Entry, error) {
+func scanEntry(s *sql.Rows) (Entry, error) {
 	var (
 		e                                       Entry
 		inBed, awake, noData, light, slowWave   sql.NullInt64

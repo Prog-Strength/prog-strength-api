@@ -1059,12 +1059,12 @@ func TestSyncWindow_RecoveryFailureSkipsSleepEntirely(t *testing.T) {
 	if api.called("Sleeps") {
 		t.Errorf("call log = %v, want no Sleeps call after a recovery failure", api.callLog)
 	}
-	count, err := slp.CountForUser(ctx, "u1")
+	stored, err := slp.ListRange(ctx, "u1", "", "")
 	if err != nil {
-		t.Fatalf("CountForUser: %v", err)
+		t.Fatalf("ListRange: %v", err)
 	}
-	if count != 0 {
-		t.Errorf("sleep rows = %d, want 0", count)
+	if len(stored) != 0 {
+		t.Errorf("sleep rows = %d, want 0", len(stored))
 	}
 }
 
@@ -1086,8 +1086,10 @@ func TestSyncSleepWindow_UnderScopedConnectionMakesNoHTTPCall(t *testing.T) {
 	api.sleeps = []Sleep{scoredSleep("night", "2026-01-19T22:40:00-06:00", "2026-01-20T06:15:00-06:00", "-06:00", false)}
 	svc := NewService(conns, rec, slp, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
 
-	noScope := sleepRowsTotal.WithLabelValues("skipped_no_scope")
-	before := testutil.ToFloat64(noScope)
+	before := testutil.ToFloat64(sleepScopeSkipsTotal)
+	// The skip is per-sync, so it must not land on the per-ROW counter: a new
+	// series there would show up as a phantom row in `sum by (disposition)`.
+	rowSeriesBefore := testutil.CollectAndCount(sleepRowsTotal)
 
 	res, err := svc.SyncSince(ctx, "u1", 30*24*time.Hour, 25)
 	if err != nil {
@@ -1105,8 +1107,11 @@ func TestSyncSleepWindow_UnderScopedConnectionMakesNoHTTPCall(t *testing.T) {
 	if res.Upserted != 2 {
 		t.Errorf("Upserted = %d, want 2: recovery keeps syncing for an under-scoped connection", res.Upserted)
 	}
-	if got := testutil.ToFloat64(noScope) - before; got != 1 {
-		t.Errorf("sleep_rows{skipped_no_scope} delta = %v, want 1", got)
+	if got := testutil.ToFloat64(sleepScopeSkipsTotal) - before; got != 1 {
+		t.Errorf("sleep_scope_skips delta = %v, want 1", got)
+	}
+	if got := testutil.CollectAndCount(sleepRowsTotal); got != rowSeriesBefore {
+		t.Errorf("sleep_rows series count = %d, want %d: the scope skip must not touch a rows counter", got, rowSeriesBefore)
 	}
 }
 

@@ -20,23 +20,14 @@ type Repository interface {
 
 	// ListRange returns rows whose date is within [since, until] inclusive
 	// (either may be "" meaning unbounded), newest-first. The order is
-	// date DESC, ended_at DESC: several records can share a date, so date
-	// alone is not a total order.
+	// date DESC, ended_at DESC, whoop_sleep_id DESC: several records can share a
+	// date and even an ended_at, and whoop_sleep_id is unique per user, so only
+	// all three together are a total order. Callers that tie-break their own
+	// selection depend on that determinism.
 	ListRange(ctx context.Context, userID, since, until string) ([]Entry, error)
-
-	// Latest returns the newest row for the user, or (nil, nil) when the user
-	// has none — absence is an expected state for a freshly connected or
-	// under-scoped account, not an error.
-	Latest(ctx context.Context, userID string) (*Entry, error)
-
-	// CountForUser returns the number of sleep rows stored for the user.
-	CountForUser(ctx context.Context, userID string) (int, error)
 
 	// DeleteByWhoopSleepID removes the user's row with the matching WHOOP
 	// sleep UUID. It is not an error when no row matches (idempotent webhook
 	// delete), and it never touches another user's row with the same UUID.
 	DeleteByWhoopSleepID(ctx context.Context, userID, whoopSleepID string) error
-
-	// DeleteForUser removes every sleep row belonging to the user.
-	DeleteForUser(ctx context.Context, userID string) error
 }

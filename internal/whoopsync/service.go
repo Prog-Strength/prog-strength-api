@@ -382,7 +382,7 @@ func (s *Service) syncSleepWindow(ctx context.Context, kind, userID string, star
 	// is exactly the absence-of-success blindness that hid the dead webhook
 	// registration for four months.
 	if slices.Contains(MissingScopes(conn.Scopes), "read:sleep") {
-		sleepRowsTotal.WithLabelValues("skipped_no_scope").Inc()
+		sleepScopeSkipsTotal.Inc()
 		return SleepSyncResult{SkippedNoScope: true}
 	}
 

@@ -61,13 +61,15 @@ var syncRowsTotal = prometheus.NewCounterVec(
 	[]string{"disposition"},
 )
 
-// sleepRowsTotal counts sleep records processed by syncs, by disposition. It
-// has no skipped_no_cycle series and cannot grow one: a sleep record carries
-// its own timezone_offset, so the sleep path never joins to a cycle and that
-// failure mode does not exist for it. skipped_no_scope is the one series with
-// no recovery counterpart — it is a user who has not reconnected since
-// read:sleep was added, not an error, and watching it is how "users are
-// silently not getting sleep" stays visible.
+// sleepRowsTotal counts sleep records processed by syncs, by disposition
+// (upserted, skipped_unscored, skipped_bad_date). It has no skipped_no_cycle
+// series and cannot grow one: a sleep record carries its own timezone_offset,
+// so the sleep path never joins to a cycle and that failure mode does not exist
+// for it.
+//
+// Every disposition here counts ROWS, so `sum by (disposition)` is meaningful.
+// That is why the scope skip is a separate counter below rather than a
+// disposition: it happens once per sync, before any record is fetched.
 //
 // upserted and skipped_unscored deliberately overlap: an unscored record is
 // still written (so the row exists when the score arrives) AND counted as
@@ -78,6 +80,19 @@ var sleepRowsTotal = prometheus.NewCounterVec(
 		Help: "WHOOP sleep records processed by syncs, by disposition (upserted/skipped_*).",
 	},
 	[]string{"disposition"},
+)
+
+// sleepScopeSkipsTotal counts syncs that skipped the sleep fetch outright
+// because the connection never consented to read:sleep. It has no recovery
+// counterpart — it is a user who has not reconnected since read:sleep was
+// added, not an error, and watching it is how "users are silently not getting
+// sleep" stays visible. Unlabelled and separate from sleepRowsTotal because the
+// unit is a sync, not a row.
+var sleepScopeSkipsTotal = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "api_whoop_sleep_scope_skips_total",
+		Help: "WHOOP syncs that skipped the sleep fetch because the connection lacks read:sleep.",
+	},
 )
 
 // tokenRefreshesTotal counts refresh-grant attempts. invalid_grant means the
@@ -98,6 +113,7 @@ func init() {
 		syncsTotal,
 		syncRowsTotal,
 		sleepRowsTotal,
+		sleepScopeSkipsTotal,
 		tokenRefreshesTotal,
 	)
 }

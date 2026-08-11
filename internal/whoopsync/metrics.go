@@ -32,15 +32,21 @@ var webhooksTotal = prometheus.NewCounterVec(
 	[]string{"type", "outcome"},
 )
 
-// syncsTotal counts sync attempts by kind (backfill on connect, window from a
-// webhook nudge) and result. A healthy integration shows a steady trickle of
-// {window, ok}; silence here while webhooksTotal climbs means syncs are dying.
+// syncsTotal counts sync attempts by domain (recovery/sleep), kind (backfill on
+// connect, window from a webhook nudge) and result. A healthy integration shows
+// a steady trickle of {recovery, window, ok}; silence here while webhooksTotal
+// climbs means syncs are dying.
+//
+// The domain label was chosen over a parallel api_whoop_sleep_syncs_total
+// counter deliberately: the two domains fail independently and must be readable
+// apart, but one series keeps every existing dashboard query working with a
+// label selector rather than a rename.
 var syncsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_whoop_syncs_total",
-		Help: "WHOOP sync attempts by kind (backfill/window) and result (ok/error).",
+		Help: "WHOOP sync attempts by domain (recovery/sleep), kind (backfill/window) and result (ok/error).",
 	},
-	[]string{"kind", "result"},
+	[]string{"domain", "kind", "result"},
 )
 
 // syncRowsTotal counts recovery records processed by syncs, by disposition.
@@ -51,6 +57,25 @@ var syncRowsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_whoop_sync_rows_total",
 		Help: "WHOOP recovery records processed by syncs, by disposition (upserted/skipped_*).",
+	},
+	[]string{"disposition"},
+)
+
+// sleepRowsTotal counts sleep records processed by syncs, by disposition. It
+// has no skipped_no_cycle series and cannot grow one: a sleep record carries
+// its own timezone_offset, so the sleep path never joins to a cycle and that
+// failure mode does not exist for it. skipped_no_scope is the one series with
+// no recovery counterpart — it is a user who has not reconnected since
+// read:sleep was added, not an error, and watching it is how "users are
+// silently not getting sleep" stays visible.
+//
+// upserted and skipped_unscored deliberately overlap: an unscored record is
+// still written (so the row exists when the score arrives) AND counted as
+// unscored, so the dispositions do not sum to the records fetched.
+var sleepRowsTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "api_whoop_sleep_rows_total",
+		Help: "WHOOP sleep records processed by syncs, by disposition (upserted/skipped_*).",
 	},
 	[]string{"disposition"},
 )
@@ -72,6 +97,7 @@ func init() {
 		webhooksTotal,
 		syncsTotal,
 		syncRowsTotal,
+		sleepRowsTotal,
 		tokenRefreshesTotal,
 	)
 }

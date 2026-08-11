@@ -340,8 +340,27 @@ func postResync(t *testing.T, srv http.Handler, body any) *httptest.ResponseReco
 	return resp
 }
 
+// resyncOutcomeJSON is the wire shape of a resync response, declared here so
+// the test reads the contract rather than the handler's struct.
+type resyncOutcomeJSON struct {
+	Upserted        int `json:"upserted"`
+	SkippedUnscored int `json:"skipped_unscored"`
+	SkippedNoCycle  int `json:"skipped_no_cycle"`
+	SkippedBadDate  int `json:"skipped_bad_date"`
+	Sleep           struct {
+		Upserted        int    `json:"upserted"`
+		SkippedUnscored int    `json:"skipped_unscored"`
+		SkippedBadDate  int    `json:"skipped_bad_date"`
+		SkippedNoScope  bool   `json:"skipped_no_scope"`
+		Error           string `json:"error"`
+	} `json:"sleep"`
+}
+
 func TestResync_HappyPath(t *testing.T) {
-	want := whoopsync.SyncResult{Upserted: 4, SkippedUnscored: 1, SkippedNoCycle: 2, SkippedBadDate: 3}
+	want := whoopsync.SyncResult{
+		Upserted: 4, SkippedUnscored: 1, SkippedNoCycle: 2, SkippedBadDate: 3,
+		Sleep: whoopsync.SleepSyncResult{Upserted: 7, SkippedUnscored: 2, SkippedBadDate: 1},
+	}
 	h, svc := resyncFixture(want, nil)
 	srv := newRouter(h)
 
@@ -350,17 +369,18 @@ func TestResync_HappyPath(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
 	}
 	env := decodeEnvelope(t, resp.Body.Bytes())
-	var out struct {
-		Upserted        int `json:"upserted"`
-		SkippedUnscored int `json:"skipped_unscored"`
-		SkippedNoCycle  int `json:"skipped_no_cycle"`
-		SkippedBadDate  int `json:"skipped_bad_date"`
-	}
+	var out resyncOutcomeJSON
 	if err := json.Unmarshal(env.Data, &out); err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
 	if out.Upserted != 4 || out.SkippedUnscored != 1 || out.SkippedNoCycle != 2 || out.SkippedBadDate != 3 {
 		t.Errorf("outcome = %+v, want mapped counts", out)
+	}
+	if out.Sleep.Upserted != 7 || out.Sleep.SkippedUnscored != 2 || out.Sleep.SkippedBadDate != 1 {
+		t.Errorf("sleep outcome = %+v, want mapped sleep counts", out.Sleep)
+	}
+	if out.Sleep.SkippedNoScope || out.Sleep.Error != "" {
+		t.Errorf("sleep outcome = %+v, want no scope skip and no error", out.Sleep)
 	}
 	if svc.gotUserID != "userA" {
 		t.Errorf("SyncSince userID = %q, want userA", svc.gotUserID)
@@ -370,6 +390,44 @@ func TestResync_HappyPath(t *testing.T) {
 	}
 	if svc.gotLimit != 25 {
 		t.Errorf("limit = %d, want 25", svc.gotLimit)
+	}
+}
+
+// TestResync_ReportsSleepFailureWithoutFailingTheResync pins the operator-facing
+// half of the isolation rule: a sleep failure (or an under-scoped connection)
+// still answers 200 with the recovery counts, and says what happened to sleep in
+// its own object rather than being invisible.
+func TestResync_ReportsSleepFailureWithoutFailingTheResync(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		sleep          whoopsync.SleepSyncResult
+		wantNoScope    bool
+		wantErrMessage string
+	}{
+		{"sleep fetch failed", whoopsync.SleepSyncResult{Err: errors.New("whoopsync: whoop api error: fetch sleeps: status 403")}, false,
+			"whoopsync: whoop api error: fetch sleeps: status 403"},
+		{"under-scoped connection", whoopsync.SleepSyncResult{SkippedNoScope: true}, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := resyncFixture(whoopsync.SyncResult{Upserted: 4, Sleep: tc.sleep}, nil)
+			resp := postResync(t, newRouter(h), map[string]any{"user_id": "userA"})
+			if resp.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", resp.Code, resp.Body.String())
+			}
+			var out resyncOutcomeJSON
+			if err := json.Unmarshal(decodeEnvelope(t, resp.Body.Bytes()).Data, &out); err != nil {
+				t.Fatalf("decode data: %v", err)
+			}
+			if out.Upserted != 4 {
+				t.Errorf("upserted = %d, want 4: recovery counts survive a sleep failure", out.Upserted)
+			}
+			if out.Sleep.SkippedNoScope != tc.wantNoScope {
+				t.Errorf("sleep.skipped_no_scope = %v, want %v", out.Sleep.SkippedNoScope, tc.wantNoScope)
+			}
+			if out.Sleep.Error != tc.wantErrMessage {
+				t.Errorf("sleep.error = %q, want %q", out.Sleep.Error, tc.wantErrMessage)
+			}
+		})
 	}
 }
 

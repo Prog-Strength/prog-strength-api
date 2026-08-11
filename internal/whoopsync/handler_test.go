@@ -18,6 +18,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // --- handler harness --------------------------------------------------------
@@ -40,6 +41,7 @@ func handlerCipher(t *testing.T) *tokencrypt.Cipher {
 type handlerDeps struct {
 	conns  whoopconn.Repository
 	rec    whooprecovery.Repository
+	sleep  whoopsleep.Repository
 	cipher *tokencrypt.Cipher
 }
 
@@ -49,6 +51,7 @@ func newHandlerDeps(t *testing.T) handlerDeps {
 	return handlerDeps{
 		conns:  whoopconn.NewSQLiteRepository(database),
 		rec:    whooprecovery.NewSQLiteRepository(database),
+		sleep:  whoopsleep.NewSQLiteRepository(database),
 		cipher: handlerCipher(t),
 	}
 }
@@ -64,7 +67,7 @@ func newTestHandler(t *testing.T, d handlerDeps, tokenURL string, api whoopAPI) 
 	if api == nil {
 		api = &fakeAPI{}
 	}
-	svc := NewService(d.conns, d.rec, d.cipher, api, oauth, http.DefaultClient, nil)
+	svc := NewService(d.conns, d.rec, d.sleep, d.cipher, api, oauth, http.DefaultClient, nil)
 	client := NewClient(http.DefaultClient)
 	return NewHandler(oauth, client, d.conns, d.rec, svc, d.cipher, http.DefaultClient,
 		[]string{"https://app.example.com"}, testHMACKey, nil)
@@ -120,6 +123,9 @@ func (erroringAPI) Recoveries(context.Context, string, time.Time, time.Time, int
 	return nil, errors.New("whoop api boom")
 }
 func (erroringAPI) Cycles(context.Context, string, time.Time, time.Time, int) ([]Cycle, error) {
+	return nil, errors.New("whoop api boom")
+}
+func (erroringAPI) Sleeps(context.Context, string, time.Time, time.Time, int) ([]Sleep, error) {
 	return nil, errors.New("whoop api boom")
 }
 

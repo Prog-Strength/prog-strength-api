@@ -57,10 +57,11 @@ func TestWebhookMetrics_BadSignature(t *testing.T) {
 // TestSyncMetrics_RowDispositionsAndResult mirrors the fixture from
 // TestSyncWindow_UpsertsOnlyScoredSkipsMissingCycle (1 upserted, 2 unscored,
 // 1 missing-cycle) and asserts each disposition and the ok result land in the
-// counters the Grafana panels read.
+// counters the Grafana panels read — for both domains, since one sync now runs
+// both and each labels its own result.
 func TestSyncMetrics_RowDispositionsAndResult(t *testing.T) {
 	ctx := context.Background()
-	conns, rec := newRepos(t)
+	conns, rec, slp := newRepos(t, "u1")
 	cipher := newCipher(t)
 	now := time.Date(2026, 1, 20, 12, 0, 0, 0, time.UTC)
 	seedConnection(t, conns, cipher, "u1", "access-tok", "refresh-tok", now.Add(time.Hour), now)
@@ -77,20 +78,33 @@ func TestSyncMetrics_RowDispositionsAndResult(t *testing.T) {
 			{CycleID: 3, SleepID: "s3", ScoreState: "UNSCORABLE"},
 			{CycleID: 99, SleepID: "s4", CreatedAt: "2026-01-18T15:30:00Z", ScoreState: "SCORED", Score: &RecoveryScore{RecoveryScore: fptr(80)}},
 		},
+		// One SCORED night and one PENDING nap. The sleep dispositions overlap
+		// by design, so the PENDING record lands in BOTH upserted (the row is
+		// written for the score to arrive into) and skipped_unscored.
+		sleeps: []Sleep{
+			scoredSleep("night", "2026-01-15T22:40:00-08:00", "2026-01-16T06:15:00-08:00", "-08:00", false),
+			{ID: "nap", Start: "2026-01-16T14:00:00-08:00", End: "2026-01-16T14:45:00-08:00", TimezoneOffset: "-08:00", Nap: true, ScoreState: "PENDING"},
+		},
 	}
 
 	upserted := syncRowsTotal.WithLabelValues("upserted")
 	unscored := syncRowsTotal.WithLabelValues("skipped_unscored")
 	noCycle := syncRowsTotal.WithLabelValues("skipped_no_cycle")
-	windowOK := syncsTotal.WithLabelValues("window", "ok")
+	windowOK := syncsTotal.WithLabelValues(domainRecovery, "window", "ok")
+	sleepUpserted := sleepRowsTotal.WithLabelValues("upserted")
+	sleepUnscored := sleepRowsTotal.WithLabelValues("skipped_unscored")
+	sleepWindowOK := syncsTotal.WithLabelValues(domainSleep, "window", "ok")
 	deltas := map[string]float64{
-		"upserted": testutil.ToFloat64(upserted),
-		"unscored": testutil.ToFloat64(unscored),
-		"no_cycle": testutil.ToFloat64(noCycle),
-		"ok":       testutil.ToFloat64(windowOK),
+		"upserted":       testutil.ToFloat64(upserted),
+		"unscored":       testutil.ToFloat64(unscored),
+		"no_cycle":       testutil.ToFloat64(noCycle),
+		"ok":             testutil.ToFloat64(windowOK),
+		"sleep_upserted": testutil.ToFloat64(sleepUpserted),
+		"sleep_unscored": testutil.ToFloat64(sleepUnscored),
+		"sleep_ok":       testutil.ToFloat64(sleepWindowOK),
 	}
 
-	svc := NewService(conns, rec, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
+	svc := NewService(conns, rec, slp, cipher, api, &fakeRefresher{}, http.DefaultClient, func() time.Time { return now })
 	if err := svc.SyncWindow(ctx, "u1", 10); err != nil {
 		t.Fatalf("SyncWindow: %v", err)
 	}
@@ -105,6 +119,15 @@ func TestSyncMetrics_RowDispositionsAndResult(t *testing.T) {
 		t.Errorf("skipped_no_cycle delta = %v, want 1", got)
 	}
 	if got := testutil.ToFloat64(windowOK) - deltas["ok"]; got != 1 {
-		t.Errorf("syncs{window,ok} delta = %v, want 1", got)
+		t.Errorf("syncs{recovery,window,ok} delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(sleepUpserted) - deltas["sleep_upserted"]; got != 2 {
+		t.Errorf("sleep upserted delta = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(sleepUnscored) - deltas["sleep_unscored"]; got != 1 {
+		t.Errorf("sleep skipped_unscored delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(sleepWindowOK) - deltas["sleep_ok"]; got != 1 {
+		t.Errorf("syncs{sleep,window,ok} delta = %v, want 1", got)
 	}
 }

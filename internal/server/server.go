@@ -46,6 +46,7 @@ import (
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopadmin"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopsync"
 )
 
@@ -575,7 +576,11 @@ func New(cfg config.Config) (*Server, error) {
 			whoopHTTP := &http.Client{Timeout: 8 * time.Second}
 			oauthCfg := whoopsync.NewOAuthConfig(cfg.WhoopClientID, cfg.WhoopClientSecret, cfg.WhoopRedirectURL)
 			whoopClient := whoopsync.NewClient(whoopHTTP)
-			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
+			// Sleep repo is constructed here rather than beside the connection
+			// and recovery repos above: nothing outside the WHOOP wiring reads
+			// it yet.
+			whoopSleepRepo := whoopsleep.NewSQLiteRepository(database)
+			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
 			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
 			whoopAdminHandler = whoopadmin.NewHandler(whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
 			// Publish the connection-health gauge every 5 minutes; gates the

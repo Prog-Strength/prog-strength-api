@@ -104,10 +104,24 @@ type resyncRequest struct {
 }
 
 type resyncOutcome struct {
-	Upserted        int `json:"upserted"`
-	SkippedUnscored int `json:"skipped_unscored"`
-	SkippedNoCycle  int `json:"skipped_no_cycle"`
-	SkippedBadDate  int `json:"skipped_bad_date"`
+	Upserted        int                `json:"upserted"`
+	SkippedUnscored int                `json:"skipped_unscored"`
+	SkippedNoCycle  int                `json:"skipped_no_cycle"`
+	SkippedBadDate  int                `json:"skipped_bad_date"`
+	Sleep           sleepResyncOutcome `json:"sleep"`
+}
+
+// sleepResyncOutcome is nested rather than flattened so an operator reading the
+// response can tell which domain a count belongs to. There is no
+// skipped_no_cycle: the sleep path joins no cycle. skipped_no_scope true means
+// the user has not reconnected since read:sleep was requested, and error
+// carries a sleep-side failure that deliberately did not fail the resync.
+type sleepResyncOutcome struct {
+	Upserted        int    `json:"upserted"`
+	SkippedUnscored int    `json:"skipped_unscored"`
+	SkippedBadDate  int    `json:"skipped_bad_date"`
+	SkippedNoScope  bool   `json:"skipped_no_scope"`
+	Error           string `json:"error,omitempty"`
 }
 
 // buildView renders a connection plus its recovery summary. Real repository
@@ -244,10 +258,20 @@ func (h *Handler) resync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sleep := sleepResyncOutcome{
+		Upserted:        res.Sleep.Upserted,
+		SkippedUnscored: res.Sleep.SkippedUnscored,
+		SkippedBadDate:  res.Sleep.SkippedBadDate,
+		SkippedNoScope:  res.Sleep.SkippedNoScope,
+	}
+	if res.Sleep.Err != nil {
+		sleep.Error = res.Sleep.Err.Error()
+	}
 	httpresp.OK(w, "resynced whoop recovery", resyncOutcome{
 		Upserted:        res.Upserted,
 		SkippedUnscored: res.SkippedUnscored,
 		SkippedNoCycle:  res.SkippedNoCycle,
 		SkippedBadDate:  res.SkippedBadDate,
+		Sleep:           sleep,
 	})
 }

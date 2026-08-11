@@ -172,6 +172,18 @@ type readingsData struct {
 		Temp int       `json:"temp"`
 		Icon string    `json:"icon"`
 	} `json:"hourly"`
+	Daily []struct {
+		At           time.Time `json:"at"`
+		High         int       `json:"high"`
+		Low          int       `json:"low"`
+		Condition    string    `json:"condition"`
+		Icon         string    `json:"icon"`
+		PrecipChance int       `json:"precip_chance"`
+		WindSpeed    int       `json:"wind_speed"`
+		Humidity     int       `json:"humidity"`
+		Sunrise      time.Time `json:"sunrise"`
+		Sunset       time.Time `json:"sunset"`
+	} `json:"daily"`
 }
 
 type geoData struct {
@@ -339,13 +351,15 @@ func TestReadingsKilometersUnits(t *testing.T) {
 	}
 }
 
-func TestReadingsHourlyTruncation(t *testing.T) {
+func TestReadingsHourlyKeepsEveryFutureBucket(t *testing.T) {
 	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
 	f.seed(t, denverLocation())
 
-	// Pin the handler's clock so the "future" boundary is exact, then hand
-	// the provider two past buckets (must be filtered) and twelve future
-	// ones (must be capped at 5).
+	// Pin the handler's clock so the "future" boundary is exact, then hand the
+	// provider two past buckets (must be filtered) and twelve future ones (must
+	// ALL survive). The response is no longer capped at the tile strip's five:
+	// the day view reads the same hours, and capping here would have made it
+	// cost a second billed call for hours already in hand.
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	f.h.now = func() time.Time { return now }
 	var buckets []HourlyBucket
@@ -363,11 +377,11 @@ func TestReadingsHourlyTruncation(t *testing.T) {
 	}
 	var data readingsData
 	decodeData(t, w, &data)
-	if len(data.Hourly) != 5 {
-		t.Fatalf("len(hourly) = %d, want exactly 5", len(data.Hourly))
+	if len(data.Hourly) != 12 {
+		t.Fatalf("len(hourly) = %d, want 12 (the two past buckets filtered)", len(data.Hourly))
 	}
-	// Every served bucket is at >= the pinned now, and the cap kept the
-	// FIRST five future buckets (now+1h .. now+5h).
+	// Every served bucket is at >= the pinned now, in ascending order from
+	// now+1h — the past is dropped, the future is not thinned.
 	for i, b := range data.Hourly {
 		if b.At.Before(now) {
 			t.Errorf("hourly[%d].at = %v is before now %v", i, b.At, now)
@@ -375,6 +389,67 @@ func TestReadingsHourlyTruncation(t *testing.T) {
 		if want := now.Add(time.Duration(i+1) * time.Hour); !b.At.Equal(want) {
 			t.Errorf("hourly[%d].at = %v, want %v", i, b.At, want)
 		}
+	}
+}
+
+// TestReadingsDailyForecast pins the week view's payload: the days the daily
+// call already returned, converted to the user's unit, with `pop` rendered as
+// the percentage a person reads rather than the 0..1 the provider speaks.
+func TestReadingsDailyForecast(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+
+	day0 := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	f.provider.daily = Daily{
+		HighC: 28.5, LowC: 14.0,
+		Sunrise: day0.Add(-6 * time.Hour), Sunset: day0.Add(8 * time.Hour),
+		Days: []DayForecast{
+			{
+				At: day0, HighC: 28.5, LowC: 14.0, Condition: "Clear", Icon: "01d",
+				PrecipChance: 0.07, WindKMH: 16.09344, Humidity: 40,
+				Sunrise: day0.Add(-6 * time.Hour), Sunset: day0.Add(8 * time.Hour),
+			},
+			{
+				At: day0.Add(24 * time.Hour), HighC: 20.0, LowC: 10.0, Condition: "Rain", Icon: "10d",
+				PrecipChance: 0.5, WindKMH: 8.04672, Humidity: 70,
+			},
+		},
+	}
+
+	w := f.do(t, "GET", "/weather?timezone=UTC", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+
+	if len(data.Daily) != 2 {
+		t.Fatalf("len(daily) = %d, want 2", len(data.Daily))
+	}
+	// 28.5C → 83F, 14.0C → 57F, 16.09344 km/h → 10 mph, pop 0.07 → 7%.
+	first := data.Daily[0]
+	if first.High != 83 || first.Low != 57 {
+		t.Errorf("daily[0] high/low = %d/%d, want 83/57", first.High, first.Low)
+	}
+	if first.WindSpeed != 10 {
+		t.Errorf("daily[0].wind_speed = %d, want 10 mph", first.WindSpeed)
+	}
+	if first.PrecipChance != 7 {
+		t.Errorf("daily[0].precip_chance = %d, want 7 (0.07 as a percentage)", first.PrecipChance)
+	}
+	if first.Icon != "01d" || first.Condition != "Clear" {
+		t.Errorf("daily[0] icon/condition = %q/%q, want 01d/Clear", first.Icon, first.Condition)
+	}
+	if !first.At.Equal(day0) {
+		t.Errorf("daily[0].at = %v, want %v", first.At, day0)
+	}
+	// The half-percent case rounds rather than truncating: 0.5 → 50, not 49.
+	if data.Daily[1].PrecipChance != 50 {
+		t.Errorf("daily[1].precip_chance = %d, want 50", data.Daily[1].PrecipChance)
+	}
+	// Today's summary is unchanged by the arrival of the week behind it.
+	if data.Today == nil || data.Today.High != 83 {
+		t.Errorf("today = %+v, want the unchanged 83F high", data.Today)
 	}
 }
 

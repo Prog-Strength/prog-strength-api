@@ -51,12 +51,45 @@ type HourlyBucket struct {
 	Icon  string    `json:"icon"`
 }
 
-// Daily is today's summary from the daily timeline.
+// DayForecast is one day of the multi-day timeline, metric units.
+//
+// It exists because the /timeline/1day response the provider already bills us
+// for carries ~10 days and we were reading data[0] and throwing the rest away.
+// A week of forecast is therefore FREE — same call, same budget reservation,
+// same cache row — which is the whole reason the tile can offer a week view
+// without moving the daily call budget at all.
+//
+// Every field below is present in the live captured response (see
+// openweather_test.go's owDailyJSON). PrecipChance is the provider's `pop`,
+// carried through as its native 0..1 probability; the handler renders it as a
+// percentage rather than the model pretending to a unit it does not have.
+type DayForecast struct {
+	At           time.Time `json:"at"`
+	HighC        float64   `json:"high_c"`
+	LowC         float64   `json:"low_c"`
+	Condition    string    `json:"condition"`
+	Icon         string    `json:"icon"`
+	PrecipChance float64   `json:"precip_chance"`
+	WindKMH      float64   `json:"wind_kmh"`
+	Humidity     int       `json:"humidity"`
+	Sunrise      time.Time `json:"sunrise"`
+	Sunset       time.Time `json:"sunset"`
+}
+
+// Daily is the daily timeline: today's summary, plus the days behind it.
+//
+// The four scalar fields are today's and are kept as their own fields rather
+// than being read off Days[0]: they are the tile's shipped contract, and a
+// provider response whose first entry is malformed should cost the week view,
+// not the high/low the tile has always shown.
 type Daily struct {
 	HighC   float64   `json:"high_c"`
 	LowC    float64   `json:"low_c"`
 	Sunrise time.Time `json:"sunrise"`
 	Sunset  time.Time `json:"sunset"`
+	// Days is today-first and may be empty on a cache row written before this
+	// field existed; the service treats such a row as outdated and refetches.
+	Days []DayForecast `json:"days,omitempty"`
 }
 
 // GeoResult is one geocoding candidate (direct search or reverse).

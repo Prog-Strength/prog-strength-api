@@ -1,3 +1,10 @@
+# [0.114.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.113.0...v0.114.0) (2026-08-11)
+
+
+### Features
+
+* **whoop:** sleep ingestion, sleep tile section, and the read:sleep scope migration ([#132](https://github.com/Prog-Strength/prog-strength-api/issues/132)) ([8771556](https://github.com/Prog-Strength/prog-strength-api/commit/877155608ddcf8b11b5bdd38bce0bdba58a481ca))
+
 # [0.113.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.112.0...v0.113.0) (2026-08-11)
 
 

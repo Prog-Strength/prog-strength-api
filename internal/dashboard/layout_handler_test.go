@@ -68,6 +68,52 @@ func TestPutLayout_TileIDsBodyWrapped(t *testing.T) {
 	})
 }
 
+// TestPutLayout_RetiredTileAccepted is the other compatibility path: a browser
+// tab served the catalog BEFORE recovery_trend was folded into hrv_balance
+// keeps sending the retired id. Rejecting it would lose the user's whole edit
+// over a rename they did not make, so the write path resolves it and stores the
+// replacement.
+func TestPutLayout_RetiredTileAccepted(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","tile_ids":["steps","recovery_trend"]}]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "a", TileIDs: []TileID{TileSteps, TileHRVBalance}},
+	})
+}
+
+// The same body from a client that ALSO had the replacement tile placed: the
+// resolution collides, and one tile is the right answer — not a 422 for a
+// duplicate the client never sent.
+func TestPutLayout_RetiredTileCollidingWithItsReplacement(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[
+		{"id":"a","tile_ids":["hrv_balance"]},
+		{"id":"b","tile_ids":["recovery_trend","steps"]}
+	]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "a", TileIDs: []TileID{TileHRVBalance}},
+		{ID: "b", TileIDs: []TileID{TileSteps}},
+	})
+}
+
 func TestPutLayout_UnknownID(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 

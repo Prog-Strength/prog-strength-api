@@ -49,6 +49,12 @@ func (h *Handler) putLayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve retired ids BEFORE validating. A client that was served the
+	// catalog before a tile was merged away will keep sending the old id until
+	// it reloads, and failing its save would lose the user's edit over a rename
+	// they did not make. Everything else validation rejects still gets rejected.
+	sections = resolveSectionTiles(sections)
+
 	if msg, ok := validateSections(sections); !ok {
 		httpresp.Error(w, http.StatusUnprocessableEntity, msg)
 		return

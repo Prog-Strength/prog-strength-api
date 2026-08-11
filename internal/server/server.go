@@ -546,7 +546,7 @@ func New(cfg config.Config) (*Server, error) {
 	}
 
 	// Whoop integration: the WHOOP OAuth connect/callback flow, connection-status
-	// endpoints, recovery reads, and the HMAC-verified recovery webhook. Mirrors
+	// endpoints, recovery and sleep reads, and the HMAC-verified webhook. Mirrors
 	// calendar-sync: it stays DORMANT unless ALL of the client id/secret, the
 	// public redirect URL, AND a valid token-encryption key (WHOOP_TOKEN_ENC_KEY)
 	// are configured. An empty or invalid key logs and skips the mount rather than
@@ -581,7 +581,7 @@ func New(cfg config.Config) (*Server, error) {
 			// it yet.
 			whoopSleepRepo := whoopsleep.NewSQLiteRepository(database)
 			whoopSvc := whoopsync.NewService(whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, cipher, whoopClient, oauthCfg, whoopHTTP, nil)
-			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
+			whoopHandler = whoopsync.NewHandler(oauthCfg, whoopClient, whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, whoopSvc, cipher, whoopHTTP, cfg.ReturnToAllowedOrigins, jwtSecret, nil)
 			whoopAdminHandler = whoopadmin.NewHandler(whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
 			// Publish the connection-health gauge every 5 minutes; gates the
 			// dead-ingestion alert and drives the dashboard connection panel.
@@ -594,7 +594,7 @@ func New(cfg config.Config) (*Server, error) {
 			// not our JWT.
 			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, whoopSvc, nil)
 			whoopWebhook.Mount(r)
-			log.Println("whoop: enabled (oauth + connection + webhook + recovery reads)")
+			log.Println("whoop: enabled (oauth + connection + webhook + recovery and sleep reads)")
 		}
 	} else {
 		log.Println("whoop: disabled (WHOOP_CLIENT_ID / WHOOP_CLIENT_SECRET / WHOOP_REDIRECT_URL / WHOOP_TOKEN_ENC_KEY not configured)")

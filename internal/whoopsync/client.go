@@ -76,6 +76,53 @@ type Cycle struct {
 	TimezoneOffset string `json:"timezone_offset"` // e.g. "-08:00"
 }
 
+// SleepStageSummary is WHOOP's per-stage duration breakdown for a scored
+// sleep. Every field is milliseconds as WHOOP sends them; nothing is converted
+// at this boundary.
+type SleepStageSummary struct {
+	TotalInBedTimeMilli         *int64 `json:"total_in_bed_time_milli"`
+	TotalAwakeTimeMilli         *int64 `json:"total_awake_time_milli"`
+	TotalNoDataTimeMilli        *int64 `json:"total_no_data_time_milli"`
+	TotalLightSleepTimeMilli    *int64 `json:"total_light_sleep_time_milli"`
+	TotalSlowWaveSleepTimeMilli *int64 `json:"total_slow_wave_sleep_time_milli"`
+	TotalRemSleepTimeMilli      *int64 `json:"total_rem_sleep_time_milli"`
+	SleepCycleCount             *int64 `json:"sleep_cycle_count"`
+	DisturbanceCount            *int64 `json:"disturbance_count"`
+}
+
+// SleepNeeded is WHOOP's computed sleep need and its components. Prog Strength
+// stores these as WHOOP computes them and derives no sleep model of its own.
+type SleepNeeded struct {
+	BaselineMilli             *int64 `json:"baseline_milli"`
+	NeedFromSleepDebtMilli    *int64 `json:"need_from_sleep_debt_milli"`
+	NeedFromRecentStrainMilli *int64 `json:"need_from_recent_strain_milli"`
+	NeedFromRecentNapMilli    *int64 `json:"need_from_recent_nap_milli"`
+}
+
+// SleepScore is the scored portion of a sleep record, present only when
+// ScoreState is "SCORED".
+type SleepScore struct {
+	StageSummary               *SleepStageSummary `json:"stage_summary"`
+	SleepNeeded                *SleepNeeded       `json:"sleep_needed"`
+	RespiratoryRate            *float64           `json:"respiratory_rate"`
+	SleepPerformancePercentage *float64           `json:"sleep_performance_percentage"`
+	SleepConsistencyPercentage *float64           `json:"sleep_consistency_percentage"`
+	SleepEfficiencyPercentage  *float64           `json:"sleep_efficiency_percentage"`
+}
+
+// Sleep is a WHOOP v2 sleep record. Unlike Recovery it carries its own
+// timezone_offset, which is why the sleep sync path needs one endpoint where
+// recovery needs two (see the SOW's "Dating a Night").
+type Sleep struct {
+	ID             string      `json:"id"`              // v2 UUID; the webhook delete key
+	Start          string      `json:"start"`           // RFC3339
+	End            string      `json:"end"`             // RFC3339
+	TimezoneOffset string      `json:"timezone_offset"` // e.g. "-06:00"
+	Nap            bool        `json:"nap"`
+	ScoreState     string      `json:"score_state"` // SCORED | PENDING | UNSCORABLE
+	Score          *SleepScore `json:"score"`       // absent when not SCORED
+}
+
 // Client is the WHOOP v2 REST client over an injected *http.Client (so the
 // timeout/transport is owned by the caller). It is stateless and safe for
 // concurrent use.
@@ -122,6 +169,12 @@ type cycleEnvelope struct {
 	NextToken string  `json:"next_token"`
 }
 
+// sleepEnvelope is the v2 paginated list wrapper for sleeps.
+type sleepEnvelope struct {
+	Records   []Sleep `json:"records"`
+	NextToken string  `json:"next_token"`
+}
+
 // Recoveries fetches recovery records in [start, end], following next_token
 // across pages (capped at maxPages).
 func (c *Client) Recoveries(ctx context.Context, accessToken string, start, end time.Time, limit int) ([]Recovery, error) {
@@ -149,6 +202,27 @@ func (c *Client) Cycles(ctx context.Context, accessToken string, start, end time
 	for page := 0; page < maxPages; page++ {
 		var env cycleEnvelope
 		if err := c.getPage(ctx, accessToken, "/v2/cycle", start, end, limit, next, &env); err != nil {
+			return nil, err
+		}
+		all = append(all, env.Records...)
+		if env.NextToken == "" {
+			break
+		}
+		next = env.NextToken
+	}
+	return all, nil
+}
+
+// Sleeps fetches sleep records in [start, end], following next_token across
+// pages (capped at maxPages). Naps come back as ordinary records with nap=true
+// and are deliberately not filtered here: dropping them would corrupt the
+// sleep-need math downstream.
+func (c *Client) Sleeps(ctx context.Context, accessToken string, start, end time.Time, limit int) ([]Sleep, error) {
+	var all []Sleep
+	next := ""
+	for page := 0; page < maxPages; page++ {
+		var env sleepEnvelope
+		if err := c.getPage(ctx, accessToken, "/v2/activity/sleep", start, end, limit, next, &env); err != nil {
 			return nil, err
 		}
 		all = append(all, env.Records...)

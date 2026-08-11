@@ -81,10 +81,17 @@ const historicalTimeParam = "start"
 // errorSnippetBytes bounds how much of an error body reaches a log line.
 const errorSnippetBytes = 256
 
-// hourlyBucketCount is how many forecast hours the provider returns. The
-// tile shows 5; returning 12 lets the service re-slice without a re-fetch
-// when the cached strip's leading hours age out.
-const hourlyBucketCount = 12
+// hourlyBucketCount is how many forecast hours we keep. The live response
+// pages at 20 (its own next/prev URLs carry cnt=20), so this keeps everything
+// ONE call returns: the tile shows 5, the day view shows the rest, and the
+// leading hours can age out of the cached strip without a re-fetch. Following
+// `next` for hour 21 would be a second billed call and is not done.
+const hourlyBucketCount = 20
+
+// dailyForecastCount is how many days of the daily timeline we keep — today
+// plus a week. The live response pages at 10 (cnt=10 in its next/prev), so
+// like the hourly strip this is a slice of a call already made, not a new one.
+const dailyForecastCount = 8
 
 // Compile-time check that *OpenWeatherProvider satisfies Provider.
 var _ Provider = (*OpenWeatherProvider)(nil)
@@ -185,9 +192,14 @@ func (p *OpenWeatherProvider) Hourly(ctx context.Context, lat, lon float64) ([]H
 func (p *OpenWeatherProvider) Daily(ctx context.Context, lat, lon float64) (Daily, error) {
 	var payload struct {
 		Data []struct {
-			Sunrise int64 `json:"sunrise"`
-			Sunset  int64 `json:"sunset"`
-			Temp    struct {
+			DT        int64          `json:"dt"`
+			Sunrise   int64          `json:"sunrise"`
+			Sunset    int64          `json:"sunset"`
+			Humidity  int            `json:"humidity"`
+			WindSpeed float64        `json:"wind_speed"`
+			Pop       float64        `json:"pop"`
+			Weather   []owWeatherTag `json:"weather"`
+			Temp      struct {
 				Max float64 `json:"max"`
 				Min float64 `json:"min"`
 			} `json:"temp"`
@@ -202,12 +214,41 @@ func (p *OpenWeatherProvider) Daily(ctx context.Context, lat, lon float64) (Dail
 		return Daily{}, fmt.Errorf("openweather daily: response carried no timeline entries")
 	}
 	today := payload.Data[0]
-	return Daily{
+	out := Daily{
 		HighC:   today.Temp.Max,
 		LowC:    today.Temp.Min,
 		Sunrise: unixUTC(today.Sunrise),
 		Sunset:  unixUTC(today.Sunset),
-	}, nil
+	}
+
+	// The rest of the response — already paid for — becomes the week.
+	entries := payload.Data
+	if len(entries) > dailyForecastCount {
+		entries = entries[:dailyForecastCount]
+	}
+	out.Days = make([]DayForecast, 0, len(entries))
+	for _, e := range entries {
+		d := DayForecast{
+			At:      unixUTC(e.DT),
+			HighC:   e.Temp.Max,
+			LowC:    e.Temp.Min,
+			WindKMH: e.WindSpeed * 3.6, // metric units are m/s; the model is km/h
+			// `pop` is a 0..1 probability in the provider's own vocabulary and
+			// is carried through as one — the handler decides how to print it.
+			PrecipChance: e.Pop,
+			Humidity:     e.Humidity,
+			Sunrise:      unixUTC(e.Sunrise),
+			Sunset:       unixUTC(e.Sunset),
+		}
+		// A missing weather tag costs the glyph, not the day, exactly as in
+		// Current and Hourly.
+		if len(e.Weather) > 0 {
+			d.Condition = e.Weather[0].Main
+			d.Icon = e.Weather[0].Icon
+		}
+		out.Days = append(out.Days, d)
+	}
+	return out, nil
 }
 
 // owPrecipBlock is the rain/snow sub-object; both report the millimeters that

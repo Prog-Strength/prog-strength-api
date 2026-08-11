@@ -80,6 +80,12 @@ type endpointPlan struct {
 	ttl      time.Duration
 	decode   func(payload string) error
 	fetch    func(ctx context.Context) (string, error)
+	// complete reports whether a row that DECODED carries everything the
+	// current model promises. It is how a payload can be widened without
+	// serving thin rows for a whole TTL afterwards: a row written before the
+	// new section existed parses cleanly (encoding/json ignores absent fields)
+	// and would otherwise look perfectly fresh. Nil means "decoding is enough".
+	complete func() bool
 
 	state     cacheState
 	fetched   bool // provider answered this request
@@ -186,6 +192,11 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 				daily = &d
 				return string(b), nil
 			},
+			// A row cached before the week forecast existed decodes into a
+			// Daily with no Days — fresh by its timestamp, thin in fact. One
+			// refetch per location fixes it; without this the week view would
+			// be empty for a whole daily TTL after the deploy.
+			complete: func() bool { return daily != nil && len(daily.Days) > 0 },
 		},
 	}
 
@@ -194,7 +205,7 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 	// successful refetch simply overwrites the slot.
 	var toFetch []*endpointPlan
 	for _, p := range plans {
-		p.state, p.fetchedAt = s.classify(ctx, ReadingKey(lat, lon, p.endpoint), p.ttl, p.decode)
+		p.state, p.fetchedAt = s.classify(ctx, ReadingKey(lat, lon, p.endpoint), p.ttl, p.decode, p.complete)
 		if p.state != cacheFresh {
 			toFetch = append(toFetch, p)
 		}
@@ -317,7 +328,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 		}
 		results = cached
 		return nil
-	})
+	}, nil)
 	if state == cacheFresh {
 		requestsTotal.WithLabelValues("cache_hit").Inc()
 		s.log.DebugContext(ctx, "weather: geocode cache hit", "endpoint", endpoint, "key", key)
@@ -381,11 +392,14 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 	return truncated(results, limit), StatusOK, nil
 }
 
-// classify reads one cache row, records the cache event (hit / stale / miss
-// / corrupt / read_error), and decodes the payload into the caller's slot
-// for both fresh and stale rows. Read errors and corrupt payloads degrade to
-// missing — the cache is an optimization, never a gate.
-func (s *Service) classify(ctx context.Context, key string, ttl time.Duration, decode func(payload string) error) (cacheState, time.Time) {
+// classify reads one cache row, records the cache event (hit / stale / miss /
+// corrupt / outdated / read_error), and decodes the payload into the caller's
+// slot for both fresh and stale rows. Read errors, corrupt payloads and rows
+// that predate a payload widening all degrade to missing — the cache is an
+// optimization, never a gate.
+//
+// `complete` may be nil, which means decoding successfully is the whole test.
+func (s *Service) classify(ctx context.Context, key string, ttl time.Duration, decode func(payload string) error, complete func() bool) (cacheState, time.Time) {
 	row, err := s.cache.Get(ctx, key)
 	switch {
 	case err != nil:
@@ -399,6 +413,14 @@ func (s *Service) classify(ctx context.Context, key string, ttl time.Duration, d
 	if err := decode(row.PayloadJSON); err != nil {
 		cacheEventsTotal.WithLabelValues("corrupt").Inc()
 		s.log.WarnContext(ctx, "weather: corrupt cache row; refetching", "key", key, "error", err)
+		return cacheMissing, time.Time{}
+	}
+	if complete != nil && !complete() {
+		// Parsed, but written before the payload carried everything the model
+		// now promises. Refetch it like a miss — and say so distinctly, so a
+		// deploy that widens a payload does not read as a cache fault.
+		cacheEventsTotal.WithLabelValues("outdated").Inc()
+		s.log.InfoContext(ctx, "weather: cache row predates the current payload shape; refetching", "key", key)
 		return cacheMissing, time.Time{}
 	}
 	if s.now().UTC().Sub(row.FetchedAt) < ttl {

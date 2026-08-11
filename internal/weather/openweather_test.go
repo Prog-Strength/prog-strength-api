@@ -56,8 +56,8 @@ const owCurrentJSON = `{
 // owHourlyEntry is one bucket in the shape the live /timeline/1h returns —
 // every field the real response carries, including the pop and alerts the
 // provider deliberately ignores. Parameterized over dt/temp/icon so
-// owHourlyJSON can emit 14 buckets and make the 12-bucket truncation
-// observable; the live response pages at 20.
+// owHourlyJSON can emit more buckets than the provider keeps and make the
+// truncation observable; the live response pages at 20.
 func owHourlyEntry(dt int64, temp float64, icon string) string {
 	return fmt.Sprintf(`{
 		"dt": %d,
@@ -78,12 +78,14 @@ func owHourlyEntry(dt int64, temp float64, icon string) string {
 	}`, dt, temp, icon)
 }
 
-// owHourlyJSON carries 14 buckets so the 12-bucket truncation is observable.
+// owHourlyJSON carries 24 buckets so the 20-bucket truncation is observable —
+// one more than the live response's own page size, which is what the provider
+// now keeps in full (the day view reads the hours the tile strip does not).
 // next/prev are present because the live response always carries them — the
 // provider must keep ignoring them, since following a page is a billed call.
 func owHourlyJSON() string {
 	var entries []string
-	for i := 0; i < 14; i++ {
+	for i := 0; i < 24; i++ {
 		entries = append(entries, owHourlyEntry(
 			1754740800+int64(i)*3600, 20.5+float64(i), fmt.Sprintf("0%dd", (i%9)+1)))
 	}
@@ -384,7 +386,7 @@ func TestOpenWeatherHourlyEmptyWeatherArrayDegrades(t *testing.T) {
 	}
 }
 
-func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
+func TestOpenWeatherHourlyTruncatesToTwentyBuckets(t *testing.T) {
 	srv, query, path := owServer(t, "/data/4.0/onecall/timeline/1h", owHourlyJSON())
 	p := newTestProvider(srv)
 
@@ -398,8 +400,8 @@ func TestOpenWeatherHourlyTruncatesToTwelveBuckets(t *testing.T) {
 	}
 	assertCommonParams(t, *query, "39.7392", "-104.9847")
 
-	if len(got) != 12 {
-		t.Fatalf("len(buckets) = %d, want 12 (14 served, next 12 kept)", len(got))
+	if len(got) != 20 {
+		t.Fatalf("len(buckets) = %d, want 20 (24 served, first 20 kept)", len(got))
 	}
 	first := got[0]
 	if wantAt := time.Unix(1754740800, 0).UTC(); !first.At.Equal(wantAt) {
@@ -450,6 +452,111 @@ func TestOpenWeatherDaily(t *testing.T) {
 	}
 	if want := time.Unix(1786327469, 0).UTC(); !got.Sunset.Equal(want) {
 		t.Errorf("Sunset = %v, want %v", got.Sunset, want)
+	}
+}
+
+// owDailyEntry repeats the live entry shape above with the fields the week
+// forecast reads made variable. The live capture kept a single day (its own
+// next/prev say the response pages at cnt=10), so the multi-day body below is
+// that captured entry repeated rather than a second capture — the SHAPE is the
+// live one, only the count is synthetic.
+func owDailyEntry(dt int64, high, low, pop float64, icon string) string {
+	return fmt.Sprintf(`{
+		"dt": %d,
+		"sunrise": %d,
+		"sunset": %d,
+		"moonrise": 1786172520, "moonset": 1786230660, "moon_phase": 0.85,
+		"temp": {"day": 35.45, "min": %g, "max": %g, "night": 28.54, "eve": 32.14, "morn": 24.74},
+		"feels_like": {"day": 35.45, "night": 28.54, "eve": 32.14, "morn": 24.74},
+		"pressure": 1008.47,
+		"humidity": 37,
+		"wind_speed": 8.34,
+		"wind_deg": 330,
+		"weather": [{"id": 803, "main": "Clouds", "description": "broken clouds", "icon": %q}],
+		"clouds": 56,
+		"pop": %g,
+		"uvi": 0
+	}`, dt, dt+43200, dt+86400-3600, low, high, icon, pop)
+}
+
+// owDailyJSON10 carries ten days — the live page size — so the eight-day cap
+// is observable.
+func owDailyJSON10() string {
+	var entries []string
+	for i := 0; i < 10; i++ {
+		entries = append(entries, owDailyEntry(
+			1786233600+int64(i)*86400, 30+float64(i), 15+float64(i), float64(i)/10, "04d"))
+	}
+	return `{"lat": 39.74, "lon": -104.98, "timezone": "America/Denver",
+		"data": [` + strings.Join(entries, ",") + `]}`
+}
+
+// TestOpenWeatherDailyCarriesTheWeek is the week view's whole cost argument in
+// a test: the days come out of the SAME response the high/low was already read
+// from, so a week of forecast costs no provider call at all.
+func TestOpenWeatherDailyCarriesTheWeek(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1day", owDailyJSON10())
+	p := newTestProvider(srv)
+
+	got, err := p.Daily(context.Background(), 39.7392, -104.9847)
+	if err != nil {
+		t.Fatalf("Daily: %v", err)
+	}
+
+	// Ten served, eight kept — today plus a week.
+	if len(got.Days) != 8 {
+		t.Fatalf("len(Days) = %d, want 8 (10 served, first 8 kept)", len(got.Days))
+	}
+	// Days[0] is today, and agrees with the scalar summary read off the same
+	// entry — the tile and the week view cannot disagree about today.
+	if got.Days[0].HighC != got.HighC || got.Days[0].LowC != got.LowC {
+		t.Errorf("Days[0] high/low = %v/%v, want the summary's %v/%v",
+			got.Days[0].HighC, got.Days[0].LowC, got.HighC, got.LowC)
+	}
+	if want := time.Unix(1786233600, 0).UTC(); !got.Days[0].At.Equal(want) {
+		t.Errorf("Days[0].At = %v, want %v", got.Days[0].At, want)
+	}
+	// Each day carries what the week view draws: glyph, condition, and the
+	// provider's own 0..1 probability, unconverted.
+	if got.Days[2].Icon != "04d" || got.Days[2].Condition != "Clouds" {
+		t.Errorf("Days[2] icon/condition = %q/%q, want 04d/Clouds", got.Days[2].Icon, got.Days[2].Condition)
+	}
+	if got.Days[2].PrecipChance != 0.2 {
+		t.Errorf("Days[2].PrecipChance = %v, want 0.2 (the raw pop)", got.Days[2].PrecipChance)
+	}
+	// 8.34 m/s → 30.024 km/h.
+	if got.Days[2].WindKMH < 30.0 || got.Days[2].WindKMH > 30.1 {
+		t.Errorf("Days[2].WindKMH = %v, want ~30.02", got.Days[2].WindKMH)
+	}
+	if got.Days[2].Humidity != 37 {
+		t.Errorf("Days[2].Humidity = %d, want 37", got.Days[2].Humidity)
+	}
+	// Ascending days, each with its own sunrise/sunset.
+	for i := 1; i < len(got.Days); i++ {
+		if !got.Days[i].At.After(got.Days[i-1].At) {
+			t.Errorf("Days[%d].At = %v is not after Days[%d].At = %v", i, got.Days[i].At, i-1, got.Days[i-1].At)
+		}
+		if got.Days[i].Sunrise.IsZero() || got.Days[i].Sunset.IsZero() {
+			t.Errorf("Days[%d] is missing sunrise/sunset", i)
+		}
+	}
+}
+
+// A single-entry response is a one-day week, not an error: the scalar summary
+// is what the tile needs and it is present.
+func TestOpenWeatherDailySingleEntryStillCarriesOneDay(t *testing.T) {
+	srv, _, _ := owServer(t, "/data/4.0/onecall/timeline/1day", owDailyJSON)
+	p := newTestProvider(srv)
+
+	got, err := p.Daily(context.Background(), 39.7392, -104.9847)
+	if err != nil {
+		t.Fatalf("Daily: %v", err)
+	}
+	if len(got.Days) != 1 {
+		t.Fatalf("len(Days) = %d, want 1", len(got.Days))
+	}
+	if got.Days[0].Icon != "04d" {
+		t.Errorf("Days[0].Icon = %q, want 04d", got.Days[0].Icon)
 	}
 }
 

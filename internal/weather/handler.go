@@ -97,6 +97,23 @@ type hourlyPayload struct {
 	Icon string    `json:"icon"`
 }
 
+// dailyPayload is one day of the week forecast. PrecipChance is a PERCENT
+// here — the model carries the provider's 0..1 probability, and the wire
+// carries what a person reads — so a client never multiplies by 100 itself and
+// no client can forget to.
+type dailyPayload struct {
+	At           time.Time `json:"at"`
+	High         int       `json:"high"`
+	Low          int       `json:"low"`
+	Condition    string    `json:"condition"`
+	Icon         string    `json:"icon"`
+	PrecipChance int       `json:"precip_chance"`
+	WindSpeed    int       `json:"wind_speed"`
+	Humidity     int       `json:"humidity"`
+	Sunrise      time.Time `json:"sunrise"`
+	Sunset       time.Time `json:"sunset"`
+}
+
 // readingsResponse is the GET /weather data section. Timestamps stay RFC3339
 // UTC — the client sent its IANA zone only for validation symmetry with
 // /dashboard/summary and does its own local formatting. Every field except
@@ -108,7 +125,12 @@ type readingsResponse struct {
 	Units     *unitsPayload       `json:"units,omitempty"`
 	Current   *currentPayload     `json:"current,omitempty"`
 	Today     *todayPayload       `json:"today,omitempty"`
-	Hourly    []hourlyPayload     `json:"hourly,omitempty"`
+	// Hourly is every FUTURE bucket the one hourly call returned, not the five
+	// the tile strip shows. The client slices what it wants — the day view
+	// wants all of them, and re-slicing costs nothing where a second call
+	// would cost a provider credit.
+	Hourly []hourlyPayload `json:"hourly,omitempty"`
+	Daily  []dailyPayload  `json:"daily,omitempty"`
 }
 
 // locationItem is one saved location on the wire, shared by the GET list, the
@@ -251,10 +273,30 @@ func buildReadings(reading Reading, loc Location, unit user.DistanceUnit, now ti
 			Sunrise: d.Sunrise.UTC(),
 			Sunset:  d.Sunset.UTC(),
 		}
+		for _, day := range d.Days {
+			resp.Daily = append(resp.Daily, dailyPayload{
+				At:        day.At.UTC(),
+				High:      convTemp(day.HighC, unit),
+				Low:       convTemp(day.LowC, unit),
+				Condition: day.Condition,
+				Icon:      day.Icon,
+				// 0..1 probability → the percentage a person reads.
+				PrecipChance: int(math.Round(day.PrecipChance * 100)),
+				WindSpeed:    convWind(day.WindKMH, unit),
+				Humidity:     day.Humidity,
+				Sunrise:      day.Sunrise.UTC(),
+				Sunset:       day.Sunset.UTC(),
+			})
+		}
 	}
 	// The strip shows what's coming, not what already happened: keep only
-	// buckets at >= now, capped at the next 5. Assumes provider-ascending
-	// bucket order (true for OpenWeather, preserved by the cache round-trip).
+	// buckets at >= now. Assumes provider-ascending bucket order (true for
+	// OpenWeather, preserved by the cache round-trip).
+	//
+	// Uncapped on purpose. It used to stop at 5 — the tile strip's width —
+	// which meant the day view could not exist without a second billed call
+	// for hours the response already contained. The tile still shows 5; the
+	// client decides.
 	for _, b := range reading.Hourly {
 		if b.At.Before(now) {
 			continue
@@ -264,9 +306,6 @@ func buildReadings(reading Reading, loc Location, unit user.DistanceUnit, now ti
 			Temp: convTemp(b.TempC, unit),
 			Icon: b.Icon,
 		})
-		if len(resp.Hourly) == 5 {
-			break
-		}
 	}
 	return resp
 }

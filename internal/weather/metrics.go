@@ -50,8 +50,15 @@ var providerLatency = prometheus.NewHistogramVec(
 )
 
 // cacheEventsTotal counts cache-read dispositions:
-// hit | miss | stale | corrupt | read_error. Hit rate =
-// hit / (hit + miss + stale + corrupt).
+// hit | miss | stale | corrupt | outdated | read_error. Hit rate =
+// hit / (hit + miss + stale + corrupt + outdated).
+//
+// `outdated` is a row that PARSED but predates a payload shape change — it
+// carries less than the current model promises, so it is refetched like a miss.
+// It is deliberately not `corrupt`: corrupt means a row nobody wrote correctly
+// and is worth alerting on, while outdated is the expected one-off cost of a
+// deploy that widened a payload, and burying it in `corrupt` would make a
+// schema change look like a cache fault.
 var cacheEventsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_weather_cache_events_total",

@@ -67,9 +67,19 @@ func newFakeProvider() *fakeProvider {
 		configured: true,
 		current:    Current{TempC: 21.5, FeelsLikeC: 20.1, Humidity: 40, WindKMH: 10.8, Condition: "Clear", Icon: "01d"},
 		hourly:     []HourlyBucket{{At: time.Date(2026, 8, 9, 13, 0, 0, 0, time.UTC), TempC: 23.0, Icon: "01d"}},
-		daily:      Daily{HighC: 28.5, LowC: 14.0, Sunrise: sunrise, Sunset: sunrise.Add(14 * time.Hour)},
-		direct:     []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
-		reverse:    []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
+		// Days is populated because a Daily without it is, by contract, a row
+		// that predates the week forecast — the service refetches those, and a
+		// fake that omits it would make every cache-hit test fetch instead.
+		daily: Daily{
+			HighC: 28.5, LowC: 14.0, Sunrise: sunrise, Sunset: sunrise.Add(14 * time.Hour),
+			Days: []DayForecast{{
+				At: sunrise.Truncate(24 * time.Hour), HighC: 28.5, LowC: 14.0,
+				Condition: "Clear", Icon: "01d", PrecipChance: 0.07, WindKMH: 10.8, Humidity: 40,
+				Sunrise: sunrise, Sunset: sunrise.Add(14 * time.Hour),
+			}},
+		},
+		direct:  []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
+		reverse: []GeoResult{{Name: "Denver", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}},
 		historical: Observation{
 			ObservedAt: time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC),
 			TempC:      18.2, FeelsLikeC: 17.4, DewPointC: 6.1, Humidity: 44,
@@ -231,6 +241,55 @@ func TestReadingsAllFreshServesFromCache(t *testing.T) {
 // TestReadingsColdCacheFetchesAllThree: empty cache ⇒ three provider calls,
 // three reservations, three cache writes (proved by a second call hitting
 // the cache), StatusOK, FetchedAt = now.
+// TestReadingsOutdatedDailyRowRefetches pins the deploy story for widening a
+// payload: a daily row cached BEFORE the week forecast existed parses cleanly
+// and looks fresh by its timestamp, so without an explicit completeness check
+// the week view would be empty for a whole daily TTL after the deploy. The row
+// is refetched exactly like a miss — and only the daily endpoint is, so the
+// repair costs one provider call, not three.
+func TestReadingsOutdatedDailyRowRefetches(t *testing.T) {
+	p := newFakeProvider()
+	svc, cache, ledger, now := newTestService(t, svcCfg(), p)
+	t0 := *now
+
+	// The pre-change shape: today's summary, no days.
+	legacyDaily := struct {
+		HighC   float64   `json:"high_c"`
+		LowC    float64   `json:"low_c"`
+		Sunrise time.Time `json:"sunrise"`
+		Sunset  time.Time `json:"sunset"`
+	}{HighC: 28.5, LowC: 14.0, Sunrise: t0.Add(-6 * time.Hour), Sunset: t0.Add(8 * time.Hour)}
+
+	// Every row well inside its TTL — the ONLY reason to fetch is the shape.
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointCurrent), p.current, t0.Add(-1*time.Minute))
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointHourly), p.hourly, t0.Add(-1*time.Minute))
+	seedReading(t, cache, ReadingKey(testLat, testLon, EndpointDaily), legacyDaily, t0.Add(-1*time.Minute))
+
+	r := svc.Readings(context.Background(), testLat, testLon)
+
+	if p.calls[EndpointDaily] != 1 {
+		t.Errorf("daily calls = %d, want 1 (the outdated row is refetched)", p.calls[EndpointDaily])
+	}
+	if p.calls[EndpointCurrent] != 0 || p.calls[EndpointHourly] != 0 {
+		t.Errorf("calls = %v, want the daily endpoint only", p.calls)
+	}
+	if used := mustUsedToday(t, ledger); used != 1 {
+		t.Errorf("UsedToday = %d, want 1", used)
+	}
+	if r.Daily == nil || len(r.Daily.Days) == 0 {
+		t.Fatalf("Daily = %+v, want the refetched week", r.Daily)
+	}
+
+	// And the repaired row is now fresh: a second read fetches nothing.
+	before := p.calls[EndpointDaily]
+	if r2 := svc.Readings(context.Background(), testLat, testLon); len(r2.Daily.Days) == 0 {
+		t.Error("second read lost the week")
+	}
+	if p.calls[EndpointDaily] != before {
+		t.Errorf("daily calls after repair = %d, want still %d", p.calls[EndpointDaily], before)
+	}
+}
+
 func TestReadingsColdCacheFetchesAllThree(t *testing.T) {
 	p := newFakeProvider()
 	svc, _, ledger, now := newTestService(t, svcCfg(), p)

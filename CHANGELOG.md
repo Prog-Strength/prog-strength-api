@@ -1,3 +1,10 @@
+# [0.112.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.111.0...v0.112.0) (2026-08-11)
+
+
+### Features
+
+* **dashboard:** retire the recovery_trend tile into hrv_balance ([#130](https://github.com/Prog-Strength/prog-strength-api/issues/130)) ([d67141f](https://github.com/Prog-Strength/prog-strength-api/commit/d67141f7da3e94dbf6a82fc59c6c76ea2b897efb))
+
 # [0.111.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.110.0...v0.111.0) (2026-08-10)
 
 

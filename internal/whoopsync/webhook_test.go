@@ -16,6 +16,7 @@ import (
 
 	"github.com/Prog-Strength/prog-strength-api/internal/whoopconn"
 	"github.com/Prog-Strength/prog-strength-api/internal/whooprecovery"
+	"github.com/Prog-Strength/prog-strength-api/internal/whoopsleep"
 )
 
 // --- webhook fakes ----------------------------------------------------------
@@ -53,6 +54,24 @@ func (f *fakeWebhookRec) DeleteBySleepID(_ context.Context, userID, sleepID stri
 	return f.deleteErr
 }
 
+// fakeWebhookSleep implements whoopsleep.Repository; only DeleteByWhoopSleepID
+// is used by the webhook. It records every delete call so a redelivery can be
+// told apart from a single delivery.
+type fakeWebhookSleep struct {
+	whoopsleep.Repository
+	deleteCalls int
+	lastUserID  string
+	lastWhoopID string
+	deleteErr   error
+}
+
+func (f *fakeWebhookSleep) DeleteByWhoopSleepID(_ context.Context, userID, whoopSleepID string) error {
+	f.deleteCalls++
+	f.lastUserID = userID
+	f.lastWhoopID = whoopSleepID
+	return f.deleteErr
+}
+
 // fakeSyncer records SyncWindow calls and optionally returns an error.
 type fakeSyncer struct {
 	calls      int
@@ -84,6 +103,7 @@ type webhookHarness struct {
 	router chi.Router
 	conns  *fakeWebhookConns
 	rec    *fakeWebhookRec
+	sleep  *fakeWebhookSleep
 	svc    *fakeSyncer
 	secret []byte
 	now    time.Time
@@ -97,11 +117,12 @@ func newWebhookHarness(t *testing.T) *webhookHarness {
 			42: {UserID: "u1", WhoopUserID: 42, Status: whoopconn.StatusConnected},
 		}},
 		rec:    &fakeWebhookRec{},
+		sleep:  &fakeWebhookSleep{},
 		svc:    &fakeSyncer{},
 		secret: []byte("whoop-client-secret"),
 		now:    now,
 	}
-	wh := NewWebhookHandler(h.secret, h.conns, h.rec, h.svc, func() time.Time { return h.now })
+	wh := NewWebhookHandler(h.secret, h.conns, h.rec, h.sleep, h.svc, func() time.Time { return h.now })
 	r := chi.NewRouter()
 	wh.Mount(r)
 	h.router = r
@@ -268,9 +289,143 @@ func TestWebhook_OtherType_204NoSideEffects(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
 	}
-	if h.svc.calls != 0 || h.rec.deleteCalls != 0 {
-		t.Fatalf("no side effects expected: sync=%d delete=%d", h.svc.calls, h.rec.deleteCalls)
+	if h.svc.calls != 0 || h.rec.deleteCalls != 0 || h.sleep.deleteCalls != 0 {
+		t.Fatalf("no side effects expected: sync=%d recovery delete=%d sleep delete=%d",
+			h.svc.calls, h.rec.deleteCalls, h.sleep.deleteCalls)
 	}
+}
+
+// --- sleep events -----------------------------------------------------------
+
+// sleep.updated is a poke, not a payload: it re-syncs the recent window through
+// the SAME SyncWindow call recovery.updated makes.
+func TestWebhook_SleepUpdated_Synced(t *testing.T) {
+	h := newWebhookHarness(t)
+	body := []byte(`{"user_id":42,"type":"sleep.updated","id":"sleep-uuid-1"}`)
+	ts := h.tsNow()
+
+	rec := h.do(t, sign(h.secret, ts, body), ts, body)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+	if h.svc.calls != 1 {
+		t.Fatalf("SyncWindow calls = %d, want 1", h.svc.calls)
+	}
+	if h.svc.lastUserID != "u1" || h.svc.lastLimit != 10 {
+		t.Fatalf("SyncWindow(%q, %d), want (u1, 10)", h.svc.lastUserID, h.svc.lastLimit)
+	}
+	if h.sleep.deleteCalls != 0 {
+		t.Fatalf("sleep delete calls = %d, want 0 on an update", h.sleep.deleteCalls)
+	}
+}
+
+func TestWebhook_SleepUpdated_SyncError_500(t *testing.T) {
+	h := newWebhookHarness(t)
+	h.svc.err = context.DeadlineExceeded // stand-in for a transient sync failure
+	body := []byte(`{"user_id":42,"type":"sleep.updated","id":"sleep-uuid-1"}`)
+	ts := h.tsNow()
+
+	rec := h.do(t, sign(h.secret, ts, body), ts, body)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 so WHOOP retries", rec.Code)
+	}
+}
+
+// The sleep.deleted event id IS the WHOOP sleep UUID — the first webhook where
+// that id maps to a record we actually own.
+func TestWebhook_SleepDeleted_Deletes(t *testing.T) {
+	h := newWebhookHarness(t)
+	body := []byte(`{"user_id":42,"type":"sleep.deleted","id":"sleep-uuid-1"}`)
+	ts := h.tsNow()
+
+	rec := h.do(t, sign(h.secret, ts, body), ts, body)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if h.sleep.deleteCalls != 1 {
+		t.Fatalf("DeleteByWhoopSleepID calls = %d, want 1", h.sleep.deleteCalls)
+	}
+	if h.sleep.lastUserID != "u1" || h.sleep.lastWhoopID != "sleep-uuid-1" {
+		t.Fatalf("DeleteByWhoopSleepID(%q, %q), want (u1, sleep-uuid-1)", h.sleep.lastUserID, h.sleep.lastWhoopID)
+	}
+	if h.svc.calls != 0 || h.rec.deleteCalls != 0 {
+		t.Fatalf("a sleep delete must not sync or touch recovery: sync=%d recovery delete=%d", h.svc.calls, h.rec.deleteCalls)
+	}
+}
+
+// An unknown UUID is a no-op 204 (the repository's delete is idempotent), and a
+// redelivery of the same event is 204 too — WHOOP retries must not 500.
+func TestWebhook_SleepDeleted_UnknownAndRedelivered_204(t *testing.T) {
+	h := newWebhookHarness(t)
+	body := []byte(`{"user_id":42,"type":"sleep.deleted","id":"never-stored"}`)
+	ts := h.tsNow()
+	sig := sign(h.secret, ts, body)
+
+	for i := 0; i < 2; i++ {
+		rec := h.do(t, sig, ts, body)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("delivery %d: status = %d, want 204", i, rec.Code)
+		}
+	}
+	if h.sleep.deleteCalls != 2 {
+		t.Fatalf("DeleteByWhoopSleepID calls = %d, want 2 (idempotent, forwarded each time)", h.sleep.deleteCalls)
+	}
+}
+
+func TestWebhook_SleepDeleted_DeleteError_500(t *testing.T) {
+	h := newWebhookHarness(t)
+	h.sleep.deleteErr = context.DeadlineExceeded
+	body := []byte(`{"user_id":42,"type":"sleep.deleted","id":"sleep-uuid-1"}`)
+	ts := h.tsNow()
+
+	rec := h.do(t, sign(h.secret, ts, body), ts, body)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 so WHOOP retries", rec.Code)
+	}
+}
+
+// The signature check, the unknown-user route, and the not-connected gate all
+// run BEFORE the event switch, so they apply to the sleep types unchanged. One
+// case of each is pinned here so a future refactor can't quietly exempt them.
+func TestWebhook_SleepEvents_ExistingGatesApply(t *testing.T) {
+	t.Run("bad signature", func(t *testing.T) {
+		h := newWebhookHarness(t)
+		body := []byte(`{"user_id":42,"type":"sleep.deleted","id":"sleep-uuid-1"}`)
+		rec := h.do(t, "not-a-real-signature", h.tsNow(), body)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401", rec.Code)
+		}
+		if h.sleep.deleteCalls != 0 {
+			t.Fatal("delete must not run for an unsigned sleep event")
+		}
+	})
+
+	t.Run("unknown user", func(t *testing.T) {
+		h := newWebhookHarness(t)
+		body := []byte(`{"user_id":999,"type":"sleep.updated","id":"sleep-uuid-1"}`)
+		ts := h.tsNow()
+		rec := h.do(t, sign(h.secret, ts, body), ts, body)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204", rec.Code)
+		}
+		if h.svc.calls != 0 {
+			t.Fatal("SyncWindow must not run for an unknown WHOOP user")
+		}
+	})
+
+	t.Run("not connected", func(t *testing.T) {
+		h := newWebhookHarness(t)
+		h.conns.byWhoop[42] = &whoopconn.Connection{UserID: "u1", WhoopUserID: 42, Status: whoopconn.StatusRevoked}
+		body := []byte(`{"user_id":42,"type":"sleep.deleted","id":"sleep-uuid-1"}`)
+		ts := h.tsNow()
+		rec := h.do(t, sign(h.secret, ts, body), ts, body)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204", rec.Code)
+		}
+		if h.sleep.deleteCalls != 0 {
+			t.Fatal("delete must not run for a revoked connection")
+		}
+	})
 }
 
 func TestWebhook_SyncError_500(t *testing.T) {

@@ -589,9 +589,10 @@ func New(cfg config.Config) (*Server, error) {
 			// Public callback — WHOOP redirects here; the user id rides in the
 			// OAuth state, not our auth cookie, so it can't sit behind RequireUser.
 			whoopHandler.MountPublic(r)
-			// Public webhook — WHOOP posts recovery events here; authenticity is
-			// the HMAC signature (client secret is the key), not our JWT.
-			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSvc, nil)
+			// Public webhook — WHOOP posts recovery and sleep events here;
+			// authenticity is the HMAC signature (client secret is the key),
+			// not our JWT.
+			whoopWebhook := whoopsync.NewWebhookHandler([]byte(cfg.WhoopClientSecret), whoopConnRepo, whoopRecoveryRepo, whoopSleepRepo, whoopSvc, nil)
 			whoopWebhook.Mount(r)
 			log.Println("whoop: enabled (oauth + connection + webhook + recovery reads)")
 		}

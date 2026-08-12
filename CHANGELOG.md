@@ -1,3 +1,10 @@
+# [0.116.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.115.0...v0.116.0) (2026-08-12)
+
+
+### Features
+
+* **weather:** free-text place resolution and per-surface attribution on GET /weather ([#133](https://github.com/Prog-Strength/prog-strength-api/issues/133)) ([4f73fb6](https://github.com/Prog-Strength/prog-strength-api/commit/4f73fb6555db3857a69235f800523d0c7a283543))
+
 # [0.115.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.114.0...v0.115.0) (2026-08-12)
 
 

@@ -1,3 +1,10 @@
+# [0.115.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.114.0...v0.115.0) (2026-08-12)
+
+
+### Features
+
+* **dashboard:** add the resting_hr tile to the catalog and recovery family ([#134](https://github.com/Prog-Strength/prog-strength-api/issues/134)) ([3b94ca6](https://github.com/Prog-Strength/prog-strength-api/commit/3b94ca66786b763faaa2668aae32c1324b402396))
+
 # [0.114.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.113.0...v0.114.0) (2026-08-11)
 
 

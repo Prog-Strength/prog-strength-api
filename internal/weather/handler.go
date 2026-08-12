@@ -159,6 +159,19 @@ type geoResponse struct {
 
 // ---- GET /weather ----------------------------------------------------------
 
+// maxPlaceQueryLen caps the free-text ?place= at the same length
+// /weather/search caps `q`: the value reaches the geocoder and becomes part of
+// a cache key, so it is bounded at the boundary rather than downstream.
+const maxPlaceQueryLen = 200
+
+// placeGeocodeLimit matches /weather/search's default breadth. The caller here
+// wants one answer, but the geocode cache row is keyed by query alone and
+// shared with the location picker — asking for one result would write a
+// one-candidate row that truncates the picker's next search for the whole
+// 30-day TTL. The provider bills per call, not per result, so the wider ask
+// is free.
+const placeGeocodeLimit = 5
+
 func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID, ok := auth.UserIDFrom(ctx)
@@ -167,16 +180,42 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parsed once: every Query() call re-parses the raw query string.
+	query := r.URL.Query()
+
 	// timezone is validated exactly like /dashboard/summary. The payload's
 	// timestamps stay UTC; requiring the zone keeps the request contract
 	// uniform across dashboard endpoints and catches misconfigured clients.
-	tz := r.URL.Query().Get("timezone")
+	tz := query.Get("timezone")
 	if tz == "" {
 		httpresp.Error(w, http.StatusBadRequest, "timezone is required")
 		return
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
 		httpresp.Error(w, http.StatusBadRequest, "invalid timezone "+tz)
+		return
+	}
+
+	// Validated at the boundary, ahead of the kill switch: the value becomes a
+	// metric label, so a caller sending a bad one should hear about it whether
+	// or not the feature happens to be on today.
+	src, srcOK := ParseSource(query.Get("source"))
+	if !srcOK {
+		httpresp.Error(w, http.StatusBadRequest, `source must be "tile" or "agent"`)
+		return
+	}
+
+	locationID := query.Get("location_id")
+	place := strings.TrimSpace(query.Get("place"))
+	// Two location selectors in one request is a caller bug; silently
+	// preferring one would hide it.
+	if place != "" && locationID != "" {
+		httpresp.Error(w, http.StatusBadRequest, "place and location_id are mutually exclusive")
+		return
+	}
+	if utf8.RuneCountInString(place) > maxPlaceQueryLen {
+		httpresp.Error(w, http.StatusBadRequest,
+			fmt.Sprintf("place is too long (max %d characters)", maxPlaceQueryLen))
 		return
 	}
 
@@ -194,9 +233,10 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var loc *Location
-	if wantID := r.URL.Query().Get("location_id"); wantID != "" {
+	switch {
+	case locationID != "":
 		for i := range locs {
-			if locs[i].ID == wantID {
+			if locs[i].ID == locationID {
 				loc = &locs[i]
 				break
 			}
@@ -205,7 +245,13 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 			httpresp.ErrorWithCode(w, http.StatusNotFound, "location not found", "location_not_found")
 			return
 		}
-	} else {
+	case place != "":
+		resolved, ok := h.resolvePlace(w, r, place, locs, src)
+		if !ok {
+			return
+		}
+		loc = resolved
+	default:
 		if len(locs) == 0 {
 			httpresp.ErrorWithCode(w, http.StatusNotFound, "no saved locations", "no_locations")
 			return
@@ -213,7 +259,7 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		loc = &locs[0]
 	}
 
-	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon)
+	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon, src)
 	if reading.Status == StatusDisabled {
 		// Provider unconfigured (no API key) — same disabled shape as the
 		// cfg kill switch above.
@@ -223,6 +269,59 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 
 	unit := h.distanceUnit(ctx, userID)
 	httpresp.OK(w, "weather readings", buildReadings(reading, *loc, unit, h.now().UTC()))
+}
+
+// resolvePlace turns free text into a location. Saved labels win: a user who
+// says "Denver" and has Denver saved should get the coordinates they curated on
+// the dashboard, not whatever the geocoder returns for the string — and that
+// match costs no provider call, no budget reservation, and no cache lookup.
+//
+// It reports false when it has already written the response.
+func (h *Handler) resolvePlace(w http.ResponseWriter, r *http.Request, place string, saved []Location, src Source) (*Location, bool) {
+	ctx := r.Context()
+	// normalizeQuery, not strings.EqualFold: the geocode cache below keys on
+	// it, so matching any less strictly would let "New  York" miss a saved
+	// "New York" and then spend a call on a query the cache already considers
+	// the same string.
+	want := normalizeQuery(place)
+	for i := range saved {
+		if normalizeQuery(saved[i].Label) == want {
+			return &saved[i], true
+		}
+	}
+
+	// Only the first candidate is used — the caller named one place and gets
+	// one answer, and offering candidates is /weather/search's job, which is
+	// the surface with a human to choose between them.
+	results, status, err := h.svc.Search(ctx, place, placeGeocodeLimit, src)
+	if err != nil {
+		httpresp.ServerError(w, ctx, "weather place lookup", err)
+		return nil, false
+	}
+	if len(results) == 0 {
+		if status != StatusOK && status != StatusStale {
+			// The geocode degraded — feature off, budget spent, provider down.
+			// That is not evidence the place does not exist, and answering
+			// "no such place" would have the caller deny a real city. Report
+			// the disposition instead and let it say what actually happened.
+			httpresp.OK(w, "weather readings", readingsResponse{Status: status})
+			return nil, false
+		}
+		httpresp.ErrorWithCode(w, http.StatusNotFound, "place not found", "place_not_found")
+		return nil, false
+	}
+
+	g := results[0]
+	// No ID: this place is not a row anywhere. It stays an empty string rather
+	// than becoming a pointer field on locationRefPayload, so the response
+	// shape is identical for saved and ad-hoc locations — the MCP forwarder
+	// has no branch and no existing consumer sees a type change.
+	loc := Location{Label: g.Name, Country: g.Country, Lat: g.Lat, Lon: g.Lon}
+	if g.State != "" {
+		state := g.State
+		loc.State = &state
+	}
+	return &loc, true
 }
 
 // distanceUnit reads the user's unit preference. A failed read is logged and
@@ -549,7 +648,10 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		limit = v
 	}
 
-	results, status, err := h.svc.Search(ctx, q, limit)
+	// /weather/search and /weather/reverse are the dashboard popover's
+	// location picker; there is no agent tool for either, so they are
+	// attributed to the tile rather than growing a ?source= of their own.
+	results, status, err := h.svc.Search(ctx, q, limit, SourceTile)
 	if err != nil {
 		httpresp.ServerError(w, ctx, "weather search", err)
 		return
@@ -573,7 +675,7 @@ func (h *Handler) reverse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, status, err := h.svc.Reverse(ctx, lat, lon)
+	results, status, err := h.svc.Reverse(ctx, lat, lon, SourceTile)
 	if err != nil {
 		httpresp.ServerError(w, ctx, "weather reverse geocode", err)
 		return

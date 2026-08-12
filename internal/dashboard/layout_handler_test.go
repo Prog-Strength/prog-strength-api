@@ -114,6 +114,29 @@ func TestPutLayout_RetiredTileCollidingWithItsReplacement(t *testing.T) {
 	})
 }
 
+// TestPutLayout_RestingHRAccepted is the test that makes the catalog change
+// load-bearing rather than cosmetic. Had resting_hr stayed out of Catalog,
+// ValidTileID would have rejected it and this write would have 422'd — a user
+// adding the tile from the tray would get an error toast and the tile would
+// never persist. A web-only catalog entry cannot fix that, which is why this
+// SOW touches the API.
+func TestPutLayout_RestingHRAccepted(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","tile_ids":["resting_hr"]}]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "a", TileIDs: []TileID{TileRestingHR}},
+	})
+}
+
 func TestPutLayout_UnknownID(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 

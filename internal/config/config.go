@@ -209,6 +209,12 @@ type Config struct {
 	// See CalendarSyncConfig.
 	CalendarSync CalendarSyncConfig
 
+	// CalendarEvents configures the READ direction of the calendar
+	// integration — the dashboard tile's /me/calendar/events endpoint.
+	// Separate from CalendarSync because the two kill switches are
+	// genuinely independent. See CalendarEventsConfig.
+	CalendarEvents CalendarEventsConfig
+
 	// Weather configures the OpenWeather dashboard-tile integration (the
 	// kill switch, the daily provider-call budget, the cache TTLs, and the
 	// product knobs). See WeatherConfig.
@@ -318,6 +324,22 @@ type CalendarSyncConfig struct {
 	Enabled             bool
 	ReconcileMaxPerBoot int
 	MaxAttempts         int
+}
+
+// CalendarEventsConfig groups the calendar READ knobs (the dashboard tile).
+// All are non-secret public literals, mirroring CalendarSyncConfig — the read
+// path shares the write path's one real secret, CALENDAR_TOKEN_ENC_KEY.
+//
+// Enabled is a kill switch for reads only: false makes every
+// /me/calendar/events response status "disabled" without touching OAuth or
+// the write path. CacheTTLSeconds bounds how long one user's fetched window
+// is reused; it exists to absorb dashboard remounts, not to economise on a
+// free quota. MaxEventsPerDay caps the per-day payload; overflow is reported
+// as each day's `truncated` count rather than silently dropped.
+type CalendarEventsConfig struct {
+	Enabled         bool
+	CacheTTLSeconds int
+	MaxEventsPerDay int
 }
 
 // WeatherConfig groups the OpenWeather dashboard-tile integration knobs.
@@ -484,6 +506,11 @@ type fileConfig struct {
 		ReconcileMaxPerBoot int  `toml:"reconcile_max_per_boot"`
 		MaxAttempts         int  `toml:"max_attempts"`
 	} `toml:"calendar_sync"`
+	CalendarEvents struct {
+		Enabled         bool `toml:"enabled"`
+		CacheTTLSeconds int  `toml:"cache_ttl_seconds"`
+		MaxEventsPerDay int  `toml:"max_events_per_day"`
+	} `toml:"calendar_events"`
 	Weather struct {
 		Enabled                bool   `toml:"enabled"`
 		APIKey                 string `toml:"api_key"`
@@ -686,6 +713,11 @@ func Load(defaultTOML []byte) (Config, error) {
 			Enabled:             fc.CalendarSync.Enabled,
 			ReconcileMaxPerBoot: fc.CalendarSync.ReconcileMaxPerBoot,
 			MaxAttempts:         fc.CalendarSync.MaxAttempts,
+		},
+		CalendarEvents: CalendarEventsConfig{
+			Enabled:         fc.CalendarEvents.Enabled,
+			CacheTTLSeconds: fc.CalendarEvents.CacheTTLSeconds,
+			MaxEventsPerDay: fc.CalendarEvents.MaxEventsPerDay,
 		},
 		Weather: WeatherConfig{
 			Enabled:                fc.Weather.Enabled,

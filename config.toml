@@ -85,6 +85,29 @@ reconcile_max_per_boot = 200
 # burning a write on every boot forever. A successful sync resets the count.
 max_attempts = 5
 
+[calendar_events]
+# Reading the user's Google Calendar for the dashboard tile. Public literals —
+# not secrets, not env-overridden. The one real secret in the calendar feature
+# is calendar_token_enc_key under [auth], and this reader shares it.
+#
+# enabled is the kill switch for the READ direction only. Turning it off makes
+# every /me/calendar/events response status "disabled" and the tile say so
+# plainly; it does not touch OAuth, planned-workout scheduling, or activity
+# sync, which are governed by [calendar_sync].enabled.
+enabled = true
+
+# How long a user's fetched window is reused before Google is asked again.
+# Small on purpose: this exists to absorb dashboard remounts and slide changes,
+# not to be a cache in any meaningful sense. Google's quota is 1M/day and free,
+# so there is nothing here to economise.
+cache_ttl_seconds = 60
+
+# Per-day cap on events returned to the client. A shared calendar can carry
+# hundreds of entries on one day; the tile shows five and the panel shows a
+# screenful, so an uncapped payload is bytes nobody reads. Overflow is REPORTED,
+# never silently dropped — see each day's `truncated` count in the payload.
+max_events_per_day = 50
+
 [cors]
 # Browser origins permitted credentialed access. Public domains — NOT
 # secrets. Each entry may contain a SINGLE "*" wildcard (Vercel previews).

@@ -628,6 +628,11 @@ func TestGoldenManifest(t *testing.T) {
 			ReconcileMaxPerBoot: 200,
 			MaxAttempts:         5,
 		},
+		CalendarEvents: CalendarEventsConfig{
+			Enabled:         true,
+			CacheTTLSeconds: 60,
+			MaxEventsPerDay: 50,
+		},
 		Weather: WeatherConfig{
 			Enabled:                true,
 			APIKey:                 "",

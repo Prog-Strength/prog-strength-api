@@ -318,6 +318,30 @@ func TestSummary_FamilyTileAlone_YieldsRecoverySection(t *testing.T) {
 	}
 }
 
+// TestSummary_RestingHRTileAlone_YieldsRecoverySection pins the same re-gate for
+// resting_hr: a layout holding ONLY that tile must still yield a populated
+// "recovery" section, and no "resting_hr" key. Leaving it out of recoveryFamily
+// compiles and fails nothing else — the connect CTA just never goes away.
+func TestSummary_RestingHRTileAlone_YieldsRecoverySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRestingHR})); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"resting_hr"}) {
+		t.Errorf("layout = %v, want [resting_hr]", layout)
+	}
+	assertKeysPresent(t, data, "recovery")
+	assertKeysAbsent(t, data, "resting_hr")
+	if string(data["recovery"]) == "null" {
+		t.Error("recovery = null, want a populated section for a connected user")
+	}
+}
+
 // TestSummary_MultipleFamilyTiles_OneRecoverySection asserts the section is
 // built and emitted exactly once under the "recovery" key no matter how many
 // family tiles are on the layout — no per-tile section keys.
@@ -520,6 +544,21 @@ func TestSummary_DefaultLayoutHasNoSleepTile(t *testing.T) {
 		t.Errorf("default layout must not contain %q; got %v", TileSleep, layout)
 	}
 	assertKeysAbsent(t, data, "sleep")
+}
+
+// TestSummary_DefaultLayoutHasNoRestingHRTile pins the rollout, mirroring the
+// sleep tile: resting_hr is a catalog tile but NOT part of the default layout.
+// Three tiles already print today's resting HR, so a fourth arriving unbidden
+// on everyone's dashboard is a bigger product decision than this SOW's remit.
+func TestSummary_DefaultLayoutHasNoRestingHRTile(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	layout, _ := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if indexOf(layout, string(TileRestingHR)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileRestingHR, layout)
+	}
 }
 
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family

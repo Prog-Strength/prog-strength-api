@@ -279,7 +279,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	// "recovery" key and no "hrv_balance" key (pinned by the summary layout
 	// tests). The web adapter already reads it that way.
 	recoveryFamily := []TileID{
-		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
+		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog, TileRestingHR,
 	}
 	for _, id := range recoveryFamily {
 		if enabled[id] {

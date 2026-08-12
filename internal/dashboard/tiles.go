@@ -30,6 +30,13 @@ const (
 	// are migrated, not truncated; see RetiredTiles.
 	TileRecoveryTrend TileID = "recovery_trend"
 	TileRecoveryLog   TileID = "recovery_log"
+	// TileRestingHR ranks a morning's resting heart rate against the athlete's
+	// own recent ones. It adds no field: it reads the shared recovery section,
+	// so what makes that section build for it is its membership of
+	// recoveryFamily in handler.go — this entry only makes the tile placeable.
+	// It is in the catalog because the catalog is server-owned, not because
+	// the payload changed.
+	TileRestingHR TileID = "resting_hr"
 	// TileSleep is the sleep tile. It is its own section rather than a member
 	// of the recovery family's one-section-many-tiles arrangement because it is
 	// a single tile reading a single section. The key is `sleep` (not
@@ -55,7 +62,7 @@ var Catalog = []TileID{
 	TileRunning, TileRunningLog, TileRunningEffort, TileRunningVertical,
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
-	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog,
+	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog, TileRestingHR,
 	TileSleep, TileStreak, TileQuote, TileWeather,
 }
 

@@ -318,6 +318,31 @@ func TestSummary_FamilyTileAlone_YieldsRecoverySection(t *testing.T) {
 	}
 }
 
+// TestSummary_RestingHrTileAlone_YieldsRecoverySection pins the membership that
+// has no type error behind it: resting_hr reads the shared recovery section, so
+// a layout whose ONLY recovery tile is resting_hr must still get one built.
+// Without the recoveryFamily entry this returns no "recovery" key and the tile
+// shows a connect CTA to an already-connected user.
+func TestSummary_RestingHrTileAlone_YieldsRecoverySection(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	if err := rp.layout.Upsert(context.Background(), userID, SingleSection([]TileID{TileRestingHR})); err != nil {
+		t.Fatalf("layout upsert: %v", err)
+	}
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if !equalStrs(layout, []string{"resting_hr"}) {
+		t.Errorf("layout = %v, want [resting_hr]", layout)
+	}
+	assertKeysPresent(t, data, "recovery")
+	assertKeysAbsent(t, data, "resting_hr")
+	if string(data["recovery"]) == "null" {
+		t.Error("recovery = null, want a populated section for a connected user")
+	}
+}
+
 // TestSummary_MultipleFamilyTiles_OneRecoverySection asserts the section is
 // built and emitted exactly once under the "recovery" key no matter how many
 // family tiles are on the layout — no per-tile section keys.
@@ -520,6 +545,22 @@ func TestSummary_DefaultLayoutHasNoSleepTile(t *testing.T) {
 		t.Errorf("default layout must not contain %q; got %v", TileSleep, layout)
 	}
 	assertKeysAbsent(t, data, "sleep")
+}
+
+// TestSummary_DefaultLayoutHasNoRestingHrTile pins the rollout, mirroring the
+// sleep tile: resting_hr is a catalog tile but NOT part of the default layout.
+// Three tiles already print today's resting HR, so a fourth arriving unbidden
+// on everyone's dashboard is a bigger product decision than this SOW's remit.
+func TestSummary_DefaultLayoutHasNoRestingHrTile(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if indexOf(layout, string(TileRestingHR)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileRestingHR, layout)
+	}
+	assertKeysAbsent(t, data, "resting_hr")
 }
 
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family

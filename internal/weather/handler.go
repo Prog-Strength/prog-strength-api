@@ -180,6 +180,15 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validated at the boundary, ahead of the kill switch: the value becomes a
+	// metric label, so a caller sending a bad one should hear about it whether
+	// or not the feature happens to be on today.
+	src, srcOK := ParseSource(r.URL.Query().Get("source"))
+	if !srcOK {
+		httpresp.Error(w, http.StatusBadRequest, `source must be "tile" or "agent"`)
+		return
+	}
+
 	// Disabled is checked BEFORE location resolution: with the feature off,
 	// "you have no saved locations" would be noise — the only fact that
 	// matters is that the tile is off.
@@ -213,8 +222,7 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		loc = &locs[0]
 	}
 
-	// Replaced with the parsed ?source= when that parameter lands.
-	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon, SourceTile)
+	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon, src)
 	if reading.Status == StatusDisabled {
 		// Provider unconfigured (no API key) — same disabled shape as the
 		// cfg kill switch above.

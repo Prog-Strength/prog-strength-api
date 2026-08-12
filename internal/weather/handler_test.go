@@ -895,6 +895,66 @@ func TestReadingsBudgetExhaustedPassthrough(t *testing.T) {
 	}
 }
 
+// ---- ?source= --------------------------------------------------------------
+
+func TestReadingsRejectsUnknownSource(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&source=mobile", "")
+
+	wantError(t, w, http.StatusBadRequest, `source must be "tile" or "agent"`, "")
+	if f.provider.total() != 0 {
+		t.Errorf("provider called %d times on a 400, want 0", f.provider.total())
+	}
+}
+
+// Accepting the value is not the point — carrying it to the counter is. A cold
+// cache behind a working provider is the "served" disposition, so the agent
+// series must move by one and the tile series not at all.
+func TestReadingsAgentSourceIsAccepted(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+	agentBefore, tileBefore := servedBySource(SourceAgent), servedBySource(SourceTile)
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&source=agent", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Status != string(StatusOK) {
+		t.Fatalf("status = %q, want %q", data.Status, StatusOK)
+	}
+	if got := servedBySource(SourceAgent) - agentBefore; got != 1 {
+		t.Errorf("agent-sourced served count delta = %v, want 1", got)
+	}
+	if got := servedBySource(SourceTile) - tileBefore; got != 0 {
+		t.Errorf("tile served count moved by %v on an agent request, want 0", got)
+	}
+}
+
+// An absent ?source= must keep working untouched — the shipped web tile does
+// not send one, and this feature is explicitly a no-op for it.
+func TestReadingsDefaultsSourceToTile(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+	agentBefore, tileBefore := servedBySource(SourceAgent), servedBySource(SourceTile)
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	if got := servedBySource(SourceTile) - tileBefore; got != 1 {
+		t.Errorf("tile served count delta = %v, want 1", got)
+	}
+	if got := servedBySource(SourceAgent) - agentBefore; got != 0 {
+		t.Errorf("agent served count moved by %v on an unlabelled request, want 0", got)
+	}
+}
+
 // ---- unit-preference fallback ----------------------------------------------
 
 // failingUserReader always errors, standing in for a flaky users table.

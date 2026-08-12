@@ -24,6 +24,11 @@ import "github.com/prometheus/client_golang/prometheus"
 //	budget_exhausted — readings reservation refused (whatever cache exists is attached), or a geocode reservation refused with no cached row
 //	disabled         — feature flag off
 //	failed           — provider errored, no usable cache
+//
+// One HTTP request is usually one sample, but GET /weather?place= is two when
+// the name is not already saved: the geocode and the readings each record their
+// own disposition. A panel counting agent place lookups by request must expect
+// that, or it will double-count them.
 var requestsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_weather_requests_total",

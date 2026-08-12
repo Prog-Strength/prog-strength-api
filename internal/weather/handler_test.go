@@ -102,6 +102,14 @@ func denverLocation() Location {
 	return Location{Label: "Denver", Country: "US", State: &state, Lat: testLat, Lon: testLon}
 }
 
+// boulderLocation is the SECOND saved location in the ?place= tests: matching
+// it proves the label search found the named row rather than defaulting to
+// locs[0], which is what the no-selector path would have returned anyway.
+func boulderLocation() Location {
+	state := "CO"
+	return Location{Label: "Boulder", Country: "US", State: &state, Lat: 40.01, Lon: -105.27}
+}
+
 // decodeData unmarshals the success envelope's data section into dst.
 func decodeData(t *testing.T, w *httptest.ResponseRecorder, dst any) {
 	t.Helper()
@@ -957,21 +965,50 @@ func TestReadingsDefaultsSourceToTile(t *testing.T) {
 
 // ---- ?place= ---------------------------------------------------------------
 
-// A user who says "Denver" and has Denver saved gets THEIR Denver — the
-// coordinates they curated — and it costs no provider call at all.
+// A user who says "Boulder" and has Boulder saved gets THEIR Boulder — the
+// coordinates they curated — and it costs no provider call at all. Boulder is
+// seeded second so a match cannot be confused with the no-selector default,
+// and asked for in lower case so the fold is pinned too.
 func TestReadingsPlaceMatchesSavedLabelWithoutGeocoding(t *testing.T) {
 	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
-	saved := f.seed(t, denverLocation())
+	saved := f.seed(t, denverLocation(), boulderLocation())
 
-	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=denver", "")
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=boulder", "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
 	}
 	var data readingsData
 	decodeData(t, w, &data)
-	if data.Location == nil || data.Location.ID != saved[0].ID {
-		t.Fatalf("location = %+v, want the saved location %q", data.Location, saved[0].ID)
+	if data.Location == nil || data.Location.ID != saved[1].ID {
+		t.Fatalf("location = %+v, want the saved Boulder %q", data.Location, saved[1].ID)
+	}
+	if data.Location.Label != "Boulder" {
+		t.Errorf("location.label = %q, want Boulder", data.Location.Label)
+	}
+	if n := f.provider.calls[EndpointGeocodeDirect]; n != 0 {
+		t.Errorf("geocode calls = %d, want 0 for a place the user already saved", n)
+	}
+}
+
+// The saved-label match keys on normalizeQuery, the same normalization the
+// geocode cache row uses. Anything looser (a bare case fold) would let this
+// request miss the user's own row and spend a call on a query the cache
+// already considers identical to it.
+func TestReadingsPlaceMatchesSavedLabelAcrossInternalWhitespace(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	newYork := Location{Label: "New York", Country: "US", Lat: 40.71, Lon: -74.01}
+	saved := f.seed(t, denverLocation(), newYork)
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=new%20%20york", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Location == nil || data.Location.ID != saved[1].ID {
+		t.Fatalf("location = %+v, want the saved New York %q", data.Location, saved[1].ID)
 	}
 	if n := f.provider.calls[EndpointGeocodeDirect]; n != 0 {
 		t.Errorf("geocode calls = %d, want 0 for a place the user already saved", n)
@@ -982,8 +1019,9 @@ func TestReadingsPlaceFallsThroughToGeocoding(t *testing.T) {
 	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
 	f.seed(t, denverLocation())
 	f.provider.direct = []GeoResult{{Name: "Boulder", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}}
+	agentBefore, tileBefore := servedBySource(SourceAgent), servedBySource(SourceTile)
 
-	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder", "")
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder&source=agent", "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
@@ -1007,6 +1045,50 @@ func TestReadingsPlaceFallsThroughToGeocoding(t *testing.T) {
 	}
 	if n := f.provider.calls[EndpointGeocodeDirect]; n != 1 {
 		t.Errorf("geocode calls = %d, want 1", n)
+	}
+	// Two samples, not one: the geocode and the readings each record their own
+	// disposition, and both must be filed under the surface that asked. This is
+	// the only path that reaches the geocoder, so without this leg the place
+	// lookup could hardcode the tile and every other test would still pass.
+	if got := servedBySource(SourceAgent) - agentBefore; got != 2 {
+		t.Errorf("agent-sourced served count delta = %v, want 2 (geocode + readings)", got)
+	}
+	if got := servedBySource(SourceTile) - tileBefore; got != 0 {
+		t.Errorf("tile served count moved by %v on an agent place lookup, want 0", got)
+	}
+}
+
+// An agent's ?place= and the dashboard popover share one geocode cache row,
+// keyed by query alone. Asking the provider for a single candidate would write
+// a one-entry row and silently truncate the picker's next search for the whole
+// 30-day TTL — a shipped surface regressing on a feature that is supposed to
+// need no client edit.
+func TestReadingsPlaceLeavesTheLocationPickerItsCandidates(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.provider.direct = []GeoResult{
+		{Name: "Springfield", State: "Illinois", Country: "US", Lat: testLat, Lon: testLon},
+		{Name: "Springfield", State: "Missouri", Country: "US", Lat: 37.21, Lon: -93.29},
+		{Name: "Springfield", State: "Massachusetts", Country: "US", Lat: 42.10, Lon: -72.59},
+	}
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Springfield", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("place status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+
+	w = f.do(t, "GET", "/weather/search?q=Springfield&limit=5", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("search status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var geo geoData
+	decodeData(t, w, &geo)
+	if len(geo.Results) != 3 {
+		t.Errorf("picker saw %d candidates, want all 3 the provider had", len(geo.Results))
+	}
+	// One call total proves the picker was served from the row ?place= wrote,
+	// which is the row that would have been truncated.
+	if n := f.provider.calls[EndpointGeocodeDirect]; n != 1 {
+		t.Errorf("geocode calls = %d, want 1 (the picker must hit the cached row)", n)
 	}
 }
 
@@ -1092,11 +1174,21 @@ func TestReadingsPlaceTooLongIs400(t *testing.T) {
 // no_locations check that guards the default path.
 func TestReadingsPlaceWorksWithNoSavedLocations(t *testing.T) {
 	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.provider.direct = []GeoResult{{Name: "Boulder", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}}
 
 	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder", "")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	// 200 alone would also describe a {"status":"disabled"} with no location.
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Status != string(StatusOK) {
+		t.Errorf("status = %q, want %q", data.Status, StatusOK)
+	}
+	if data.Location == nil || data.Location.Label != "Boulder" {
+		t.Errorf("location = %+v, want the geocoded Boulder", data.Location)
 	}
 }
 

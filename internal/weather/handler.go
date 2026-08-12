@@ -159,6 +159,19 @@ type geoResponse struct {
 
 // ---- GET /weather ----------------------------------------------------------
 
+// maxPlaceQueryLen caps the free-text ?place= at the same length
+// /weather/search caps `q`: the value reaches the geocoder and becomes part of
+// a cache key, so it is bounded at the boundary rather than downstream.
+const maxPlaceQueryLen = 200
+
+// placeGeocodeLimit matches /weather/search's default breadth. The caller here
+// wants one answer, but the geocode cache row is keyed by query alone and
+// shared with the location picker — asking for one result would write a
+// one-candidate row that truncates the picker's next search for the whole
+// 30-day TTL. The provider bills per call, not per result, so the wider ask
+// is free.
+const placeGeocodeLimit = 5
+
 func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID, ok := auth.UserIDFrom(ctx)
@@ -167,10 +180,13 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parsed once: every Query() call re-parses the raw query string.
+	query := r.URL.Query()
+
 	// timezone is validated exactly like /dashboard/summary. The payload's
 	// timestamps stay UTC; requiring the zone keeps the request contract
 	// uniform across dashboard endpoints and catches misconfigured clients.
-	tz := r.URL.Query().Get("timezone")
+	tz := query.Get("timezone")
 	if tz == "" {
 		httpresp.Error(w, http.StatusBadRequest, "timezone is required")
 		return
@@ -183,16 +199,17 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 	// Validated at the boundary, ahead of the kill switch: the value becomes a
 	// metric label, so a caller sending a bad one should hear about it whether
 	// or not the feature happens to be on today.
-	src, srcOK := ParseSource(r.URL.Query().Get("source"))
+	src, srcOK := ParseSource(query.Get("source"))
 	if !srcOK {
 		httpresp.Error(w, http.StatusBadRequest, `source must be "tile" or "agent"`)
 		return
 	}
 
+	locationID := query.Get("location_id")
+	place := strings.TrimSpace(query.Get("place"))
 	// Two location selectors in one request is a caller bug; silently
 	// preferring one would hide it.
-	place := strings.TrimSpace(r.URL.Query().Get("place"))
-	if place != "" && r.URL.Query().Get("location_id") != "" {
+	if place != "" && locationID != "" {
 		httpresp.Error(w, http.StatusBadRequest, "place and location_id are mutually exclusive")
 		return
 	}
@@ -216,10 +233,10 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var loc *Location
-	switch wantID := r.URL.Query().Get("location_id"); {
-	case wantID != "":
+	switch {
+	case locationID != "":
 		for i := range locs {
-			if locs[i].ID == wantID {
+			if locs[i].ID == locationID {
 				loc = &locs[i]
 				break
 			}
@@ -229,10 +246,11 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case place != "":
-		var resolved bool
-		if loc, resolved = h.resolvePlace(w, r, place, locs, src); !resolved {
+		resolved, ok := h.resolvePlace(w, r, place, locs, src)
+		if !ok {
 			return
 		}
+		loc = resolved
 	default:
 		if len(locs) == 0 {
 			httpresp.ErrorWithCode(w, http.StatusNotFound, "no saved locations", "no_locations")
@@ -257,21 +275,25 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 // says "Denver" and has Denver saved should get the coordinates they curated on
 // the dashboard, not whatever the geocoder returns for the string — and that
 // match costs no provider call, no budget reservation, and no cache lookup.
-// Only a name the account does not already know reaches the geocoder.
 //
 // It reports false when it has already written the response.
 func (h *Handler) resolvePlace(w http.ResponseWriter, r *http.Request, place string, saved []Location, src Source) (*Location, bool) {
 	ctx := r.Context()
+	// normalizeQuery, not strings.EqualFold: the geocode cache below keys on
+	// it, so matching any less strictly would let "New  York" miss a saved
+	// "New York" and then spend a call on a query the cache already considers
+	// the same string.
+	want := normalizeQuery(place)
 	for i := range saved {
-		if strings.EqualFold(saved[i].Label, place) {
+		if normalizeQuery(saved[i].Label) == want {
 			return &saved[i], true
 		}
 	}
 
-	// limit 1: the caller named one place and gets one answer. Offering
-	// candidates is /weather/search's job, and it is the surface with a human
-	// to choose between them.
-	results, status, err := h.svc.Search(ctx, place, 1, src)
+	// Only the first candidate is used — the caller named one place and gets
+	// one answer, and offering candidates is /weather/search's job, which is
+	// the surface with a human to choose between them.
+	results, status, err := h.svc.Search(ctx, place, placeGeocodeLimit, src)
 	if err != nil {
 		httpresp.ServerError(w, ctx, "weather place lookup", err)
 		return nil, false
@@ -464,11 +486,6 @@ const (
 	maxLocationLabelLen  = 100
 	maxLocationRegionLen = 10
 )
-
-// maxPlaceQueryLen caps the free-text ?place= at the same length
-// /weather/search caps `q`: the value reaches the geocoder and becomes part of
-// a cache key, so it is bounded at the boundary rather than downstream.
-const maxPlaceQueryLen = 200
 
 // putLocations replaces the user's whole saved list (replace, not patch —
 // same contract as the dashboard layout). Provided ids are preserved so

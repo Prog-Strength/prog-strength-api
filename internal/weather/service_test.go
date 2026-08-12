@@ -116,12 +116,17 @@ func (f *fakeProvider) Daily(ctx context.Context, lat, lon float64) (Daily, erro
 	return f.daily, nil
 }
 
+// GeocodeDirect honors limit because the real provider does — it forwards the
+// value to /geo/1.0/direct, which returns at most that many. A fake that
+// ignored it would hide what the caller's limit does to the CACHED row, which
+// is written from the provider's full response and shared with every other
+// caller of that query.
 func (f *fakeProvider) GeocodeDirect(ctx context.Context, query string, limit int) ([]GeoResult, error) {
 	f.calls[EndpointGeocodeDirect]++
 	if err := f.errs[EndpointGeocodeDirect]; err != nil {
 		return nil, err
 	}
-	return f.direct, nil
+	return truncated(f.direct, limit), nil
 }
 
 func (f *fakeProvider) GeocodeReverse(ctx context.Context, lat, lon float64) ([]GeoResult, error) {

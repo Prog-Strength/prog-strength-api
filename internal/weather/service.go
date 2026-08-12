@@ -106,9 +106,9 @@ func (p *endpointPlan) servedStale() bool {
 // endpoint, one atomic budget reservation for everything non-fresh, then
 // per-endpoint provider calls with stale fallback. Increments requestsTotal
 // exactly once with the final outcome.
-func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
+func (s *Service) Readings(ctx context.Context, lat, lon float64, source Source) Reading {
 	if !s.cfg.Enabled || !s.provider.Configured() {
-		requestsTotal.WithLabelValues("disabled").Inc()
+		requestsTotal.WithLabelValues("disabled", string(source)).Inc()
 		return Reading{Status: StatusDisabled}
 	}
 
@@ -222,7 +222,7 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 	}
 
 	if len(toFetch) == 0 {
-		requestsTotal.WithLabelValues("cache_hit").Inc()
+		requestsTotal.WithLabelValues("cache_hit", string(source)).Inc()
 		s.log.DebugContext(ctx, "weather: readings cache hit", "lat", lat, "lon", lon)
 		return assemble(StatusOK)
 	}
@@ -231,7 +231,7 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 	// partial refresh can't consume budget it wasn't granted.
 	switch err := s.budget.Reserve(ctx, len(toFetch), activeCeiling(s.cfg)); {
 	case errors.Is(err, ErrBudgetExhausted):
-		requestsTotal.WithLabelValues("budget_exhausted").Inc()
+		requestsTotal.WithLabelValues("budget_exhausted", string(source)).Inc()
 		s.log.WarnContext(ctx, "weather: budget exhausted; serving cache as-is",
 			"lat", lat, "lon", lon, "wanted", len(toFetch))
 		return assemble(StatusBudgetExhausted)
@@ -265,14 +265,14 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 	// payload is never silently thin.
 	switch {
 	case !currentPlan.served():
-		requestsTotal.WithLabelValues("failed").Inc()
+		requestsTotal.WithLabelValues("failed", string(source)).Inc()
 		s.log.WarnContext(ctx, "weather: readings unavailable", "lat", lat, "lon", lon)
 		return assemble(StatusUnavailable)
 	case anyDegraded(plans):
-		requestsTotal.WithLabelValues("served_stale").Inc()
+		requestsTotal.WithLabelValues("served_stale", string(source)).Inc()
 		return assemble(StatusStale)
 	default:
-		requestsTotal.WithLabelValues("served").Inc()
+		requestsTotal.WithLabelValues("served", string(source)).Inc()
 		return assemble(StatusOK)
 	}
 }
@@ -281,8 +281,8 @@ func (s *Service) Readings(ctx context.Context, lat, lon float64) Reading {
 // key. Geocoding reserves budget only when cfg.CountGeocodingCalls is set.
 // Errors degrade to (nil, StatusUnavailable, nil) — callers never see raw
 // provider failures.
-func (s *Service) Search(ctx context.Context, query string, limit int) ([]GeoResult, Status, error) {
-	return s.geocode(ctx, GeocodeDirectKey(query), EndpointGeocodeDirect, limit,
+func (s *Service) Search(ctx context.Context, query string, limit int, source Source) ([]GeoResult, Status, error) {
+	return s.geocode(ctx, GeocodeDirectKey(query), EndpointGeocodeDirect, limit, source,
 		func(ctx context.Context) ([]GeoResult, error) {
 			return s.provider.GeocodeDirect(ctx, query, limit)
 		})
@@ -292,8 +292,8 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]GeoRes
 // the reverse key. There is no caller-facing limit: the provider pins
 // limit=1 upstream (reverse lookup exists to label a coordinate), so the
 // geocode flow gets 0 = uncapped.
-func (s *Service) Reverse(ctx context.Context, lat, lon float64) ([]GeoResult, Status, error) {
-	return s.geocode(ctx, GeocodeReverseKey(lat, lon), EndpointGeocodeReverse, 0,
+func (s *Service) Reverse(ctx context.Context, lat, lon float64, source Source) ([]GeoResult, Status, error) {
+	return s.geocode(ctx, GeocodeReverseKey(lat, lon), EndpointGeocodeReverse, 0, source,
 		func(ctx context.Context) ([]GeoResult, error) {
 			return s.provider.GeocodeReverse(ctx, lat, lon)
 		})
@@ -313,9 +313,9 @@ func truncated(results []GeoResult, limit int) []GeoResult {
 // geocode is the shared Search/Reverse flow: fresh cache serves directly, an
 // expired row is refetched but kept as the stale fallback, budget refusal or
 // provider failure degrades. Increments requestsTotal exactly once.
-func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, limit int, call func(ctx context.Context) ([]GeoResult, error)) ([]GeoResult, Status, error) {
+func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, limit int, source Source, call func(ctx context.Context) ([]GeoResult, error)) ([]GeoResult, Status, error) {
 	if !s.cfg.Enabled || !s.provider.Configured() {
-		requestsTotal.WithLabelValues("disabled").Inc()
+		requestsTotal.WithLabelValues("disabled", string(source)).Inc()
 		return nil, StatusDisabled, nil
 	}
 
@@ -330,7 +330,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 		return nil
 	}, nil)
 	if state == cacheFresh {
-		requestsTotal.WithLabelValues("cache_hit").Inc()
+		requestsTotal.WithLabelValues("cache_hit", string(source)).Inc()
 		s.log.DebugContext(ctx, "weather: geocode cache hit", "endpoint", endpoint, "key", key)
 		return truncated(results, limit), StatusOK, nil
 	}
@@ -338,7 +338,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 	// fallback if the refetch cannot happen; a successful fetch overwrites it.
 	staleAvailable := state == cacheStale
 	serveStale := func() ([]GeoResult, Status, error) {
-		requestsTotal.WithLabelValues("served_stale").Inc()
+		requestsTotal.WithLabelValues("served_stale", string(source)).Inc()
 		s.log.WarnContext(ctx, "weather: serving expired geocode row",
 			"endpoint", endpoint, "key", key)
 		return truncated(results, limit), StatusStale, nil
@@ -350,7 +350,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 			if staleAvailable {
 				return serveStale()
 			}
-			requestsTotal.WithLabelValues("budget_exhausted").Inc()
+			requestsTotal.WithLabelValues("budget_exhausted", string(source)).Inc()
 			return nil, StatusBudgetExhausted, nil
 		case err != nil:
 			// Broken ledger degrades like a provider failure.
@@ -359,7 +359,7 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 			if staleAvailable {
 				return serveStale()
 			}
-			requestsTotal.WithLabelValues("failed").Inc()
+			requestsTotal.WithLabelValues("failed", string(source)).Inc()
 			return nil, StatusUnavailable, nil
 		}
 	}
@@ -384,11 +384,11 @@ func (s *Service) geocode(ctx context.Context, key string, endpoint Endpoint, li
 		if staleAvailable {
 			return serveStale()
 		}
-		requestsTotal.WithLabelValues("failed").Inc()
+		requestsTotal.WithLabelValues("failed", string(source)).Inc()
 		return nil, StatusUnavailable, nil
 	}
 	s.putCache(ctx, key, payload, now)
-	requestsTotal.WithLabelValues("served").Inc()
+	requestsTotal.WithLabelValues("served", string(source)).Inc()
 	return truncated(results, limit), StatusOK, nil
 }
 

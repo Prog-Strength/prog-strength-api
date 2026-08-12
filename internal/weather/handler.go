@@ -213,7 +213,7 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		loc = &locs[0]
 	}
 
-	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon)
+	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon, SourceTile)
 	if reading.Status == StatusDisabled {
 		// Provider unconfigured (no API key) — same disabled shape as the
 		// cfg kill switch above.
@@ -549,7 +549,10 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 		limit = v
 	}
 
-	results, status, err := h.svc.Search(ctx, q, limit)
+	// /weather/search and /weather/reverse are the dashboard popover's
+	// location picker; there is no agent tool for either, so they are
+	// attributed to the tile rather than growing a ?source= of their own.
+	results, status, err := h.svc.Search(ctx, q, limit, SourceTile)
 	if err != nil {
 		httpresp.ServerError(w, ctx, "weather search", err)
 		return
@@ -573,7 +576,7 @@ func (h *Handler) reverse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, status, err := h.svc.Reverse(ctx, lat, lon)
+	results, status, err := h.svc.Reverse(ctx, lat, lon, SourceTile)
 	if err != nil {
 		httpresp.ServerError(w, ctx, "weather reverse geocode", err)
 		return

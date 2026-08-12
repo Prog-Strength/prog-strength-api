@@ -2,15 +2,20 @@ package weather
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// Prometheus series for the weather dashboard tile — the data behind the
-// "Weather Tile" Grafana dashboard and its budget alerts. Counters mirror
-// the decision points the structured logs narrate; gauges are published by
-// the Exporter (collector.go) from durable SQLite state.
+// Prometheus series for the weather feature — the data behind the "Weather
+// Tile" Grafana dashboard and its budget alerts. Counters mirror the decision
+// points the structured logs narrate; gauges are published by the Exporter
+// (collector.go) from durable SQLite state.
 //
-// Cardinality: every label is a small closed set (outcomes, five endpoints,
-// cache events, two-way results). Safe at any traffic.
+// Cardinality: every label is a small closed set (outcomes, two sources, five
+// endpoints, cache events, two-way results). Safe at any traffic.
 
-// requestsTotal counts weather tile requests by final disposition:
+// requestsTotal counts weather requests by final disposition and by the
+// surface that asked (see source.go). The two surfaces share one budget and
+// one cache, so `source` splits attribution without pretending they are
+// isolated; every other series in this file stays unlabelled for that reason.
+//
+// Disposition:
 //
 //	cache_hit        — served from a fresh cache row, no external calls
 //	served           — provider answered, cache refreshed; every section present and fresh
@@ -21,9 +26,9 @@ import "github.com/prometheus/client_golang/prometheus"
 var requestsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_weather_requests_total",
-		Help: "Weather tile requests by final disposition (cache_hit/served/served_stale/budget_exhausted/disabled/failed).",
+		Help: "Weather requests by final disposition (cache_hit/served/served_stale/budget_exhausted/disabled/failed) and requesting surface (tile/agent).",
 	},
-	[]string{"outcome"},
+	[]string{"outcome", "source"},
 )
 
 // providerCallsTotal counts external OpenWeather calls by endpoint

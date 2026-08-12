@@ -955,6 +955,151 @@ func TestReadingsDefaultsSourceToTile(t *testing.T) {
 	}
 }
 
+// ---- ?place= ---------------------------------------------------------------
+
+// A user who says "Denver" and has Denver saved gets THEIR Denver — the
+// coordinates they curated — and it costs no provider call at all.
+func TestReadingsPlaceMatchesSavedLabelWithoutGeocoding(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	saved := f.seed(t, denverLocation())
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=denver", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Location == nil || data.Location.ID != saved[0].ID {
+		t.Fatalf("location = %+v, want the saved location %q", data.Location, saved[0].ID)
+	}
+	if n := f.provider.calls[EndpointGeocodeDirect]; n != 0 {
+		t.Errorf("geocode calls = %d, want 0 for a place the user already saved", n)
+	}
+}
+
+func TestReadingsPlaceFallsThroughToGeocoding(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+	f.provider.direct = []GeoResult{{Name: "Boulder", State: "Colorado", Country: "US", Lat: testLat, Lon: testLon}}
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Location == nil {
+		t.Fatal("location missing")
+	}
+	if data.Location.ID != "" {
+		t.Errorf("location.id = %q, want an empty string for an unsaved place", data.Location.ID)
+	}
+	if data.Location.Label != "Boulder" {
+		t.Errorf("location.label = %q, want Boulder", data.Location.Label)
+	}
+	if data.Location.State == nil || *data.Location.State != "Colorado" {
+		t.Errorf("location.state = %v, want Colorado", data.Location.State)
+	}
+	if data.Location.Country != "US" {
+		t.Errorf("location.country = %q, want US", data.Location.Country)
+	}
+	if n := f.provider.calls[EndpointGeocodeDirect]; n != 1 {
+		t.Errorf("geocode calls = %d, want 1", n)
+	}
+}
+
+// An empty `id` must survive JSON encoding as "" rather than being dropped, or
+// a client reading location.id gets undefined instead of a known-empty value.
+func TestReadingsAdHocPlaceKeepsAnEmptyIDInTheBody(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+	f.provider.direct = []GeoResult{{Name: "Moab", Country: "US", Lat: testLat, Lon: testLon}}
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Moab", "")
+
+	if !strings.Contains(w.Body.String(), `"id":""`) {
+		t.Fatalf("body does not carry an empty id: %s", w.Body.String())
+	}
+}
+
+func TestReadingsUnknownPlaceIs404(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+	f.provider.direct = nil
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Xyzzyville", "")
+
+	wantError(t, w, http.StatusNotFound, "place not found", "place_not_found")
+}
+
+// A geocode that degraded (budget spent, provider down) is not evidence the
+// place does not exist. Saying "no such place" there would have the agent deny
+// a real city, so the disposition is reported instead. Budget is the branch
+// driven here because a ceiling of 0 refuses the geocode reservation outright —
+// cfg.CountGeocodingCalls is on, so the geocode path does reserve.
+func TestReadingsDegradedGeocodeReportsStatusNotPlaceNotFound(t *testing.T) {
+	cfg := handlerCfg()
+	cfg.DailyCallBudget = 0
+	f := newHandlerFixture(t, cfg, user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var data readingsData
+	decodeData(t, w, &data)
+	if data.Status != string(StatusBudgetExhausted) {
+		t.Errorf("status = %q, want %q", data.Status, StatusBudgetExhausted)
+	}
+	if strings.Contains(w.Body.String(), "place_not_found") {
+		t.Errorf("a refused geocode was reported as an unknown place: %s", w.Body.String())
+	}
+	if n := f.provider.calls[EndpointGeocodeDirect]; n != 0 {
+		t.Errorf("geocode calls = %d, want 0 with the reservation refused", n)
+	}
+}
+
+func TestReadingsPlaceAndLocationIDTogetherIs400(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	saved := f.seed(t, denverLocation())
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder&location_id="+saved[0].ID, "")
+
+	wantError(t, w, http.StatusBadRequest, "place and location_id are mutually exclusive", "")
+	if f.provider.total() != 0 {
+		t.Errorf("provider called %d times on a 400, want 0", f.provider.total())
+	}
+}
+
+func TestReadingsPlaceTooLongIs400(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+	f.seed(t, denverLocation())
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place="+strings.Repeat("a", maxPlaceQueryLen+1), "")
+
+	wantError(t, w, http.StatusBadRequest, "place is too long (max 200 characters)", "")
+	if f.provider.total() != 0 {
+		t.Errorf("provider called %d times on a 400, want 0", f.provider.total())
+	}
+}
+
+// A user with no saved locations can still ask about a place by name — that is
+// the whole point of the parameter, so `place` must not be gated on the
+// no_locations check that guards the default path.
+func TestReadingsPlaceWorksWithNoSavedLocations(t *testing.T) {
+	f := newHandlerFixture(t, handlerCfg(), user.DistanceUnitMiles)
+
+	w := f.do(t, "GET", "/weather?timezone=America/Denver&place=Boulder", "")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+}
+
 // ---- unit-preference fallback ----------------------------------------------
 
 // failingUserReader always errors, standing in for a flaky users table.

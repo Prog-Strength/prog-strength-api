@@ -13,7 +13,8 @@ import "github.com/prometheus/client_golang/prometheus"
 // requestsTotal counts weather requests by final disposition and by the
 // surface that asked (see source.go). The two surfaces share one budget and
 // one cache, so `source` splits attribution without pretending they are
-// isolated; every other series in this file stays unlabelled for that reason.
+// isolated; every other series in this file carries no `source` label for
+// that reason.
 //
 // Disposition:
 //

@@ -12,19 +12,17 @@ const (
 	SourceAgent Source = "agent"
 )
 
-// ParseSource resolves the ?source= query value, reporting false for anything
-// outside the closed set. An absent value is the tile: that surface shipped
-// first, so defaulting this way is what lets the existing web client keep
-// working unedited. An unrecognized value is rejected rather than coerced to
-// the default — a metric label taken from arbitrary caller input is an
-// unbounded-cardinality hazard, and a silent coercion would also hide a
-// client bug behind plausible-looking data.
+// ParseSource resolves the ?source= query value. An absent value is the tile:
+// that surface shipped first, so defaulting this way is what lets the existing
+// web client keep working unedited. An unrecognized value is rejected rather
+// than coerced to the default — a metric label taken from arbitrary caller
+// input is an unbounded-cardinality hazard.
 func ParseSource(raw string) (Source, bool) {
-	switch Source(raw) {
+	switch src := Source(raw); src {
 	case "":
 		return SourceTile, true
 	case SourceTile, SourceAgent:
-		return Source(raw), true
+		return src, true
 	default:
 		return "", false
 	}

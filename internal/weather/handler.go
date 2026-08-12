@@ -213,6 +213,7 @@ func (h *Handler) readings(w http.ResponseWriter, r *http.Request) {
 		loc = &locs[0]
 	}
 
+	// Replaced with the parsed ?source= when that parameter lands.
 	reading := h.svc.Readings(ctx, loc.Lat, loc.Lon, SourceTile)
 	if reading.Status == StatusDisabled {
 		// Provider unconfigured (no API key) — same disabled shape as the

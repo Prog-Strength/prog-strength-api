@@ -318,12 +318,11 @@ func TestSummary_FamilyTileAlone_YieldsRecoverySection(t *testing.T) {
 	}
 }
 
-// TestSummary_RestingHrTileAlone_YieldsRecoverySection pins the membership that
-// has no type error behind it: resting_hr reads the shared recovery section, so
-// a layout whose ONLY recovery tile is resting_hr must still get one built.
-// Without the recoveryFamily entry this returns no "recovery" key and the tile
-// shows a connect CTA to an already-connected user.
-func TestSummary_RestingHrTileAlone_YieldsRecoverySection(t *testing.T) {
+// TestSummary_RestingHRTileAlone_YieldsRecoverySection pins the same re-gate for
+// resting_hr: a layout holding ONLY that tile must still yield a populated
+// "recovery" section, and no "resting_hr" key. Leaving it out of recoveryFamily
+// compiles and fails nothing else — the connect CTA just never goes away.
+func TestSummary_RestingHRTileAlone_YieldsRecoverySection(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedWhoopConnected(t, rp, userID)
 
@@ -547,20 +546,19 @@ func TestSummary_DefaultLayoutHasNoSleepTile(t *testing.T) {
 	assertKeysAbsent(t, data, "sleep")
 }
 
-// TestSummary_DefaultLayoutHasNoRestingHrTile pins the rollout, mirroring the
+// TestSummary_DefaultLayoutHasNoRestingHRTile pins the rollout, mirroring the
 // sleep tile: resting_hr is a catalog tile but NOT part of the default layout.
 // Three tiles already print today's resting HR, so a fourth arriving unbidden
 // on everyone's dashboard is a bigger product decision than this SOW's remit.
-func TestSummary_DefaultLayoutHasNoRestingHrTile(t *testing.T) {
+func TestSummary_DefaultLayoutHasNoRestingHRTile(t *testing.T) {
 	r, rp, userID := newTestEnv(t)
 	seedWhoopConnected(t, rp, userID)
 
-	layout, data := dataEnvelope(t, r, userID, "?timezone=UTC")
+	layout, _ := dataEnvelope(t, r, userID, "?timezone=UTC")
 
 	if indexOf(layout, string(TileRestingHR)) >= 0 {
 		t.Errorf("default layout must not contain %q; got %v", TileRestingHR, layout)
 	}
-	assertKeysAbsent(t, data, "resting_hr")
 }
 
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family

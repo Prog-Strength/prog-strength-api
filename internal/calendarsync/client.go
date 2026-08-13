@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -39,11 +40,39 @@ type GoogleEvent struct {
 	Timezone    string // IANA; written as the event's time zone
 }
 
-// CalendarClient writes events to a user's Google calendar. Fakeable for tests.
+// CalendarClient reads and writes events on a user's Google calendar.
+// Fakeable for tests.
 type CalendarClient interface {
 	InsertEvent(ctx context.Context, accessToken, calendarID string, ev GoogleEvent) (eventID string, err error)
 	PatchEvent(ctx context.Context, accessToken, calendarID, eventID string, ev GoogleEvent) error
 	DeleteEvent(ctx context.Context, accessToken, calendarID, eventID string) error
+	// ListEvents reads the events between timeMin and timeMax. See the
+	// implementation for why singleEvents=true is not optional.
+	ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error)
+}
+
+// ListedEvent is one event as events.list returned it, normalized just enough
+// that the service never touches Google's wire shape.
+//
+// Google models all-day events as CALENDAR DAYS (`date`, with an exclusive
+// end) and timed events as instants (`dateTime`). The two are kept apart here
+// rather than flattened into a single instant pair: an all-day event has no
+// time zone of its own, so converting it to an instant means inventing one,
+// and a multi-day all-day event has to be expanded across the days it covers
+// by date arithmetic, not by clock arithmetic.
+type ListedEvent struct {
+	ID      string
+	Summary string
+	AllDay  bool
+	// Timed events only, in UTC.
+	Start time.Time
+	End   time.Time
+	// All-day events only, YYYY-MM-DD. EndDate is EXCLUSIVE, as Google sends it.
+	StartDate string
+	EndDate   string
+	// Declined reports that THIS user's own attendee entry says "declined".
+	// Another attendee declining is not this user declining.
+	Declined bool
 }
 
 // eventTime is the Google Calendar {dateTime, timeZone} shape. dateTime is an
@@ -60,6 +89,29 @@ type eventBody struct {
 	Description string    `json:"description,omitempty"`
 	Start       eventTime `json:"start"`
 	End         eventTime `json:"end"`
+}
+
+// listedEventTime is Google's {dateTime | date} union on an event's start/end.
+type listedEventTime struct {
+	DateTime string `json:"dateTime"`
+	Date     string `json:"date"`
+}
+
+type listedAttendee struct {
+	Self           bool   `json:"self"`
+	ResponseStatus string `json:"responseStatus"`
+}
+
+type listedEventBody struct {
+	ID        string           `json:"id"`
+	Summary   string           `json:"summary"`
+	Start     listedEventTime  `json:"start"`
+	End       listedEventTime  `json:"end"`
+	Attendees []listedAttendee `json:"attendees"`
+}
+
+type listResponse struct {
+	Items []listedEventBody `json:"items"`
 }
 
 // toBody renders a GoogleEvent into the wire shape. The window is emitted as
@@ -145,6 +197,91 @@ func (c *googleCalendarClient) DeleteEvent(ctx context.Context, accessToken, cal
 	}
 	defer resp.Body.Close()
 	return classifyStatus(resp.StatusCode)
+}
+
+// ListEvents reads the user's events in [timeMin, timeMax).
+//
+// singleEvents=true is LOAD-BEARING and is the parameter most likely to be
+// dropped by someone simplifying this query. Without it Google returns the
+// recurring RULE — one event carrying an RRULE and the series' original start
+// date — so a daily standup either vanishes from the tile or appears on the
+// day the series began, once. orderBy=startTime is rejected by the API unless
+// singleEvents is set, so the two travel together.
+//
+// A 401/403 maps to ErrTokenRejected exactly as the write path's calls do; the
+// caller decides whether that should revoke the connection.
+func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error) {
+	q := url.Values{}
+	q.Set("timeMin", timeMin.Format(time.RFC3339))
+	q.Set("timeMax", timeMax.Format(time.RFC3339))
+	q.Set("singleEvents", "true")
+	q.Set("orderBy", "startTime")
+	q.Set("showDeleted", "false")
+	q.Set("maxResults", strconv.Itoa(maxResults))
+
+	u := fmt.Sprintf("%s/calendars/%s/events?%s", calendarAPIBase, url.PathEscape(calendarID), q.Encode())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("calendarsync: build list request: %w", err)
+	}
+	resp, err := c.do(req, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := classifyStatus(resp.StatusCode); err != nil {
+		return nil, err
+	}
+	var out listResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("calendarsync: decode list response: %w", err)
+	}
+
+	events := make([]ListedEvent, 0, len(out.Items))
+	for _, item := range out.Items {
+		ev, ok := toListedEvent(item)
+		if !ok {
+			continue
+		}
+		events = append(events, ev)
+	}
+	return events, nil
+}
+
+// toListedEvent normalizes one wire item. It reports false for an event with
+// neither a dateTime nor a date on its start — a shape Google should never
+// send, and one with nowhere to be rendered.
+func toListedEvent(item listedEventBody) (ListedEvent, bool) {
+	ev := ListedEvent{ID: item.ID, Summary: item.Summary}
+	for _, a := range item.Attendees {
+		if a.Self && a.ResponseStatus == "declined" {
+			ev.Declined = true
+			break
+		}
+	}
+	switch {
+	case item.Start.Date != "":
+		ev.AllDay = true
+		ev.StartDate = item.Start.Date
+		ev.EndDate = item.End.Date
+	case item.Start.DateTime != "":
+		start, err := time.Parse(time.RFC3339, item.Start.DateTime)
+		if err != nil {
+			return ListedEvent{}, false
+		}
+		ev.Start = start.UTC()
+		// A missing end is not fatal: treat a zero-length event as ending
+		// when it starts rather than dropping it off the tile.
+		ev.End = ev.Start
+		if item.End.DateTime != "" {
+			if end, endErr := time.Parse(time.RFC3339, item.End.DateTime); endErr == nil {
+				ev.End = end.UTC()
+			}
+		}
+	default:
+		return ListedEvent{}, false
+	}
+	return ev, true
 }
 
 // do sets the Bearer auth + content type and issues the request. JSON bodies

@@ -131,7 +131,9 @@ type EventsServiceDeps struct {
 // sync. Only ErrTokenRejected (401/403) touches the connection; everything
 // else degrades to "unavailable" and leaves it alone.
 type EventsService struct {
-	conns  calendarconn.Repository
+	// The connection repository is reached through conn, exactly as
+	// ActivityService reaches it for the identical revoke — a second field
+	// holding the same repository would be one more thing to keep in step.
 	conn   *connector
 	client CalendarClient
 	links  EventLinkRepository
@@ -146,7 +148,6 @@ func NewEventsService(d EventsServiceDeps) *EventsService {
 		now = time.Now
 	}
 	return &EventsService{
-		conns:  d.Conns,
 		conn:   &connector{conns: d.Conns, cipher: d.Cipher, tokens: d.Tokens, now: now},
 		client: d.Client,
 		links:  d.Links,
@@ -201,13 +202,22 @@ func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow
 		}
 	}
 
-	maxResults := s.maxResults(w)
-	raw, err := s.client.ListEvents(ctx, g.AccessToken, g.CalendarID, w.StartUTC, w.EndUTC, maxResults)
+	// ALWAYS ask for Google's whole page, never for what the window can hold.
+	// Only the first page is read, and orderBy=startTime sorts ascending, so a
+	// page that fills up loses the window's LAST days — which come back empty
+	// and render as free days, indistinguishable from a genuinely free weekend.
+	// That is a silent drop, and `truncated` exists precisely so the per-day
+	// cap is never silent. Sizing the page at MaxEventsPerDay * days would put
+	// the request exactly at the window's worst-case capacity rather than
+	// comfortably above it. Google is free at a million queries a day and the
+	// surplus is discarded here, so the larger page removes the failure mode
+	// instead of merely making it unlikely.
+	raw, err := s.client.ListEvents(ctx, g.AccessToken, g.CalendarID, w.StartUTC, w.EndUTC, googleMaxResults)
 	if err != nil {
 		if errors.Is(err, ErrTokenRejected) {
 			// 401/403 only. This is the one failure that means the grant is
 			// gone; see the type's doc comment for why a 429 must not land here.
-			_ = s.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
+			_ = s.conn.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
 			return nil, EventsStatusReconnectNeeded
 		}
 		return nil, EventsStatusUnavailable
@@ -226,25 +236,9 @@ func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow
 // googleMaxResults is the largest page events.list will return.
 const googleMaxResults = 2500
 
-// maxResults bounds the Google page. Asking for the per-day cap across every
-// day in the window means the per-day cap is what actually truncates, so the
-// `truncated` counts stay meaningful; the ceiling is Google's own maximum.
-//
-// MaxEventsPerDay of 0 means "no per-day cap" — config.CalendarEventsConfig
-// documents that zero value — so it asks for the whole page rather than the
-// one event a literal 0 * days would buy: an uncapped tile showing a single
-// event is the opposite of what the operator asked for. A window with no dates
-// is degenerate and gets the same treatment. The multiply is guarded rather
-// than clamped afterwards, since an overflowed product reads as "ask for one".
-func (s *EventsService) maxResults(w EventsWindow) int {
-	days := len(datesInWindow(w))
-	if s.cfg.MaxEventsPerDay <= 0 || days <= 0 || s.cfg.MaxEventsPerDay > googleMaxResults/days {
-		return googleMaxResults
-	}
-	return s.cfg.MaxEventsPerDay * days
-}
-
-// group buckets the listed events into dense local days.
+// group buckets the listed events into dense local days. It is the only place
+// the window's local dates are computed — the page size no longer derives from
+// them — so there is no second copy to drift out of step with this one.
 func (s *EventsService) group(raw []ListedEvent, links map[string]EventLink, w EventsWindow) []Day {
 	dates := datesInWindow(w)
 	byDate := make(map[string][]Event, len(dates))

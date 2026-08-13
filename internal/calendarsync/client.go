@@ -221,9 +221,12 @@ func (c *googleCalendarClient) DeleteEvent(ctx context.Context, accessToken, cal
 // orderBy=startTime sorts ascending, anything truncated is the TAIL of the
 // window: the last days come back empty and render as free days, which a
 // caller cannot tell apart from a genuinely empty weekend. That is a silent
-// drop, so it is only acceptable while the caller's maxResults comfortably
-// exceeds what the window can hold (max_events_per_day * days — 400 over the
-// tile's 8 days). Follow nextPageToken if the window ever widens.
+// drop, so a caller must pass a maxResults that comfortably exceeds what its
+// window can hold. EventsService passes the API's maximum (2500) on every
+// request rather than sizing the page to the window — sizing it to the window
+// would put the request exactly AT the window's capacity — so the tile, capped
+// at 31 days, cannot reach this. Follow nextPageToken if a caller ever needs a
+// window one page cannot cover.
 func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error) {
 	q := url.Values{}
 	q.Set("timeMin", timeMin.Format(time.RFC3339))

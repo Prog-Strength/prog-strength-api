@@ -49,14 +49,53 @@ func TestEventsCache_ReturnsACopy(t *testing.T) {
 	now := time.Now()
 	c := newEventsCache(time.Minute, func() time.Time { return now })
 	key := eventsCacheKey{UserID: "u1", Start: "a", End: "b", Timezone: "UTC"}
-	c.put(key, []Day{{Date: "2026-08-10", Events: []Event{{ID: "x"}}}})
+	c.put(key, []Day{{Date: "2026-08-10", Events: []Event{
+		{ID: "x", Link: &EventLink{Kind: LinkKindPlannedWorkout, ID: "pw_1"}},
+	}}})
 
 	got, _ := c.get(key)
 	got[0].Events[0].ID = "mutated"
+	got[0].Events[0].Link.ID = "mutated"
 
 	again, _ := c.get(key)
 	if again[0].Events[0].ID != "x" {
 		t.Error("a caller mutating its result must not corrupt the cache")
+	}
+	// Link is a pointer: copying the Event alone would leave the cache and
+	// every caller sharing one EventLink.
+	if again[0].Events[0].Link.ID != "pw_1" {
+		t.Errorf("link id = %q, want pw_1 — the link must be copied too", again[0].Events[0].Link.ID)
+	}
+}
+
+// The cache holds one window per user, and that is what bounds it: the window
+// slides with the calendar, so keying the map by the window would strand an
+// entry per user per day that no later read is ever able to evict.
+func TestEventsCache_KeepsOneEntryPerUser(t *testing.T) {
+	now := time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC)
+	c := newEventsCache(time.Minute, func() time.Time { return now })
+	yesterday := eventsCacheKey{UserID: "u1", Start: "2026-08-11", End: "2026-08-18", Timezone: "UTC"}
+	today := eventsCacheKey{UserID: "u1", Start: "2026-08-12", End: "2026-08-19", Timezone: "UTC"}
+
+	c.put(yesterday, []Day{{Date: "2026-08-11"}})
+	c.put(today, []Day{{Date: "2026-08-12"}})
+	c.put(eventsCacheKey{UserID: "u2", Start: "2026-08-12", End: "2026-08-19", Timezone: "UTC"},
+		[]Day{{Date: "2026-08-12"}})
+
+	if got := len(c.entries); got != 2 {
+		t.Errorf("cache holds %d entries, want one per user (2)", got)
+	}
+	// The superseded window must be gone — and gone as a MISS, never as
+	// yesterday's days served under today's dates.
+	if _, ok := c.get(yesterday); ok {
+		t.Error("a superseded window must not still be served")
+	}
+	days, ok := c.get(today)
+	if !ok {
+		t.Fatal("the current window must still hit")
+	}
+	if days[0].Date != "2026-08-12" {
+		t.Errorf("cached day = %q, want the window that was asked for", days[0].Date)
 	}
 }
 

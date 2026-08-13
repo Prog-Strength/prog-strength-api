@@ -288,49 +288,65 @@ func TestEvents_QueryCarriesSingleEventsAndOrderBy(t *testing.T) {
 	if got := q.Get("orderBy"); got != "startTime" {
 		t.Errorf("orderBy = %q, want startTime", got)
 	}
-	// The page is the per-day cap across the window's days, so the per-day cap
-	// is what actually truncates.
-	if got := q.Get("maxResults"); got != "400" {
-		t.Errorf("maxResults = %q, want 400 (50 * 8 days)", got)
+	// Only the first page is read, so the page must be far larger than the
+	// window can hold — see TestEvents_AlwaysRequestsGooglesWholePage.
+	if got := q.Get("maxResults"); got != "2500" {
+		t.Errorf("maxResults = %q, want 2500", got)
 	}
 }
 
-// config.CalendarEventsConfig documents max_events_per_day = 0 as "no cap".
-// The page we ask Google for has to honor that, or an operator who disabled
-// the cap would get ONE event per window instead of all of them.
-func TestEvents_PageSizeHonorsAnUncappedConfig(t *testing.T) {
-	t.Run("no per-day cap asks for Google's whole page", func(t *testing.T) {
-		cfg := defaultEventsConfig()
-		cfg.MaxEventsPerDay = 0
-		h := newEventsHarness(t, cfg, testUserID)
-		h.respond(http.StatusOK, `{"items":[
-			{"id":"e1","summary":"One","start":{"dateTime":"2026-08-12T13:00:00Z"},"end":{"dateTime":"2026-08-12T14:00:00Z"}},
-			{"id":"e2","summary":"Two","start":{"dateTime":"2026-08-12T14:00:00Z"},"end":{"dateTime":"2026-08-12T15:00:00Z"}}
-		]}`)
+// The page is Google's maximum whatever the config says. Sizing it at
+// MaxEventsPerDay * days would put the request exactly at the window's
+// worst-case capacity, and because only the first page is read and
+// orderBy=startTime sorts ascending, a full page loses the window's LAST days
+// — they come back empty and render as free days. `truncated` exists so the
+// per-day cap is never silent; a page that drops the tail is silent.
+func TestEvents_AlwaysRequestsGooglesWholePage(t *testing.T) {
+	cases := []struct {
+		name               string
+		maxEventsPerDay    int
+		startDate, endDate string
+	}{
+		// 50 * 8 days = 400, exactly what the tile's window can hold.
+		{"the tile's own window", 50, "2026-08-12", "2026-08-19"},
+		// config.CalendarEventsConfig documents 0 as "no per-day cap"; a
+		// literal 0 * days would ask for one event.
+		{"no per-day cap", 0, "2026-08-12", "2026-08-12"},
+		// 60 days * 50 = 3000, past what events.list will return anyway.
+		{"a window past Google's page", 50, "2026-08-12", "2026-10-10"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultEventsConfig()
+			cfg.MaxEventsPerDay = tc.maxEventsPerDay
+			h := newEventsHarness(t, cfg, testUserID)
 
-		res := h.svc.Events(context.Background(), testUserID, eventsWindow(t, "UTC", "2026-08-12", "2026-08-12"))
+			h.svc.Events(context.Background(), testUserID, eventsWindow(t, "UTC", tc.startDate, tc.endDate))
 
-		if got := h.lastQuery().Get("maxResults"); got != "2500" {
-			t.Errorf("maxResults = %q, want 2500 (Google's page maximum)", got)
-		}
-		day := dayFor(t, res.Days, "2026-08-12")
-		if len(day.Events) != 2 || day.Truncated != 0 {
-			t.Errorf("day = %+v, want both events and no truncation", day)
-		}
-	})
+			if got := h.lastQuery().Get("maxResults"); got != "2500" {
+				t.Errorf("maxResults = %q, want 2500 (Google's page maximum)", got)
+			}
+		})
+	}
+}
 
-	t.Run("a window wider than Google's page clamps", func(t *testing.T) {
-		cfg := defaultEventsConfig()
-		cfg.MaxEventsPerDay = 50
-		h := newEventsHarness(t, cfg, testUserID)
+// An uncapped config must still return every event it was given: the page size
+// is not allowed to become the cap by the back door.
+func TestEvents_UncappedConfigTruncatesNothing(t *testing.T) {
+	cfg := defaultEventsConfig()
+	cfg.MaxEventsPerDay = 0
+	h := newEventsHarness(t, cfg, testUserID)
+	h.respond(http.StatusOK, `{"items":[
+		{"id":"e1","summary":"One","start":{"dateTime":"2026-08-12T13:00:00Z"},"end":{"dateTime":"2026-08-12T14:00:00Z"}},
+		{"id":"e2","summary":"Two","start":{"dateTime":"2026-08-12T14:00:00Z"},"end":{"dateTime":"2026-08-12T15:00:00Z"}}
+	]}`)
 
-		// 60 days * 50 would be 3000, past what events.list will return.
-		h.svc.Events(context.Background(), testUserID, eventsWindow(t, "UTC", "2026-08-12", "2026-10-10"))
+	res := h.svc.Events(context.Background(), testUserID, eventsWindow(t, "UTC", "2026-08-12", "2026-08-12"))
 
-		if got := h.lastQuery().Get("maxResults"); got != "2500" {
-			t.Errorf("maxResults = %q, want 2500", got)
-		}
-	})
+	day := dayFor(t, res.Days, "2026-08-12")
+	if len(day.Events) != 2 || day.Truncated != 0 {
+		t.Errorf("day = %+v, want both events and no truncation", day)
+	}
 }
 
 func TestEvents_DropsDeclinedKeepsAcceptedAndNeedsAction(t *testing.T) {

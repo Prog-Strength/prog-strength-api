@@ -99,6 +99,13 @@ var lastSuccessfulSyncGauge = prometheus.NewGauge(
 // cache is split out because it is the only thing that makes the Google-call
 // rate interpretable: a healthy tile serves most reads from the 60s TTL, and a
 // sudden collapse in the cache-hit ratio means remounts, not usage.
+//
+// COMPUTE THAT RATIO WITHIN result="ok". The outcomes that short-circuit before
+// the cache is consulted at all — "disabled", and the "not_connected" that
+// every user who never opted in produces — are recorded as misses, so a naive
+// hit/(hit+miss) over the whole metric is diluted by reads that could never
+// have hit. "hit" only ever occurs alongside result="ok", which is what makes
+// the restricted ratio the honest one.
 var eventReadsTotal = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "api_calendar_event_reads_total",

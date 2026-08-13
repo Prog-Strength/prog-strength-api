@@ -639,6 +639,22 @@ func TestGetEvents_RejectsAnOversizeWindow(t *testing.T) {
 	}
 }
 
+// The REJECTING side of the boundary, one day past the limit. Without it the
+// cap is only pinned from below — 31 accepted and 91 rejected leave every
+// off-by-one in between (32, say) passing the suite.
+func TestGetEvents_RejectsAWindowOneDayOverTheCap(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	// 2026-08-10 through 2026-09-10 inclusive is 32 local days.
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-09-10")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for a 32-day window; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec); !strings.Contains(got, "31") {
+		t.Errorf("error = %q, want it to mention the 31-day cap", got)
+	}
+}
+
 // TestGetEvents_AcceptsTheMaximumWindowAcrossDST pins the cap's boundary AND
 // the arithmetic behind it. This window is exactly 31 INCLUSIVE local days, but
 // it spans Denver's fall-back, so it is 745 hours long — a cap that subtracted

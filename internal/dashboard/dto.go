@@ -109,6 +109,13 @@ type SleepNight struct {
 // connected Whoop connection exists. Today and RestingHRSpark are unchanged in
 // shape, semantics, and content; Days, Baseline, HRV, and BaselineTrend are
 // additive.
+//
+// Two routes serve this shape — the dashboard summary over its fixed window and
+// the recovery history read over a caller-supplied one — so a client maps it
+// once. Days is the charted window; Baseline, HRV and BaselineTrend describe
+// that window's FINAL day, which is today only while the window ends today.
+// BaselineTrend additionally needs at least baseline_drift_days + 1 charted days
+// to have a past to compare against, and reads "unknown" below that.
 type RecoverySection struct {
 	Today          *RecoveryDay          `json:"today"`            // nil when no row today
 	RestingHRSpark []float64             `json:"resting_hr_spark"` // trailing 7 days resting HR (oldest→newest), missing days omitted

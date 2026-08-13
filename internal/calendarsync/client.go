@@ -46,8 +46,11 @@ type CalendarClient interface {
 	InsertEvent(ctx context.Context, accessToken, calendarID string, ev GoogleEvent) (eventID string, err error)
 	PatchEvent(ctx context.Context, accessToken, calendarID, eventID string, ev GoogleEvent) error
 	DeleteEvent(ctx context.Context, accessToken, calendarID, eventID string) error
-	// ListEvents reads the events between timeMin and timeMax. See the
-	// implementation for why singleEvents=true is not optional.
+	// ListEvents reads the events between timeMin and timeMax. Any
+	// implementation MUST ask Google for singleEvents=true: without it the
+	// API returns a recurring event's RULE rather than its instances, so a
+	// daily standup either vanishes from the caller's window or lands once,
+	// on the day the series began.
 	ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error)
 }
 
@@ -67,7 +70,9 @@ type ListedEvent struct {
 	// Timed events only, in UTC.
 	Start time.Time
 	End   time.Time
-	// All-day events only, YYYY-MM-DD. EndDate is EXCLUSIVE, as Google sends it.
+	// All-day events only, YYYY-MM-DD. EndDate is EXCLUSIVE, as Google sends
+	// it, and is never empty on a returned event: an absent or unparseable
+	// end degrades to a single day rather than to "".
 	StartDate string
 	EndDate   string
 	// Declined reports that THIS user's own attendee entry says "declined".
@@ -210,6 +215,15 @@ func (c *googleCalendarClient) DeleteEvent(ctx context.Context, accessToken, cal
 //
 // A 401/403 maps to ErrTokenRejected exactly as the write path's calls do; the
 // caller decides whether that should revoke the connection.
+//
+// ONLY THE FIRST PAGE IS READ — nextPageToken is deliberately ignored, and
+// Google may set it even on a page shorter than maxResults. Because
+// orderBy=startTime sorts ascending, anything truncated is the TAIL of the
+// window: the last days come back empty and render as free days, which a
+// caller cannot tell apart from a genuinely empty weekend. That is a silent
+// drop, so it is only acceptable while the caller's maxResults comfortably
+// exceeds what the window can hold (max_events_per_day * days — 400 over the
+// tile's 8 days). Follow nextPageToken if the window ever widens.
 func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error) {
 	q := url.Values{}
 	q.Set("timeMin", timeMin.Format(time.RFC3339))
@@ -259,19 +273,39 @@ func toListedEvent(item listedEventBody) (ListedEvent, bool) {
 			break
 		}
 	}
+	// The order of these cases is load-bearing: a `date` on the START wins
+	// over a `dateTime`, so an event carrying both is classified all-day. An
+	// all-day event has no time zone of its own, so reading it as an instant
+	// means inventing one; the coarser shape is the safe classification, and
+	// only the start can decide it. Do not reorder.
 	switch {
 	case item.Start.Date != "":
+		start, err := time.Parse(time.DateOnly, item.Start.Date)
+		if err != nil {
+			return ListedEvent{}, false
+		}
 		ev.AllDay = true
 		ev.StartDate = item.Start.Date
-		ev.EndDate = item.End.Date
+		// A missing or unparseable end.date is not fatal, mirroring the timed
+		// branch below: degrade to a SINGLE-DAY event. Google's end.date is
+		// exclusive, so that is the day after the start — never "", which
+		// would leave the day expansion downstream with nothing to parse.
+		// This is also the shape an event with start.date + end.dateTime
+		// lands in, since the switch classifies on the start alone.
+		ev.EndDate = start.AddDate(0, 0, 1).Format(time.DateOnly)
+		if _, endErr := time.Parse(time.DateOnly, item.End.Date); endErr == nil {
+			ev.EndDate = item.End.Date
+		}
 	case item.Start.DateTime != "":
 		start, err := time.Parse(time.RFC3339, item.Start.DateTime)
 		if err != nil {
 			return ListedEvent{}, false
 		}
 		ev.Start = start.UTC()
-		// A missing end is not fatal: treat a zero-length event as ending
-		// when it starts rather than dropping it off the tile.
+		// A missing or unparseable end is not fatal: treat a zero-length
+		// event as ending when it starts rather than dropping it off the
+		// tile. (An unparseable START is fatal — there is no day to file the
+		// event under, so it has nowhere to be rendered.)
 		ev.End = ev.Start
 		if item.End.DateTime != "" {
 			if end, endErr := time.Parse(time.RFC3339, item.End.DateTime); endErr == nil {

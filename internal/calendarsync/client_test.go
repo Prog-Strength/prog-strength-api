@@ -250,6 +250,35 @@ func TestListEvents_ParsesTimedAndAllDay(t *testing.T) {
 	}
 }
 
+// TestListEvents_AllDayEndFallback pins the all-day branch's degradation. An
+// EndDate of "" is worse than a wrong one: Google's end.date is EXCLUSIVE, so
+// the day expansion downstream parses it, and "" makes a holiday either vanish
+// or poison the window.
+func TestListEvents_AllDayEndFallback(t *testing.T) {
+	body := `{"items":[
+		{"id":"a1","summary":"No end at all","start":{"date":"2026-08-14"}},
+		{"id":"a2","summary":"Start date, end dateTime","start":{"date":"2026-08-20"},"end":{"dateTime":"2026-08-20T17:00:00Z"}},
+		{"id":"a3","summary":"Unparseable end","start":{"date":"2026-08-25"},"end":{"date":"not-a-date"}},
+		{"id":"bad","summary":"Unparseable start","start":{"date":"nope"},"end":{"date":"2026-08-26"}}
+	]}`
+	events := listEventsWithBody(t, body)
+
+	// The unparseable START is dropped: there is no day to file it under.
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3 (an unparseable start.date must be dropped)", len(events))
+	}
+	for i, want := range []struct{ start, end string }{
+		{"2026-08-14", "2026-08-15"},
+		{"2026-08-20", "2026-08-21"},
+		{"2026-08-25", "2026-08-26"},
+	} {
+		ev := events[i]
+		if !ev.AllDay || ev.StartDate != want.start || ev.EndDate != want.end {
+			t.Errorf("event %d = %+v, want all-day %s→%s (exclusive)", i, ev, want.start, want.end)
+		}
+	}
+}
+
 func TestListEvents_DeclinedByTheUser(t *testing.T) {
 	body := `{"items":[
 		{"id":"d1","summary":"Declined","start":{"dateTime":"2026-08-12T09:00:00Z"},"end":{"dateTime":"2026-08-12T10:00:00Z"},

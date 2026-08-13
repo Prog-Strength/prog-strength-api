@@ -3,6 +3,7 @@ package calendarsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -463,6 +464,329 @@ func TestDeleteConnectionAbsent(t *testing.T) {
 	rec := doDelete(router, "/me/calendar/connection")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// --- GET /me/calendar/events ---
+
+// stubEventsClient is a CalendarClient serving a fixed list. These tests own
+// the HTTP contract of our endpoint, not Google's wire format — the events
+// service's own tests drive the REAL client against an httptest server, so a
+// fake here costs no coverage of the parsing it would otherwise hide.
+type stubEventsClient struct {
+	events []ListedEvent
+	err    error
+}
+
+func (s *stubEventsClient) InsertEvent(context.Context, string, string, GoogleEvent) (string, error) {
+	return "", errors.New("unused")
+}
+
+func (s *stubEventsClient) PatchEvent(context.Context, string, string, string, GoogleEvent) error {
+	return errors.New("unused")
+}
+
+func (s *stubEventsClient) DeleteEvent(context.Context, string, string, string) error {
+	return errors.New("unused")
+}
+
+func (s *stubEventsClient) ListEvents(context.Context, string, string, time.Time, time.Time, int) ([]ListedEvent, error) {
+	return s.events, s.err
+}
+
+// newEventsHandler builds a handler with an events service attached. Each id in
+// connectedUsers gets a connected calendar connection row; pass none for a user
+// who never opted in.
+func newEventsHandler(t *testing.T, client CalendarClient, connectedUsers ...string) *Handler {
+	t.Helper()
+
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
+	cipher := testCipher(t)
+	enc, nonce, err := cipher.Encrypt([]byte("refresh-token"))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	for _, userID := range connectedUsers {
+		if upErr := conns.Upsert(context.Background(), userID, enc, nonce, "primary", CalendarEventsScope, eventsNow); upErr != nil {
+			t.Fatalf("Upsert conn %s: %v", userID, upErr)
+		}
+	}
+
+	svc := NewEventsService(EventsServiceDeps{
+		Conns:  conns,
+		Cipher: cipher,
+		Client: client,
+		Links:  &stubLinks{},
+		Config: defaultEventsConfig(),
+		Now:    func() time.Time { return eventsNow },
+	})
+	svc.conn.tokens = fakeTokens{} // inject the fake token minter directly
+
+	h := newHandler(t, conns, "")
+	h.AttachEvents(svc)
+	return h
+}
+
+// eventsBody decodes the endpoint's data envelope. days is a pointer so a test
+// can tell an ABSENT key from an empty or null array — the contract turns on
+// that distinction.
+type eventsBody struct {
+	Status string `json:"status"`
+	Days   *[]struct {
+		Date      string `json:"date"`
+		Truncated int    `json:"truncated"`
+		Events    *[]struct {
+			ID     string `json:"id"`
+			Title  string `json:"title"`
+			Start  string `json:"start"`
+			End    string `json:"end"`
+			AllDay bool   `json:"all_day"`
+			Source string `json:"source"`
+			Link   *struct {
+				Kind string `json:"kind"`
+				ID   string `json:"id"`
+			} `json:"link"`
+		} `json:"events"`
+	} `json:"days"`
+}
+
+func decodeEvents(t *testing.T, rec *httptest.ResponseRecorder) eventsBody {
+	t.Helper()
+	var env struct {
+		Data eventsBody `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope: %v; body=%s", err, rec.Body.String())
+	}
+	return env.Data
+}
+
+// errorMessage pulls the `error` field out of the failure envelope.
+func errorMessage(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var env struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+		t.Fatalf("decode error envelope: %v; body=%s", err, rec.Body.String())
+	}
+	return env.Error
+}
+
+func TestGetEvents_RequiresTimezone(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	// daterange's message verbatim: handlers forward err.Error(), so the string
+	// is the contract.
+	if got := errorMessage(t, rec); got != "timezone is required" {
+		t.Errorf("error = %q, want %q", got, "timezone is required")
+	}
+}
+
+func TestGetEvents_RejectsUnknownTimezone(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=Mars/Olympus&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec); !strings.Contains(got, "invalid timezone") {
+		t.Errorf("error = %q, want it to mention the invalid timezone", got)
+	}
+}
+
+func TestGetEvents_RequiresBothDates(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	want := "end_date is required when start_date is supplied"
+	if got := errorMessage(t, rec); got != want {
+		t.Errorf("error = %q, want %q", got, want)
+	}
+}
+
+// TestGetEvents_RejectsTheSingleDateForm pins the one place this endpoint is
+// STRICTER than daterange: `?date=` parses fine, but the tile always asks for a
+// range, and a lone date would leave the window's raw bounds empty.
+func TestGetEvents_RejectsTheSingleDateForm(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&date=2026-08-10")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec); !strings.Contains(got, "start_date") {
+		t.Errorf("error = %q, want it to name start_date", got)
+	}
+}
+
+func TestGetEvents_RejectsAnOversizeWindow(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-11-08")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := errorMessage(t, rec); !strings.Contains(got, "31") {
+		t.Errorf("error = %q, want it to mention the 31-day cap", got)
+	}
+}
+
+// TestGetEvents_AcceptsTheMaximumWindowAcrossDST pins the cap's boundary AND
+// the arithmetic behind it. This window is exactly 31 INCLUSIVE local days, but
+// it spans Denver's fall-back, so it is 745 hours long — a cap that subtracted
+// two instants and compared against 31*24h would reject a legal window twice a
+// year, for the users least able to explain why.
+func TestGetEvents_AcceptsTheMaximumWindowAcrossDST(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=America/Denver&start_date=2025-10-20&end_date=2025-11-19")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeEvents(t, rec)
+	if body.Status != string(EventsStatusOK) {
+		t.Fatalf("status = %q, want ok", body.Status)
+	}
+	if body.Days == nil || len(*body.Days) != 31 {
+		t.Errorf("days = %v, want 31 entries", body.Days)
+	}
+}
+
+// TestGetEvents_NotConnectedIs200 is the endpoint's central product decision. A
+// user who never opted in is not an error: the tile's job there is to invite,
+// and a 404 would make every client branch on a status code to render a CTA.
+func TestGetEvents_NotConnectedIs200(t *testing.T) {
+	// No connected users — the connection row simply does not exist.
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeEvents(t, rec)
+	if body.Status != string(EventsStatusNotConnected) {
+		t.Errorf("status = %q, want not_connected", body.Status)
+	}
+	// Nothing to say beyond the status: `days` must be ABSENT, not null.
+	if body.Days != nil {
+		t.Errorf("days = %v, want the key omitted on a degraded status", *body.Days)
+	}
+	if strings.Contains(rec.Body.String(), `"days"`) {
+		t.Errorf("body %s must not carry a days key", rec.Body.String())
+	}
+}
+
+// TestGetEvents_UnattachedServiceIsUnavailable covers the deploy where the
+// reader was never wired: the connection routes still work, and the endpoint
+// degrades rather than panicking on a nil service.
+func TestGetEvents_UnattachedServiceIsUnavailable(t *testing.T) {
+	conns := calendarconn.NewSQLiteRepository(dbtest.New(t))
+	router := authedRouter(newHandler(t, conns, ""), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeEvents(t, rec)
+	if body.Status != string(EventsStatusUnavailable) {
+		t.Errorf("status = %q, want unavailable", body.Status)
+	}
+	if body.Days != nil {
+		t.Errorf("days = %v, want the key omitted", *body.Days)
+	}
+}
+
+func TestGetEvents_OKShapeIsDenseAndTyped(t *testing.T) {
+	client := &stubEventsClient{events: []ListedEvent{{
+		ID:      "abc123",
+		Summary: "Upper Body Push",
+		Start:   time.Date(2026, 8, 11, 11, 0, 0, 0, time.UTC),
+		End:     time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC),
+	}}}
+	router := authedRouter(newEventsHandler(t, client, "user-1"), "user-1")
+
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeEvents(t, rec)
+	if body.Status != string(EventsStatusOK) {
+		t.Fatalf("status = %q, want ok", body.Status)
+	}
+	if body.Days == nil {
+		t.Fatal("days is absent or null on an ok response")
+	}
+	days := *body.Days
+
+	// Dense: one entry per date in the window, in order, even for a free day.
+	wantDates := []string{"2026-08-10", "2026-08-11", "2026-08-12"}
+	if len(days) != len(wantDates) {
+		t.Fatalf("days = %d entries, want %d", len(days), len(wantDates))
+	}
+	for i, want := range wantDates {
+		if days[i].Date != want {
+			t.Errorf("days[%d].date = %q, want %q", i, days[i].Date, want)
+		}
+		if days[i].Events == nil {
+			t.Fatalf("days[%d].events is null; the array must be present on every day", i)
+		}
+		if days[i].Truncated != 0 {
+			t.Errorf("days[%d].truncated = %d, want 0", i, days[i].Truncated)
+		}
+	}
+	if got := len(*days[0].Events); got != 0 {
+		t.Errorf("free day has %d events, want 0", got)
+	}
+	if got := len(*days[2].Events); got != 0 {
+		t.Errorf("free day has %d events, want 0", got)
+	}
+
+	populated := *days[1].Events
+	if len(populated) != 1 {
+		t.Fatalf("day 2 has %d events, want 1", len(populated))
+	}
+	ev := populated[0]
+	if ev.ID != "abc123" {
+		t.Errorf("id = %q, want abc123", ev.ID)
+	}
+	if ev.Title != "Upper Body Push" {
+		t.Errorf("title = %q, want Upper Body Push", ev.Title)
+	}
+	if ev.AllDay {
+		t.Error("all_day = true, want false for a timed event")
+	}
+	if ev.Source != EventSourceGoogle {
+		t.Errorf("source = %q, want google", ev.Source)
+	}
+	if ev.Link != nil {
+		t.Errorf("link = %+v, want it omitted for a google event", ev.Link)
+	}
+	// RFC3339 UTC on the wire, so a client never has to guess an offset.
+	if ev.Start != "2026-08-11T11:00:00Z" {
+		t.Errorf("start = %q, want 2026-08-11T11:00:00Z", ev.Start)
+	}
+	if ev.End != "2026-08-11T12:00:00Z" {
+		t.Errorf("end = %q, want 2026-08-11T12:00:00Z", ev.End)
+	}
+}
+
+func TestGetEvents_NoAuthIs401(t *testing.T) {
+	h := newEventsHandler(t, &stubEventsClient{}, "user-1")
+	// Mount authed routes WITHOUT the user-injecting middleware.
+	r := chi.NewRouter()
+	h.MountAuthed(r)
+
+	rec := doGet(r, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

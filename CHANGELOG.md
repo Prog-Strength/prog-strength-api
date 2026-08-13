@@ -1,3 +1,10 @@
+## [0.118.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.118.0...v0.118.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **calendar:** render events in the calendar's own time zone ([#137](https://github.com/Prog-Strength/prog-strength-api/issues/137)) ([26dcdec](https://github.com/Prog-Strength/prog-strength-api/commit/26dcdecb32019528dad02482f90839090bc6ef2f))
+
 # [0.118.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.117.0...v0.118.0) (2026-08-13)
 
 

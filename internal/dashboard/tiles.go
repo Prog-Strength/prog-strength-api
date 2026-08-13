@@ -53,6 +53,13 @@ const (
 	// (see the SOW's "Why weather is not a summary section"). The catalog
 	// entry exists only so layouts can place and validate the tile.
 	TileWeather TileID = "weather"
+	// TileCalendar has NO summary section, for the same reason TileWeather
+	// does not: the tile self-fetches from GET /me/calendar/events, so a slow
+	// Google can never delay the single /dashboard/summary round-trip that
+	// every other tile shares. The catalog entry exists only so layouts can
+	// place and validate the tile. It is tray-only — see
+	// TestSummary_DefaultLayoutHasNoCalendarTile.
+	TileCalendar TileID = "calendar"
 )
 
 // Catalog is the ordered set of every tile. Order fixes how tiles appear in the
@@ -63,7 +70,7 @@ var Catalog = []TileID{
 	TileWalking, TileCycling, TileHiking, TileLifting,
 	TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 	TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog, TileRestingHR,
-	TileSleep, TileStreak, TileQuote, TileWeather,
+	TileSleep, TileStreak, TileQuote, TileWeather, TileCalendar,
 }
 
 // RetiredTiles maps a tile that no longer exists to the tile that absorbed it.

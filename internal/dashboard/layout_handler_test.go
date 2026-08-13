@@ -137,6 +137,28 @@ func TestPutLayout_RestingHRAccepted(t *testing.T) {
 	})
 }
 
+// TestPutLayout_CalendarAccepted proves a client may place the calendar tile.
+// It is tray-only — TestSummary_DefaultLayoutHasNoCalendarTile keeps it out of
+// the default layout — so this write is the ONLY way it ever reaches a user's
+// dashboard. Without the catalog entry ValidTileID would reject it and the
+// tray click would 422.
+func TestPutLayout_CalendarAccepted(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+
+	rec := putLayout(t, r, userID, `{"sections":[{"id":"a","tile_ids":["calendar"]}]}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+	}
+
+	got, err := rp.layout.Get(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("layout Get: %v", err)
+	}
+	assertSections(t, got.Sections, []Section{
+		{ID: "a", TileIDs: []TileID{TileCalendar}},
+	})
+}
+
 func TestPutLayout_UnknownID(t *testing.T) {
 	r, _, userID := newTestEnv(t)
 

@@ -8,7 +8,7 @@ func TestCatalog_EveryConstantAppearsExactlyOnce(t *testing.T) {
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog, TileRestingHR,
-		TileSleep, TileStreak, TileQuote, TileWeather,
+		TileSleep, TileStreak, TileQuote, TileWeather, TileCalendar,
 	}
 	if len(Catalog) != len(all) {
 		t.Fatalf("Catalog has %d entries, expected %d", len(Catalog), len(all))
@@ -30,7 +30,7 @@ func TestCatalog_Order(t *testing.T) {
 		TileWalking, TileCycling, TileHiking, TileLifting,
 		TileSteps, TileNutrition, TileBodyweight, TileBloodPressure,
 		TileRecovery, TileHRVBalance, TileMorningVitals, TileRecoveryLog, TileRestingHR,
-		TileSleep, TileStreak, TileQuote, TileWeather,
+		TileSleep, TileStreak, TileQuote, TileWeather, TileCalendar,
 	}
 	for i := range want {
 		if Catalog[i] != want[i] {
@@ -75,6 +75,9 @@ func TestValidTileID(t *testing.T) {
 	}
 	if !ValidTileID("weather") {
 		t.Error("weather should be valid")
+	}
+	if !ValidTileID("calendar") {
+		t.Error("calendar should be valid")
 	}
 	// Retired: folded into hrv_balance, so no client may place it any more.
 	if ValidTileID("recovery_trend") {

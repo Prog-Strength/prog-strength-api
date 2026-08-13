@@ -210,9 +210,8 @@ type Config struct {
 	CalendarSync CalendarSyncConfig
 
 	// CalendarEvents configures the READ direction of the calendar
-	// integration — the dashboard tile's /me/calendar/events endpoint.
-	// Separate from CalendarSync because the two kill switches are
-	// genuinely independent. See CalendarEventsConfig.
+	// integration (the kill switch, the reuse window, and the per-day cap).
+	// See CalendarEventsConfig.
 	CalendarEvents CalendarEventsConfig
 
 	// Weather configures the OpenWeather dashboard-tile integration (the
@@ -332,10 +331,13 @@ type CalendarSyncConfig struct {
 //
 // Enabled is a kill switch for reads only: false makes every
 // /me/calendar/events response status "disabled" without touching OAuth or
-// the write path. CacheTTLSeconds bounds how long one user's fetched window
-// is reused; it exists to absorb dashboard remounts, not to economise on a
-// free quota. MaxEventsPerDay caps the per-day payload; overflow is reported
-// as each day's `truncated` count rather than silently dropped.
+// the write path — the two kill switches are genuinely independent.
+// CacheTTLSeconds bounds how long one user's fetched window is reused; it
+// exists to absorb dashboard remounts, not to economise on a free quota, and
+// 0 disables reuse. MaxEventsPerDay caps the per-day payload and 0 disables
+// the cap; overflow is reported as each day's `truncated` count rather than
+// silently dropped. Load does not validate either zero — the consumer owns
+// that fallback.
 type CalendarEventsConfig struct {
 	Enabled         bool
 	CacheTTLSeconds int

@@ -86,9 +86,11 @@ reconcile_max_per_boot = 200
 max_attempts = 5
 
 [calendar_events]
-# Reading the user's Google Calendar for the dashboard tile. Public literals —
-# not secrets, not env-overridden. The one real secret in the calendar feature
-# is calendar_token_enc_key under [auth], and this reader shares it.
+# Reading the user's Google Calendar for the dashboard tile
+# (internal/calendarsync, beside the write path whose connector it reuses).
+# Public literals — not secrets, not env-overridden. The one real secret in
+# the calendar feature is calendar_token_enc_key under [auth], and this
+# reader shares it.
 #
 # enabled is the kill switch for the READ direction only. Turning it off makes
 # every /me/calendar/events response status "disabled" and the tile say so
@@ -99,13 +101,15 @@ enabled = true
 # How long a user's fetched window is reused before Google is asked again.
 # Small on purpose: this exists to absorb dashboard remounts and slide changes,
 # not to be a cache in any meaningful sense. Google's quota is 1M/day and free,
-# so there is nothing here to economise.
+# so there is nothing here to economise. 0 disables reuse (every request
+# refetches Google).
 cache_ttl_seconds = 60
 
 # Per-day cap on events returned to the client. A shared calendar can carry
 # hundreds of entries on one day; the tile shows five and the panel shows a
 # screenful, so an uncapped payload is bytes nobody reads. Overflow is REPORTED,
 # never silently dropped — see each day's `truncated` count in the payload.
+# 0 disables the cap.
 max_events_per_day = 50
 
 [cors]

@@ -524,6 +524,28 @@ func New(cfg config.Config) (*Server, error) {
 				appLinkBase,
 				nil,
 			)
+			// The READ direction: GET /me/calendar/events for the dashboard
+			// tile. It shares the grant, the token source, and the HTTP client
+			// with the write path above and adds no scope of its own — the
+			// granted calendar.events scope already permits events.list, so
+			// every connected user gets the tile on deploy with no re-consent.
+			// The TTL and the per-day cap are copied straight across: both
+			// zero values have defined meaning (0 TTL disables reuse, 0 cap
+			// disables the cap), so a default invented here would override the
+			// operator.
+			calendarSyncHandler.AttachEvents(calendarsync.NewEventsService(calendarsync.EventsServiceDeps{
+				Conns:  calendarConnRepo,
+				Cipher: cipher,
+				Tokens: tokenSource,
+				Client: calendarEventClient,
+				Links:  calendarsync.NewSQLiteEventLinkRepository(database),
+				Config: calendarsync.EventsConfig{
+					Enabled:         cfg.CalendarEvents.Enabled,
+					CacheTTL:        time.Duration(cfg.CalendarEvents.CacheTTLSeconds) * time.Second,
+					MaxEventsPerDay: cfg.CalendarEvents.MaxEventsPerDay,
+				},
+			}))
+
 			// The logged-activity sync service needs the activity registry,
 			// which is not built until the activity handler is wired further
 			// down. Stash its Google-side ingredients here and construct it
@@ -539,7 +561,7 @@ func New(cfg config.Config) (*Server, error) {
 				AppLinkBase: appLinkBase,
 				Observer:    calendarsync.MetricsObserver{},
 			}
-			log.Println("calendar-sync: enabled (google calendar oauth + connection + event writing)")
+			log.Println("calendar-sync: enabled (google calendar oauth + connection + event writing + dashboard reads)")
 		}
 	} else {
 		log.Println("calendar-sync: disabled (CALENDAR_TOKEN_ENC_KEY / GOOGLE_CALENDAR_REDIRECT_URL / google client not configured)")

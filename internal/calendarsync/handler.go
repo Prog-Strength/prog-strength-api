@@ -2,6 +2,7 @@ package calendarsync
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Prog-Strength/prog-strength-api/internal/auth"
 	"github.com/Prog-Strength/prog-strength-api/internal/calendarconn"
+	"github.com/Prog-Strength/prog-strength-api/internal/daterange"
 	"github.com/Prog-Strength/prog-strength-api/internal/httpresp"
 	"github.com/Prog-Strength/prog-strength-api/internal/originmatch"
 	"github.com/Prog-Strength/prog-strength-api/internal/tokencrypt"
@@ -25,11 +27,13 @@ const (
 	returnToCookieName = "calendar_oauth_return_to"
 )
 
-// Handler exposes the incremental Google Calendar OAuth flow and the
-// connection-status endpoints. It does NOT write calendar events — that lands
-// in a later task. The handler is mounted in two pieces (see Mount /
-// MountAuthed) because /callback is public (Google calls it) while /connect
-// and /me/calendar/connection require the logged-in user.
+// Handler exposes the incremental Google Calendar OAuth flow, the
+// connection-status endpoints, and the dashboard tile's calendar read
+// (GET /me/calendar/events, served by the separately attached EventsService —
+// see AttachEvents). It does NOT write calendar events: that is Service's and
+// ActivityService's job. The handler is mounted in two pieces (see MountPublic
+// / MountAuthed) because /callback is public (Google calls it) while /connect
+// and everything under /me/calendar require the logged-in user.
 type Handler struct {
 	oauthConfig            *oauth2.Config
 	conns                  calendarconn.Repository
@@ -42,7 +46,18 @@ type Handler struct {
 	stateHMACKey []byte
 	// revokeURL is Google's revocation endpoint, overridable in tests.
 	revokeURL string
+	// eventsSvc serves GET /me/calendar/events. It is attached separately
+	// (see AttachEvents) rather than passed to NewHandler because it depends
+	// on collaborators the OAuth handler has no other use for — a link
+	// repository, a token source, a Google REST client — which in
+	// internal/server are not even constructed until after this handler
+	// exists. A deploy without it must still mount the connection routes, so
+	// nil is a supported state and getEvents degrades to "unavailable".
+	eventsSvc *EventsService
 }
+
+// AttachEvents wires the read-side events service into the handler.
+func (h *Handler) AttachEvents(svc *EventsService) { h.eventsSvc = svc }
 
 // NewHandler constructs a Handler. oauthConfig must already carry the calendar
 // scope + redirect URL (build it with NewCalendarConfig). httpClient bounds the
@@ -78,6 +93,7 @@ func (h *Handler) MountAuthed(r chi.Router) {
 	r.Get("/auth/google/calendar/connect", h.connect)
 	r.Get("/me/calendar/connection", h.getConnection)
 	r.Delete("/me/calendar/connection", h.deleteConnection)
+	r.Get("/me/calendar/events", h.getEvents)
 }
 
 // connect (authed) redirects the user to Google's consent screen for the
@@ -273,6 +289,126 @@ func (h *Handler) deleteConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpresp.OK(w, "calendar disconnected", nil)
+}
+
+// maxEventWindowDays caps the requested window. The tile asks for eight days;
+// an unbounded window is a Google call and a response size the client should
+// not get to choose.
+const maxEventWindowDays = 31
+
+// eventLinkPayload deep-links a marked event back into the app.
+type eventLinkPayload struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type eventPayload struct {
+	ID     string            `json:"id"`
+	Title  string            `json:"title"`
+	Start  time.Time         `json:"start"`
+	End    time.Time         `json:"end"`
+	AllDay bool              `json:"all_day"`
+	Source string            `json:"source"`
+	Link   *eventLinkPayload `json:"link,omitempty"`
+}
+
+// dayPayload is one local date. Events is never null — see Day for why the
+// array is dense.
+type dayPayload struct {
+	Date      string         `json:"date"`
+	Truncated int            `json:"truncated"`
+	Events    []eventPayload `json:"events"`
+}
+
+// eventsResponse mirrors weather's shape: a status that is always present, and
+// a payload that collapses to just the status on every degradation.
+type eventsResponse struct {
+	Status EventsStatus `json:"status"`
+	Days   []dayPayload `json:"days,omitempty"`
+}
+
+// getEvents (authed) returns the user's calendar for a window, grouped by
+// LOCAL DATE so the client never re-derives a day boundary.
+//
+// The date contract is daterange's, verbatim: a required IANA timezone plus
+// start_date/end_date, converted server-side. The client must never build a
+// UTC instant — a "week" is 167 or 169 hours twice a year, and a tile that
+// assumes 7x24 drops or duplicates a day's events for every user not on UTC.
+func (h *Handler) getEvents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID, ok := auth.UserIDFrom(ctx)
+	if !ok || userID == "" {
+		httpresp.Error(w, http.StatusUnauthorized, "missing authenticated user")
+		return
+	}
+
+	query := r.URL.Query()
+	start, end, loc, err := daterange.ParseQuery(query)
+	if err != nil {
+		httpresp.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	startDate, endDate := query.Get("start_date"), query.Get("end_date")
+	if startDate == "" {
+		// The single-`date` form is legal to daterange but meaningless here:
+		// the tile always asks for a range.
+		httpresp.Error(w, http.StatusBadRequest, "start_date and end_date are required")
+		return
+	}
+	// The cap counts CALENDAR DAYS in the user's zone, not elapsed hours:
+	// subtracting the two instants would make a legal 31-day window 745 hours
+	// long across a fall-back and reject it. AddDate in loc lands on the
+	// exclusive end of the longest window we allow.
+	if start.In(loc).AddDate(0, 0, maxEventWindowDays).Before(end) {
+		httpresp.Error(w, http.StatusBadRequest,
+			fmt.Sprintf("window is too long (max %d days)", maxEventWindowDays))
+		return
+	}
+
+	if h.eventsSvc == nil {
+		// Not wired — a misconfiguration, not the kill switch. The tile says
+		// "unavailable" and refetches on the next mount.
+		httpresp.OK(w, "calendar events", eventsResponse{Status: EventsStatusUnavailable})
+		return
+	}
+
+	res := h.eventsSvc.Events(ctx, userID, EventsWindow{
+		StartUTC:  start,
+		EndUTC:    end,
+		Loc:       loc,
+		StartDate: startDate,
+		EndDate:   endDate,
+	})
+	httpresp.OK(w, "calendar events", eventsResponse{Status: res.Status, Days: dayPayloads(res.Days)})
+}
+
+// dayPayloads renders the grouped days. It returns nil — and so omits the key
+// entirely — for the empty slice every non-ok status carries, which is what
+// keeps a degraded response down to just its status.
+func dayPayloads(days []Day) []dayPayload {
+	if len(days) == 0 {
+		return nil
+	}
+	out := make([]dayPayload, 0, len(days))
+	for _, d := range days {
+		events := make([]eventPayload, 0, len(d.Events))
+		for _, e := range d.Events {
+			p := eventPayload{
+				ID:     e.ID,
+				Title:  e.Title,
+				Start:  e.Start.UTC(),
+				End:    e.End.UTC(),
+				AllDay: e.AllDay,
+				Source: e.Source,
+			}
+			if e.Link != nil {
+				p.Link = &eventLinkPayload{Kind: e.Link.Kind, ID: e.Link.ID}
+			}
+			events = append(events, p)
+		}
+		out = append(out, dayPayload{Date: d.Date, Truncated: d.Truncated, Events: events})
+	}
+	return out
 }
 
 // failOrRedirect renders a callback failure either as a redirect back to the

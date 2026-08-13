@@ -561,6 +561,23 @@ func TestSummary_DefaultLayoutHasNoRestingHRTile(t *testing.T) {
 	}
 }
 
+// TestSummary_DefaultLayoutHasNoCalendarTile pins the rollout, mirroring sleep
+// and resting_hr: calendar is a catalog tile but NOT part of the default
+// layout. The tile is useless — a permanent connect CTA — for any user who has
+// not connected a calendar, and unlike recovery (gated on hasConnectedWhoop)
+// gating it would mean a second connection probe on every dashboard load to
+// save a tray click.
+func TestSummary_DefaultLayoutHasNoCalendarTile(t *testing.T) {
+	r, rp, userID := newTestEnv(t)
+	seedWhoopConnected(t, rp, userID)
+
+	layout, _ := dataEnvelope(t, r, userID, "?timezone=UTC")
+
+	if indexOf(layout, string(TileCalendar)) >= 0 {
+		t.Errorf("default layout must not contain %q; got %v", TileCalendar, layout)
+	}
+}
+
 // TestSummary_RunningFamilyTileAlone_YieldsRunningSection pins the family
 // re-gate: a layout containing ONLY running_vertical must still produce a
 // populated "running" section — and no "running_vertical" key. Second family

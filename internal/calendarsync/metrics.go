@@ -93,10 +93,66 @@ var lastSuccessfulSyncGauge = prometheus.NewGauge(
 	},
 )
 
+// api_calendar_event_reads_total counts every read of a user's calendar for
+// the dashboard tile, by outcome and by whether the cache answered it.
+//
+// cache is split out because it is the only thing that makes the Google-call
+// rate interpretable: a healthy tile serves most reads from the 60s TTL, and a
+// sudden collapse in the cache-hit ratio means remounts, not usage.
+//
+// COMPUTE THAT RATIO WITHIN result="ok". The outcomes that short-circuit before
+// the cache is consulted at all — "disabled", and the "not_connected" that
+// every user who never opted in produces — are recorded as misses, so a naive
+// hit/(hit+miss) over the whole metric is diluted by reads that could never
+// have hit. "hit" only ever occurs alongside result="ok", which is what makes
+// the restricted ratio the honest one.
+var eventReadsTotal = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "api_calendar_event_reads_total",
+		Help: "Google Calendar reads for the dashboard tile by result and cache outcome.",
+	},
+	[]string{"result", "cache"},
+)
+
+// api_calendar_event_read_seconds times the uncached read path.
+//
+// DELIBERATELY NO last-success stamp and no absence-of-success alert, in
+// contrast to calendarconn.Connection.LastSuccessfulSyncAt. That stamp exists
+// because the WRITE path is a background process whose silence is a symptom.
+// This read path is USER-TRIGGERED: a day with no reads means nobody opened a
+// dashboard, which is a fact about traffic, not a fault. Alerting on its
+// absence would reproduce exactly the false-positive pattern that stamp was
+// introduced to fix.
+var eventReadDuration = prometheus.NewHistogram(
+	prometheus.HistogramOpts{
+		Name:    "api_calendar_event_read_seconds",
+		Help:    "Duration of an uncached Google Calendar read for the dashboard tile.",
+		Buckets: prometheus.DefBuckets,
+	},
+)
+
+// Cache label values, closed like every other label set here.
+const (
+	cacheHit  = "hit"
+	cacheMiss = "miss"
+)
+
+// observeEventRead records one read. seconds is 0 for a read the cache or a
+// short-circuit answered, and those are not timed — the histogram measures the
+// Google round-trip, and folding in cache hits would flatter it into
+// uselessness.
+func observeEventRead(result, cache string, seconds float64) {
+	eventReadsTotal.WithLabelValues(result, cache).Inc()
+	if cache == cacheMiss && seconds > 0 {
+		eventReadDuration.Observe(seconds)
+	}
+}
+
 func init() {
 	prometheus.MustRegister(
 		syncsTotal, reconcileRunsTotal, reconcileBacklog,
 		connectionsGauge, lastSuccessfulSyncGauge,
+		eventReadsTotal, eventReadDuration,
 	)
 }
 

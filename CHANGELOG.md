@@ -1,3 +1,10 @@
+# [0.117.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.116.0...v0.117.0) (2026-08-13)
+
+
+### Features
+
+* **calendar:** read the user's Google Calendar for a dashboard tile ([#135](https://github.com/Prog-Strength/prog-strength-api/issues/135)) ([752de35](https://github.com/Prog-Strength/prog-strength-api/commit/752de353b5345b326b313bac8faf32fe91dbb96f))
+
 # [0.116.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.115.0...v0.116.0) (2026-08-12)
 
 

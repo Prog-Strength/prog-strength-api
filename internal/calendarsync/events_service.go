@@ -65,6 +65,15 @@ type Day struct {
 type EventsResult struct {
 	Status EventsStatus
 	Days   []Day
+	// Timezone is the IANA zone the Days were bucketed in and the zone every
+	// Start/End must be READ on to agree with Google Calendar — the calendar's
+	// own, when Google named it, and the caller's window zone otherwise.
+	//
+	// It is on the wire because a bare instant cannot carry it: a client that
+	// formats these with its own zone prints a different clock than Google
+	// does for the same event, which is the whole defect this field exists to
+	// close. Empty only on a non-ok status, which carries no days to read.
+	Timezone string
 }
 
 // EventsConfig is the [calendar_events] block, injected rather than imported
@@ -171,34 +180,57 @@ func (s *EventsService) Events(ctx context.Context, userID string, w EventsWindo
 	}
 
 	key := eventsCacheKey{UserID: userID, Start: w.StartDate, End: w.EndDate, Timezone: w.Loc.String()}
-	if days, ok := s.cache.get(key); ok {
+	if days, tz, ok := s.cache.get(key); ok {
 		observeEventRead(string(EventsStatusOK), cacheHit, 0)
-		return EventsResult{Status: EventsStatusOK, Days: days}
+		return EventsResult{Status: EventsStatusOK, Days: days, Timezone: tz}
 	}
 
 	started := s.now()
-	days, status := s.fetch(ctx, userID, w)
+	days, tz, status := s.fetch(ctx, userID, w)
 	observeEventRead(string(status), cacheMiss, s.now().Sub(started).Seconds())
 	if status != EventsStatusOK {
 		return EventsResult{Status: status}
 	}
-	s.cache.put(key, days)
-	return EventsResult{Status: EventsStatusOK, Days: days}
+	s.cache.put(key, days, tz)
+	return EventsResult{Status: EventsStatusOK, Days: days, Timezone: tz}
+}
+
+// renderZone picks the zone the days are bucketed in and the clocks are read
+// on: the CALENDAR's, when events.list named it and Go can load it, and the
+// caller's window zone otherwise.
+//
+// The window zone is a different question and stays the caller's: it decides
+// which days were ASKED for. Letting it also decide which clock the answers
+// are read on is what made a 4:45 PM Eastern flight render as 1:45 PM for a
+// user sitting in Pacific — the instant was right the whole time, and only the
+// zone it was read on was wrong.
+//
+// An unloadable name degrades to the caller's zone rather than to UTC: Google
+// sending a zone this build's tzdata does not know is not a reason to move
+// every event to London.
+func renderZone(calendarTZ string, fallback *time.Location) (*time.Location, string) {
+	if calendarTZ != "" {
+		if loc, err := time.LoadLocation(calendarTZ); err == nil {
+			return loc, calendarTZ
+		}
+	}
+	return fallback, fallback.String()
 }
 
 // fetch does the uncached work: resolve the grant, list, filter, mark, group.
-func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow) ([]Day, EventsStatus) {
+// The second return is the zone the days were bucketed in — see renderZone.
+func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow) ([]Day, string, EventsStatus) {
 	g, err := s.conn.resolve(ctx, userID)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotConnected):
-			return nil, EventsStatusNotConnected
+			return nil, "", EventsStatusNotConnected
 		case errors.Is(err, ErrReconnectNeeded):
 			// connector.resolve has already flipped the connection when the
 			// refresh itself was rejected.
-			return nil, EventsStatusReconnectNeeded
+			return nil, "", EventsStatusReconnectNeeded
 		default:
-			return nil, EventsStatusUnavailable
+			return nil, "", EventsStatusUnavailable
 		}
 	}
 
@@ -212,16 +244,17 @@ func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow
 	// comfortably above it. Google is free at a million queries a day and the
 	// surplus is discarded here, so the larger page removes the failure mode
 	// instead of merely making it unlikely.
-	raw, err := s.client.ListEvents(ctx, g.AccessToken, g.CalendarID, w.StartUTC, w.EndUTC, googleMaxResults)
+	raw, calendarTZ, err := s.client.ListEvents(ctx, g.AccessToken, g.CalendarID, w.StartUTC, w.EndUTC, googleMaxResults)
 	if err != nil {
 		if errors.Is(err, ErrTokenRejected) {
 			// 401/403 only. This is the one failure that means the grant is
 			// gone; see the type's doc comment for why a 429 must not land here.
 			_ = s.conn.conns.SetStatus(ctx, userID, calendarconn.StatusRevoked, s.now())
-			return nil, EventsStatusReconnectNeeded
+			return nil, "", EventsStatusReconnectNeeded
 		}
-		return nil, EventsStatusUnavailable
+		return nil, "", EventsStatusUnavailable
 	}
+	loc, tz := renderZone(calendarTZ, w.Loc)
 
 	// A link lookup failure degrades to an UNMARKED tile rather than no tile:
 	// the events are the payload, the provenance mark is a garnish.
@@ -230,7 +263,7 @@ func (s *EventsService) fetch(ctx context.Context, userID string, w EventsWindow
 		links = nil
 	}
 
-	return s.group(raw, links, w), EventsStatusOK
+	return s.group(raw, links, w, loc), tz, EventsStatusOK
 }
 
 // googleMaxResults is the largest page events.list will return.
@@ -239,7 +272,12 @@ const googleMaxResults = 2500
 // group buckets the listed events into dense local days. It is the only place
 // the window's local dates are computed — the page size no longer derives from
 // them — so there is no second copy to drift out of step with this one.
-func (s *EventsService) group(raw []ListedEvent, links map[string]EventLink, w EventsWindow) []Day {
+//
+// `loc` is the RENDER zone (renderZone), not w.Loc. Which days exist in the
+// window is the caller's question; which day an instant falls on is Google's,
+// and answering the second one with the caller's zone is what put a 1:30 AM
+// Eastern event on the previous day for a reader in Pacific.
+func (s *EventsService) group(raw []ListedEvent, links map[string]EventLink, w EventsWindow, loc *time.Location) []Day {
 	dates := datesInWindow(w)
 	byDate := make(map[string][]Event, len(dates))
 
@@ -268,9 +306,9 @@ func (s *EventsService) group(raw []ListedEvent, links map[string]EventLink, w E
 		if ev.AllDay {
 			// Google's end.date is EXCLUSIVE, so a 14th->16th all-day event
 			// covers the 14th and the 15th.
-			for _, date := range allDayDates(ev, w.Loc) {
+			for _, date := range allDayDates(ev, loc) {
 				day := out
-				start, end, err := daterange.DayBoundsUTC(date, w.Loc)
+				start, end, err := daterange.DayBoundsUTC(date, loc)
 				if err != nil {
 					continue
 				}
@@ -280,7 +318,7 @@ func (s *EventsService) group(raw []ListedEvent, links map[string]EventLink, w E
 			continue
 		}
 		out.Start, out.End = ev.Start, ev.End
-		date := out.Start.In(w.Loc).Format(dateLayout)
+		date := out.Start.In(loc).Format(dateLayout)
 		byDate[date] = append(byDate[date], out)
 	}
 

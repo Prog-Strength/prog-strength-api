@@ -779,3 +779,69 @@ func TestEvents_ReaderRequestsOnlyTheEventsScope(t *testing.T) {
 		t.Fatalf("scopes = %v, want exactly [%s]", cfg.Scopes, CalendarEventsScope)
 	}
 }
+
+// TestEvents_BucketsInTheCalendarsOwnTimezone pins the fix for the tile
+// disagreeing with Google Calendar about what time an event is at.
+//
+// Google renders its grid in the CALENDAR's time zone, and events.list reports
+// that zone as a top-level `timeZone` on the response. The window's Loc is the
+// caller's browser zone, which is a different question — it decides which days
+// were ASKED for, not which clock the answers are read on. A user in Pacific
+// whose calendar is set to Eastern saw a 4:45 PM Eastern flight rendered as
+// 1:45 PM, because the browser zone was doing both jobs.
+func TestEvents_BucketsInTheCalendarsOwnTimezone(t *testing.T) {
+	h := newEventsHarness(t, defaultEventsConfig(), "u1")
+	// 4:45 PM Eastern on the 13th, and 1:30 AM Eastern on the 14th — the
+	// second is 10:30 PM PACIFIC on the 13th, so the two zones disagree about
+	// which day it belongs to. Google names the calendar's zone on the wire.
+	h.respond(http.StatusOK, `{"timeZone":"America/New_York","items":[
+		{"id":"flight","summary":"Southwest","start":{"dateTime":"2026-08-13T16:45:00-04:00"},"end":{"dateTime":"2026-08-13T19:45:00-04:00"}},
+		{"id":"redeye","summary":"Red eye","start":{"dateTime":"2026-08-14T01:30:00-04:00"},"end":{"dateTime":"2026-08-14T02:30:00-04:00"}}
+	]}`)
+
+	// The CALLER is in Pacific — this is the browser zone the tile sends.
+	res := h.svc.Events(context.Background(), "u1",
+		eventsWindow(t, "America/Los_Angeles", "2026-08-10", "2026-08-16"))
+
+	if res.Status != EventsStatusOK {
+		t.Fatalf("status = %q, want ok", res.Status)
+	}
+	if res.Timezone != "America/New_York" {
+		t.Errorf("Timezone = %q, want America/New_York — the response must name the zone its clocks are in", res.Timezone)
+	}
+	// Eastern says the 13th; Pacific would say the 13th too. The flight is the
+	// clock case, and the instant must survive untouched.
+	flight := dayFor(t, res.Days, "2026-08-13")
+	if len(flight.Events) != 1 || flight.Events[0].ID != "flight" {
+		t.Fatalf("2026-08-13 = %+v, want just the flight", flight.Events)
+	}
+	if want := time.Date(2026, 8, 13, 20, 45, 0, 0, time.UTC); !flight.Events[0].Start.Equal(want) {
+		t.Errorf("flight start = %v, want %v — the instant is not the bug", flight.Events[0].Start, want)
+	}
+	// The red-eye is the DAY case: Eastern puts it on the 14th, Pacific on the
+	// 13th. Mirroring Google means the 14th.
+	redeye := dayFor(t, res.Days, "2026-08-14")
+	if len(redeye.Events) != 1 || redeye.Events[0].ID != "redeye" {
+		t.Errorf("2026-08-14 = %+v, want the red eye — bucketed in the calendar's zone, not the caller's", redeye.Events)
+	}
+}
+
+// TestEvents_FallsBackToTheCallersZone: an older calendar, or a Google
+// response without the field, must degrade to exactly today's behavior rather
+// than to UTC.
+func TestEvents_FallsBackToTheCallersZone(t *testing.T) {
+	h := newEventsHarness(t, defaultEventsConfig(), "u1")
+	h.respond(http.StatusOK, `{"items":[
+		{"id":"redeye","start":{"dateTime":"2026-08-14T01:30:00-04:00"},"end":{"dateTime":"2026-08-14T02:30:00-04:00"}}
+	]}`)
+
+	res := h.svc.Events(context.Background(), "u1",
+		eventsWindow(t, "America/Los_Angeles", "2026-08-10", "2026-08-16"))
+
+	if res.Timezone != "America/Los_Angeles" {
+		t.Errorf("Timezone = %q, want the caller's zone as the fallback", res.Timezone)
+	}
+	if day := dayFor(t, res.Days, "2026-08-13"); len(day.Events) != 1 {
+		t.Errorf("2026-08-13 = %+v, want the red eye bucketed in the caller's zone", day.Events)
+	}
+}

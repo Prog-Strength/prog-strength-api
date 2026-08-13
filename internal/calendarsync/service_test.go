@@ -56,8 +56,8 @@ func (f *fakeClient) DeleteEvent(ctx context.Context, accessToken, calendarID, e
 
 // ListEvents satisfies CalendarClient. These tests only exercise the write
 // path, so the read direction stays empty.
-func (f *fakeClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error) {
-	return nil, nil
+func (f *fakeClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, string, error) {
+	return nil, "", nil
 }
 
 // fakeTokens always returns a fixed access token (or a scripted error).

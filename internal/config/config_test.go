@@ -622,6 +622,7 @@ func TestGoldenManifest(t *testing.T) {
 			MinStdDevMs:        1.0,
 			BaselineDriftDays:  28,
 			BaselineDriftZ:     0.35,
+			PageWindowMaxDays:  1825,
 		},
 		CalendarSync: CalendarSyncConfig{
 			Enabled:             true,
@@ -757,6 +758,63 @@ func TestRecoverySectionParses(t *testing.T) {
 	}
 	if cfg.Recovery.BaselineDriftZ != 0.35 {
 		t.Errorf("BaselineDriftZ = %v, want 0.35", cfg.Recovery.BaselineDriftZ)
+	}
+	if cfg.Recovery.PageWindowMaxDays != 1825 {
+		t.Errorf("PageWindowMaxDays = %d, want 1825", cfg.Recovery.PageWindowMaxDays)
+	}
+}
+
+// TestRecoveryPageWindowValidation pins the guarded coherence check on the
+// [recovery] pair, including the guard itself: a manifest with no [recovery]
+// block has no engine to size a page window for and must still load.
+func TestRecoveryPageWindowValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		wantErr bool
+		// wantMsg pins WHICH rule fired, not just that the knob was named, so a
+		// future edit that changes the failing rule shows up here.
+		wantMsg string
+	}{
+		{
+			name:    "zero page window with a baseline",
+			toml:    minimalTOML + "\n[recovery]\nbaseline_window_days = 30\npage_window_max_days = 0\n",
+			wantErr: true,
+			wantMsg: "recovery.page_window_max_days (0) must be greater than recovery.baseline_window_days (30)",
+		},
+		{
+			name:    "page window narrower than the baseline lead-in",
+			toml:    minimalTOML + "\n[recovery]\nbaseline_window_days = 30\npage_window_max_days = 20\n",
+			wantErr: true,
+			wantMsg: "recovery.page_window_max_days (20) must be greater than recovery.baseline_window_days (30)",
+		},
+		{
+			name: "valid pair",
+			toml: minimalTOML + "\n[recovery]\nbaseline_window_days = 30\npage_window_max_days = 1825\n",
+		},
+		{
+			name: "no recovery block at all",
+			toml: minimalTOML,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			err := loadErr(t, tt.toml, nil)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Load() error = nil, want page_window_max_days error")
+				}
+				if !strings.Contains(err.Error(), tt.wantMsg) {
+					t.Errorf("error = %v, want it to contain %q", err, tt.wantMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Load() error = %v, want nil", err)
+			}
+		})
 	}
 }
 

@@ -333,7 +333,7 @@ type CalendarSyncConfig struct {
 // /me/calendar/events response status "disabled" without touching OAuth or
 // the write path — the two kill switches are genuinely independent.
 // CacheTTLSeconds bounds how long one user's fetched window is reused; it
-// exists to absorb dashboard remounts, not to economise on a free quota, and
+// exists to absorb dashboard remounts, not to economize on a free quota, and
 // 0 disables reuse. MaxEventsPerDay caps the per-day payload and 0 disables
 // the cap; overflow is reported as each day's `truncated` count rather than
 // silently dropped. Load does not validate either zero — the consumer owns

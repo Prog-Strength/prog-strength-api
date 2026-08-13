@@ -88,3 +88,40 @@ func TestNew_MountsWhoopRoutesWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+// TestNew_MountsRecoveryHistoryWithoutWhoopConfigured pins that
+// GET /recovery/history is mounted by the dashboard handler in the
+// unconditional authed group, NOT by the whoop wiring: it is built with no
+// WHOOP_* values at all, so the route's existence cannot ride on the Whoop
+// integration being configured. (Whoop only decides what the route answers with
+// — an unconnected user gets the empty section, not a 404.)
+func TestNew_MountsRecoveryHistoryWithoutWhoopConfigured(t *testing.T) {
+	// Isolate from any ambient env that would toggle other optional features.
+	t.Setenv("TCX_BUCKET_NAME", "")
+	t.Setenv("AVATAR_BUCKET_NAME", "")
+
+	srv, err := New(config.Config{
+		DatabaseURL:   filepath.Join(t.TempDir(), "app.db"),
+		JWTSigningKey: "test-secret",
+	})
+	if err != nil {
+		t.Fatalf("New: unexpected error: %v", err)
+	}
+
+	router, ok := srv.httpServer.Handler.(chi.Router)
+	if !ok {
+		t.Fatal("server handler is not a chi.Router")
+	}
+
+	routes := map[string]bool{}
+	if err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		routes[method+" "+route] = true
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+
+	if !routes["GET /recovery/history"] {
+		t.Errorf("expected route %q to be mounted; got routes %v", "GET /recovery/history", routes)
+	}
+}

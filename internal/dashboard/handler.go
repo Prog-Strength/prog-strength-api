@@ -34,6 +34,10 @@ import (
 // domain instead of two.
 const sparkLookbackWeeks = 53
 
+// defaultPageWindowMaxDays is the fallback for a Handler built without
+// SetPageWindowMaxDays; config.toml's [recovery] block owns the real number.
+const defaultPageWindowMaxDays = 1825
+
 // Handler composes the dashboard summary from every domain's read repository.
 // It owns no domain logic: each section is built by a pure builder (running.go,
 // lifting.go, …) from data this handler fetches. The handler's job is fetching
@@ -67,6 +71,12 @@ type Handler struct {
 	// hrWindow is the recency window RecentHRStats summarizes for the
 	// reference max-HR estimate.
 	hrWindow time.Duration
+
+	// pageWindowMaxDays caps the charted window GET /recovery/history serves and
+	// is the default span when the caller omits since. Optional: injected
+	// post-construction via SetPageWindowMaxDays, seeded to
+	// defaultPageWindowMaxDays.
+	pageWindowMaxDays int
 
 	// now sources the current instant for all local-week/local-day bucketing.
 	// It defaults to time.Now; tests override it to pin a fixed reference time so
@@ -106,6 +116,7 @@ func NewHandler(
 		layoutRepo:        layoutRepo,
 		quoteRerollRepo:   quoteRerollRepo,
 		recovery:          recoveryEngine,
+		pageWindowMaxDays: defaultPageWindowMaxDays,
 		now:               time.Now,
 	}
 }
@@ -121,13 +132,24 @@ func (h *Handler) SetHRZonesEngine(e *hrzones.Engine, window time.Duration) {
 	h.hrWindow = window
 }
 
-// Mount registers the dashboard route. Callers are expected to have already
-// wrapped the router in auth.RequireUser — summary reads the user ID from
-// context and assumes it's present.
+// SetPageWindowMaxDays wires the cap on GET /recovery/history's charted window;
+// config.toml's recovery.page_window_max_days owns the number.
+func (h *Handler) SetPageWindowMaxDays(days int) {
+	if days > 0 {
+		h.pageWindowMaxDays = days
+	}
+}
+
+// Mount registers the dashboard routes plus /recovery/history, which sits
+// outside /dashboard because it is the recovery page's own read of the section
+// summary already serves. Callers are expected to have already wrapped the
+// router in auth.RequireUser — the handlers read the user ID from context and
+// assume it's present.
 func (h *Handler) Mount(r chi.Router) {
 	r.Get("/dashboard/summary", h.summary)
 	r.Post("/dashboard/quote/reroll", h.rerollQuote)
 	r.Put("/dashboard/layout", h.putLayout)
+	r.Get("/recovery/history", h.recoveryHistory)
 }
 
 // summary handles GET /dashboard/summary — the aggregate "command center" tile

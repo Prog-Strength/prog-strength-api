@@ -404,11 +404,12 @@ zone_names                = ["Recovery", "Aerobic", "Tempo", "Threshold", "VO2ma
 #   Below trend_z because a baseline shift is a slower, more considered signal
 #   than a week's mean moving: by the time a 30-day average has shifted a third
 #   of an SD, something real has changed.
-# page_window_max_days: the widest charted window GET /recovery/history will
-#   serve, and the default span when `since` is omitted. It sizes the response,
-#   not the truth — a longer history is still stored, it just takes a second
-#   request. 1825 is five years, comfortably past any current user's Whoop
-#   history and still ~450 KB of enriched JSON at worst.
+# page_window_max_days: how far back from `until` GET /recovery/history's
+#   charted window may reach, and where `since` lands when omitted — both bounds
+#   inclusive, so the same +1 convention as baseline_window_days. It sizes the
+#   response, not the truth — a longer history is still stored, it just takes a
+#   second request. 1825 is five years, comfortably past any current user's
+#   Whoop history and still ~450 KB of enriched JSON at worst.
 baseline_window_days = 30
 min_baseline_days    = 14
 trend_window_days    = 7

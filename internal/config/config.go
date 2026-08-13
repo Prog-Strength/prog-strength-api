@@ -269,8 +269,9 @@ type HRZonesConfig struct {
 // against, and how far it must have moved (in the user's own current SDs) to
 // read rising or falling. BaselineDriftDays MUST be strictly less than
 // BaselineWindowDays or the drift is permanently "unknown".
-// PageWindowMaxDays is the widest charted window GET /recovery/history serves
-// and the default span when the caller omits since; it sizes the response, not
+// PageWindowMaxDays is how far back from until GET /recovery/history's charted
+// window may reach, and where since defaults to when the caller omits it (both
+// bounds are inclusive, as with BaselineWindowDays); it sizes the response, not
 // the truth, and a wider request is clamped rather than rejected.
 type RecoveryConfig struct {
 	BaselineWindowDays int
@@ -749,9 +750,6 @@ func Load(defaultTOML []byte) (Config, error) {
 	// once a baseline window is configured, at which point they must cohere: a
 	// charted window no wider than its own lead-in is incoherent.
 	if cfg.Recovery.BaselineWindowDays > 0 {
-		if cfg.Recovery.PageWindowMaxDays <= 0 {
-			return Config{}, errors.New("config: recovery.page_window_max_days must be greater than 0")
-		}
 		if cfg.Recovery.PageWindowMaxDays <= cfg.Recovery.BaselineWindowDays {
 			return Config{}, fmt.Errorf("config: recovery.page_window_max_days (%d) must be greater than recovery.baseline_window_days (%d)", cfg.Recovery.PageWindowMaxDays, cfg.Recovery.BaselineWindowDays)
 		}

@@ -767,16 +767,21 @@ func TestRecoveryPageWindowValidation(t *testing.T) {
 		name    string
 		toml    string
 		wantErr bool
+		// wantMsg pins WHICH rule fired, not just that the knob was named, so a
+		// future edit that changes the failing rule shows up here.
+		wantMsg string
 	}{
 		{
 			name:    "zero page window with a baseline",
 			toml:    minimalTOML + "\n[recovery]\nbaseline_window_days = 30\npage_window_max_days = 0\n",
 			wantErr: true,
+			wantMsg: "recovery.page_window_max_days (0) must be greater than recovery.baseline_window_days (30)",
 		},
 		{
 			name:    "page window narrower than the baseline lead-in",
 			toml:    minimalTOML + "\n[recovery]\nbaseline_window_days = 30\npage_window_max_days = 20\n",
 			wantErr: true,
+			wantMsg: "recovery.page_window_max_days (20) must be greater than recovery.baseline_window_days (30)",
 		},
 		{
 			name: "valid pair",
@@ -796,8 +801,8 @@ func TestRecoveryPageWindowValidation(t *testing.T) {
 				if err == nil {
 					t.Fatal("Load() error = nil, want page_window_max_days error")
 				}
-				if !strings.Contains(err.Error(), "page_window_max_days") {
-					t.Errorf("error = %v, want mention of page_window_max_days", err)
+				if !strings.Contains(err.Error(), tt.wantMsg) {
+					t.Errorf("error = %v, want it to contain %q", err, tt.wantMsg)
 				}
 				return
 			}

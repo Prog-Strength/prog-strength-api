@@ -847,6 +847,7 @@ func New(cfg config.Config) (*Server, error) {
 		// classifies week runs against the same max-HR reference the run
 		// detail page uses, so the two surfaces can never disagree.
 		dashboardHandler.SetHRZonesEngine(hrEngine, time.Duration(cfg.HRZones.RecencyWindowDays)*24*time.Hour)
+		dashboardHandler.SetPageWindowMaxDays(cfg.Recovery.PageWindowMaxDays)
 		dashboardHandler.Mount(r)
 		// Training snapshot — the agent-facing holistic read across every
 		// domain (GET /training-snapshot). Separate surface from the web

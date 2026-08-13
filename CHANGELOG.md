@@ -1,3 +1,10 @@
+# [0.118.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.117.0...v0.118.0) (2026-08-13)
+
+
+### Features
+
+* **dashboard:** add GET /recovery/history serving the recovery section over an arbitrary window ([#136](https://github.com/Prog-Strength/prog-strength-api/issues/136)) ([d45532c](https://github.com/Prog-Strength/prog-strength-api/commit/d45532c4048ce76e7adb2aa7af6d59ac66e3a73f))
+
 # [0.117.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.116.0...v0.117.0) (2026-08-13)
 
 

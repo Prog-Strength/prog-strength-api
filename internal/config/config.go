@@ -269,6 +269,9 @@ type HRZonesConfig struct {
 // against, and how far it must have moved (in the user's own current SDs) to
 // read rising or falling. BaselineDriftDays MUST be strictly less than
 // BaselineWindowDays or the drift is permanently "unknown".
+// PageWindowMaxDays is the widest charted window GET /recovery/history serves
+// and the default span when the caller omits since; it sizes the response, not
+// the truth, and a wider request is clamped rather than rejected.
 type RecoveryConfig struct {
 	BaselineWindowDays int
 	MinBaselineDays    int
@@ -279,6 +282,7 @@ type RecoveryConfig struct {
 	MinStdDevMs        float64
 	BaselineDriftDays  int
 	BaselineDriftZ     float64
+	PageWindowMaxDays  int
 }
 
 // PhotosConfig groups the Activity Photos tunables. All are non-secret public
@@ -478,6 +482,7 @@ type fileConfig struct {
 		MinStdDevMs        float64 `toml:"min_std_dev_ms"`
 		BaselineDriftDays  int     `toml:"baseline_drift_days"`
 		BaselineDriftZ     float64 `toml:"baseline_drift_z"`
+		PageWindowMaxDays  int     `toml:"page_window_max_days"`
 	} `toml:"recovery"`
 	CalendarSync struct {
 		Enabled             bool `toml:"enabled"`
@@ -681,6 +686,7 @@ func Load(defaultTOML []byte) (Config, error) {
 			MinStdDevMs:        fc.Recovery.MinStdDevMs,
 			BaselineDriftDays:  fc.Recovery.BaselineDriftDays,
 			BaselineDriftZ:     fc.Recovery.BaselineDriftZ,
+			PageWindowMaxDays:  fc.Recovery.PageWindowMaxDays,
 		},
 		CalendarSync: CalendarSyncConfig{
 			Enabled:             fc.CalendarSync.Enabled,
@@ -737,6 +743,18 @@ func Load(defaultTOML []byte) (Config, error) {
 	}
 	if (cfg.AvatarBucketName != "" || cfg.TCXBucketName != "" || cfg.PhotoBucketName != "" || cfg.VideoBucketName != "") && cfg.AWSRegion == "" {
 		return Config{}, errors.New("config: storage.aws_region is required when a bucket is configured (set AWS_REGION)")
+	}
+	// The [recovery] block carries no defaults, so a manifest that omits it
+	// entirely has no engine to size a page window for. Validate the pair only
+	// once a baseline window is configured, at which point they must cohere: a
+	// charted window no wider than its own lead-in is incoherent.
+	if cfg.Recovery.BaselineWindowDays > 0 {
+		if cfg.Recovery.PageWindowMaxDays <= 0 {
+			return Config{}, errors.New("config: recovery.page_window_max_days must be greater than 0")
+		}
+		if cfg.Recovery.PageWindowMaxDays <= cfg.Recovery.BaselineWindowDays {
+			return Config{}, fmt.Errorf("config: recovery.page_window_max_days (%d) must be greater than recovery.baseline_window_days (%d)", cfg.Recovery.PageWindowMaxDays, cfg.Recovery.BaselineWindowDays)
+		}
 	}
 
 	return cfg, nil

@@ -198,7 +198,7 @@ func TestListEvents_QueryParams(t *testing.T) {
 	c := NewGoogleCalendarClient(srv.Client())
 	start := time.Date(2026, 8, 10, 4, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 18, 4, 0, 0, 0, time.UTC)
-	if _, err := c.ListEvents(context.Background(), "tok", "primary", start, end, 400); err != nil {
+	if _, _, err := c.ListEvents(context.Background(), "tok", "primary", start, end, 400); err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
 
@@ -319,7 +319,7 @@ func TestListEvents_StatusMapping(t *testing.T) {
 		}))
 		withAPIBase(t, srv.URL)
 
-		_, err := NewGoogleCalendarClient(srv.Client()).
+		_, _, err := NewGoogleCalendarClient(srv.Client()).
 			ListEvents(context.Background(), "tok", "primary", time.Now(), time.Now(), 10)
 		if !errors.Is(err, tc.want) {
 			t.Errorf("status %d: err = %v, want %v", tc.status, err, tc.want)
@@ -338,7 +338,7 @@ func listEventsWithBody(t *testing.T, body string) []ListedEvent {
 	t.Cleanup(srv.Close)
 	withAPIBase(t, srv.URL)
 
-	events, err := NewGoogleCalendarClient(srv.Client()).
+	events, _, err := NewGoogleCalendarClient(srv.Client()).
 		ListEvents(context.Background(), "tok", "primary", time.Now(), time.Now(), 10)
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)

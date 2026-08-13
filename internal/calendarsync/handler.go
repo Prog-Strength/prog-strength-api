@@ -324,7 +324,13 @@ type dayPayload struct {
 // a payload that collapses to just the status on every degradation.
 type eventsResponse struct {
 	Status EventsStatus `json:"status"`
-	Days   []dayPayload `json:"days,omitempty"`
+	// Timezone is the IANA zone the days were bucketed in and the zone the
+	// client MUST format start/end on — the calendar's own, so the tile prints
+	// the clock Google Calendar prints. Absent on a degraded response, which
+	// carries no days to read. A client that ignores it and formats with its
+	// own zone reintroduces exactly the bug this field closes.
+	Timezone string       `json:"timezone,omitempty"`
+	Days     []dayPayload `json:"days,omitempty"`
 }
 
 // getEvents (authed) returns the user's calendar for a window, grouped by
@@ -379,7 +385,9 @@ func (h *Handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		StartDate: startDate,
 		EndDate:   endDate,
 	})
-	httpresp.OK(w, "calendar events", eventsResponse{Status: res.Status, Days: dayPayloads(res.Days)})
+	httpresp.OK(w, "calendar events", eventsResponse{
+		Status: res.Status, Timezone: res.Timezone, Days: dayPayloads(res.Days),
+	})
 }
 
 // dayPayloads renders the grouped days. It returns nil — and so omits the key

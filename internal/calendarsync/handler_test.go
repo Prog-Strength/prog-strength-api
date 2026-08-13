@@ -474,8 +474,9 @@ func TestDeleteConnectionAbsent(t *testing.T) {
 // service's own tests drive the REAL client against an httptest server, so a
 // fake here costs no coverage of the parsing it would otherwise hide.
 type stubEventsClient struct {
-	events []ListedEvent
-	err    error
+	events   []ListedEvent
+	timezone string // the calendar's zone, as events.list reports it
+	err      error
 }
 
 func (s *stubEventsClient) InsertEvent(context.Context, string, string, GoogleEvent) (string, error) {
@@ -490,8 +491,8 @@ func (s *stubEventsClient) DeleteEvent(context.Context, string, string, string) 
 	return errors.New("unused")
 }
 
-func (s *stubEventsClient) ListEvents(context.Context, string, string, time.Time, time.Time, int) ([]ListedEvent, error) {
-	return s.events, s.err
+func (s *stubEventsClient) ListEvents(context.Context, string, string, time.Time, time.Time, int) ([]ListedEvent, string, error) {
+	return s.events, s.timezone, s.err
 }
 
 // newEventsHandler builds a handler with an events service attached. Each id in
@@ -531,8 +532,9 @@ func newEventsHandler(t *testing.T, client CalendarClient, connectedUsers ...str
 // can tell an ABSENT key from an empty or null array — the contract turns on
 // that distinction.
 type eventsBody struct {
-	Status string `json:"status"`
-	Days   *[]struct {
+	Status   string `json:"status"`
+	Timezone string `json:"timezone"`
+	Days     *[]struct {
 		Date      string `json:"date"`
 		Truncated int    `json:"truncated"`
 		Events    *[]struct {
@@ -842,4 +844,64 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// TestGetEvents_NamesTheZoneItsClocksAreIn pins the wire half of the fix. The
+// instants are UTC and always were; without the zone beside them a client has
+// nothing to read them on but its own, which is how a 4:45 PM Eastern flight
+// reached a Pacific browser as 1:45 PM.
+func TestGetEvents_NamesTheZoneItsClocksAreIn(t *testing.T) {
+	client := &stubEventsClient{
+		timezone: "America/New_York",
+		events: []ListedEvent{{
+			ID:      "flight",
+			Summary: "Southwest",
+			Start:   time.Date(2026, 8, 11, 20, 45, 0, 0, time.UTC), // 4:45 PM Eastern
+			End:     time.Date(2026, 8, 11, 23, 45, 0, 0, time.UTC),
+		}},
+	}
+	router := authedRouter(newEventsHandler(t, client, "user-1"), "user-1")
+
+	// The CALLER asks in Pacific — the browser's zone, which decides which days
+	// were requested and nothing else.
+	rec := doGet(router, "/me/calendar/events?timezone=America/Los_Angeles&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	body := decodeEvents(t, rec)
+	if body.Timezone != "America/New_York" {
+		t.Errorf("timezone = %q, want America/New_York — the calendar's zone, not the caller's", body.Timezone)
+	}
+	if body.Days == nil {
+		t.Fatal("days is absent on an ok response")
+	}
+	for _, d := range *body.Days {
+		if d.Events == nil {
+			continue
+		}
+		for _, e := range *d.Events {
+			if e.ID != "flight" {
+				continue
+			}
+			// The instant is untouched; only the zone to read it on is new.
+			if e.Start != "2026-08-11T20:45:00Z" {
+				t.Errorf("start = %q, want 2026-08-11T20:45:00Z", e.Start)
+			}
+			return
+		}
+	}
+	t.Error("the flight is missing from every day in the window")
+}
+
+// TestGetEvents_OmitsTheZoneWhenDegraded keeps the degraded response down to
+// just its status, which is the shape every other failure already has.
+func TestGetEvents_OmitsTheZoneWhenDegraded(t *testing.T) {
+	router := authedRouter(newEventsHandler(t, &stubEventsClient{}), "user-1") // no connection
+	rec := doGet(router, "/me/calendar/events?timezone=UTC&start_date=2026-08-10&end_date=2026-08-12")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if body := decodeEvents(t, rec); body.Timezone != "" {
+		t.Errorf("timezone = %q, want it absent on a degraded response", body.Timezone)
+	}
 }

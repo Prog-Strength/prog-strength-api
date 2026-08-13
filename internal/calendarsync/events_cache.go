@@ -21,8 +21,14 @@ type eventsCacheKey struct {
 // for, or a user who slid the tile forward would be served yesterday's days
 // under today's dates.
 type eventsCacheEntry struct {
-	key      eventsCacheKey
-	days     []Day
+	key  eventsCacheKey
+	days []Day
+	// timezone is the zone the days were bucketed in and must be read on. It
+	// is cached WITH them because it is a property of the answer, not of the
+	// question: the key carries the caller's window zone, which is the zone
+	// that was ASKED in, and a hit that returned days without their render
+	// zone would leave the client formatting Google's clocks with its own.
+	timezone string
 	storedAt time.Time
 }
 
@@ -63,31 +69,33 @@ func newEventsCache(ttl time.Duration, now func() time.Time) *eventsCache {
 // their entry is for a different window, or it has expired. The copy is the
 // point: the caller renders and may sort or truncate what it gets back, and a
 // shared slice would let one request corrupt the next.
-func (c *eventsCache) get(key eventsCacheKey) ([]Day, bool) {
+func (c *eventsCache) get(key eventsCacheKey) ([]Day, string, bool) {
 	if c == nil || c.ttl <= 0 {
-		return nil, false
+		return nil, "", false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key.UserID]
 	if !ok || entry.key != key {
-		return nil, false
+		return nil, "", false
 	}
 	if c.now().Sub(entry.storedAt) >= c.ttl {
 		delete(c.entries, key.UserID)
-		return nil, false
+		return nil, "", false
 	}
-	return cloneDays(entry.days), true
+	return cloneDays(entry.days), entry.timezone, true
 }
 
 // put replaces whatever window this user had cached.
-func (c *eventsCache) put(key eventsCacheKey, days []Day) {
+func (c *eventsCache) put(key eventsCacheKey, days []Day, timezone string) {
 	if c == nil || c.ttl <= 0 {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[key.UserID] = eventsCacheEntry{key: key, days: cloneDays(days), storedAt: c.now()}
+	c.entries[key.UserID] = eventsCacheEntry{
+		key: key, days: cloneDays(days), timezone: timezone, storedAt: c.now(),
+	}
 }
 
 // cloneDays copies the days, each day's event slice, and each event's Link —

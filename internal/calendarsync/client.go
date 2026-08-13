@@ -51,7 +51,13 @@ type CalendarClient interface {
 	// API returns a recurring event's RULE rather than its instances, so a
 	// daily standup either vanishes from the caller's window or lands once,
 	// on the day the series began.
-	ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error)
+	//
+	// The second return is the CALENDAR'S OWN time zone, which events.list
+	// reports as a top-level `timeZone` on its response. It is the zone Google
+	// Calendar renders this calendar's grid in, so it is the zone a caller has
+	// to read these instants on to agree with what the user sees in Google.
+	// Empty when the response omits it — callers fall back, they do not guess.
+	ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, string, error)
 }
 
 // ListedEvent is one event as events.list returned it, normalized just enough
@@ -116,7 +122,17 @@ type listedEventBody struct {
 }
 
 type listResponse struct {
-	Items []listedEventBody `json:"items"`
+	// TimeZone is the CALENDAR's zone, read-only and always sent by Google on
+	// an events.list response. It is what makes rendering agree with Google
+	// Calendar: the grid there is drawn in this zone, not in the reader's.
+	//
+	// It is read from THIS response rather than from calendars.get on purpose.
+	// The only scope this integration holds is calendar.events, which does not
+	// cover calendar metadata — fetching the zone properly would mean widening
+	// the grant and walking every connected user back through consent, for a
+	// string Google already puts on a call we are making anyway.
+	TimeZone string            `json:"timeZone"`
+	Items    []listedEventBody `json:"items"`
 }
 
 // toBody renders a GoogleEvent into the wire shape. The window is emitted as
@@ -227,7 +243,7 @@ func (c *googleCalendarClient) DeleteEvent(ctx context.Context, accessToken, cal
 // would put the request exactly AT the window's capacity — so the tile, capped
 // at 31 days, cannot reach this. Follow nextPageToken if a caller ever needs a
 // window one page cannot cover.
-func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, error) {
+func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, calendarID string, timeMin, timeMax time.Time, maxResults int) ([]ListedEvent, string, error) {
 	q := url.Values{}
 	q.Set("timeMin", timeMin.Format(time.RFC3339))
 	q.Set("timeMax", timeMax.Format(time.RFC3339))
@@ -239,19 +255,19 @@ func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, cale
 	u := fmt.Sprintf("%s/calendars/%s/events?%s", calendarAPIBase, url.PathEscape(calendarID), q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, fmt.Errorf("calendarsync: build list request: %w", err)
+		return nil, "", fmt.Errorf("calendarsync: build list request: %w", err)
 	}
 	resp, err := c.do(req, accessToken)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	if err := classifyStatus(resp.StatusCode); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	var out listResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("calendarsync: decode list response: %w", err)
+		return nil, "", fmt.Errorf("calendarsync: decode list response: %w", err)
 	}
 
 	events := make([]ListedEvent, 0, len(out.Items))
@@ -262,7 +278,7 @@ func (c *googleCalendarClient) ListEvents(ctx context.Context, accessToken, cale
 		}
 		events = append(events, ev)
 	}
-	return events, nil
+	return events, out.TimeZone, nil
 }
 
 // toListedEvent normalizes one wire item. It reports false for an event with
